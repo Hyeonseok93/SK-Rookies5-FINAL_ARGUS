@@ -19,15 +19,10 @@ function Check({
           : "border-cyber-border/50 hover:border-cyber-border"
       }`}
     >
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 accent-cyan-400"
-      />
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="mt-0.5 accent-cyan-400" />
       <span>
         <span className="block text-xs font-medium text-white">{label}</span>
-        <span className="block text-[10px] text-cyber-muted">{hint}</span>
+        <span className="block text-[10px] leading-relaxed text-cyber-muted">{hint}</span>
       </span>
     </label>
   );
@@ -47,65 +42,27 @@ export function G32DiagnosisOptionsPanel({
         연속 시도합니다. 계정 잠금·429·응답 변경이 없으면 fail.
         <strong className="mt-1 block text-amber-300/90">Test Account가 잠길 수 있습니다.</strong>
       </p>
-
       <label className="block">
         <span className="mb-1 block text-[10px] font-medium text-white">최대 실패 시도 횟수</span>
-        <input
-          type="number"
-          min={3}
-          max={25}
-          value={options.maxAttempts}
-          onChange={(e) => onChange({ ...options, maxAttempts: Number(e.target.value) })}
-          className="w-full rounded border border-cyber-border/60 bg-cyber-bg px-2 py-1.5 font-mono text-xs text-white"
-        />
+        <input type="number" min={3} max={25} value={options.maxAttempts} onChange={(e) => onChange({ ...options, maxAttempts: Number(e.target.value) })} className="w-full rounded-lg border border-cyber-border/60 bg-cyber-bg px-3 py-2 font-mono text-xs text-white" />
       </label>
-
-      <Check
-        label="Strict 비교"
-        hint="HTTP status·message·error code·body shape 변경까지 lockout 신호로 인정"
-        checked={options.strict}
-        onChange={(strict) => onChange({ ...options, strict })}
-      />
-
       <label className="block">
-        <span className="mb-1 block text-[10px] font-medium text-white">
-          Probe 계정 이메일 (선택)
-        </span>
-        <span className="mb-1.5 block text-[10px] text-cyber-muted">
-          비우면 login URL별 자동 선택 — 3-2 전용 계정 권장
-        </span>
-        <input
-          type="text"
-          value={options.probeAccountEmail}
-          onChange={(e) => onChange({ ...options, probeAccountEmail: e.target.value })}
-          placeholder="lockout-probe@example.com"
-          className="w-full rounded border border-cyber-border/60 bg-cyber-bg px-2 py-1.5 font-mono text-xs text-white"
-        />
+        <span className="mb-1 block text-[10px] font-medium text-white">Login entry 상한</span>
+        <span className="mb-1.5 block text-[10px] text-cyber-muted">0 = 전체 login URL</span>
+        <input type="number" min={0} max={20} value={options.maxLoginEntries} onChange={(e) => onChange({ ...options, maxLoginEntries: Number(e.target.value) })} className="w-full rounded-lg border border-cyber-border/60 bg-cyber-bg px-3 py-2 font-mono text-xs text-white" />
       </label>
-
+      <Check label="Strict 비교" hint="HTTP status·message·error code·body shape 변경까지 lockout 신호로 인정" checked={options.strict} onChange={(strict) => onChange({ ...options, strict })} />
+      <label className="block">
+        <span className="mb-1 block text-[10px] font-medium text-white">Probe 계정 이메일 (선택)</span>
+        <input type="text" value={options.probeAccountEmail} onChange={(e) => onChange({ ...options, probeAccountEmail: e.target.value })} placeholder="lockout-probe@example.com" className="w-full rounded-lg border border-cyber-border/60 bg-cyber-bg px-3 py-2 font-mono text-xs text-white" />
+      </label>
       <label className="block">
         <span className="mb-1 block text-[10px] font-medium text-white">시도 간격 (초)</span>
-        <input
-          type="number"
-          min={0}
-          max={2}
-          step={0.05}
-          value={options.intervalSec}
-          onChange={(e) => onChange({ ...options, intervalSec: Number(e.target.value) })}
-          className="w-full rounded border border-cyber-border/60 bg-cyber-bg px-2 py-1.5 font-mono text-xs text-white"
-        />
+        <input type="number" min={0} max={2} step={0.05} value={options.intervalSec} onChange={(e) => onChange({ ...options, intervalSec: Number(e.target.value) })} className="w-full rounded-lg border border-cyber-border/60 bg-cyber-bg px-3 py-2 font-mono text-xs text-white" />
       </label>
-
       <label className="block">
         <span className="mb-1 block text-[10px] font-medium text-white">Timeout (초)</span>
-        <input
-          type="number"
-          min={1}
-          max={60}
-          value={options.timeout}
-          onChange={(e) => onChange({ ...options, timeout: Number(e.target.value) })}
-          className="w-full rounded border border-cyber-border/60 bg-cyber-bg px-2 py-1.5 font-mono text-xs text-white"
-        />
+        <input type="number" min={1} max={60} value={options.timeout} onChange={(e) => onChange({ ...options, timeout: Number(e.target.value) })} className="w-full rounded-lg border border-cyber-border/60 bg-cyber-bg px-3 py-2 font-mono text-xs text-white" />
       </label>
     </div>
   );

@@ -410,6 +410,21 @@ export interface DiagnosisG32RunOptionsPayload {
   wrong_password?: string;
   probe_account_email?: string;
   strict?: boolean;
+  max_login_entries?: number;
+}
+
+export interface DiagnosisG34RunOptionsPayload {
+  inventory_scope?: "login_only" | "full";
+}
+
+export interface DiagnosisG42RunOptionsPayload {
+  timeout?: number;
+  relogin_enabled?: boolean;
+  duplicate_login_enabled?: boolean;
+  duplicate_login_ip_enabled?: boolean;
+  logout_enabled?: boolean;
+  client_logout_enabled?: boolean;
+  probe_account_email?: string;
 }
 
 export interface DiagnosisG41RunOptionsPayload {
@@ -430,8 +445,10 @@ export interface DiagnosisRunSectionRequest {
   g41?: DiagnosisG41RunOptionsPayload;
   g22?: DiagnosisG22RunOptionsPayload;
   g32?: DiagnosisG32RunOptionsPayload;
+  g34?: DiagnosisG34RunOptionsPayload;
   g35?: DiagnosisG35RunOptionsPayload;
   g36?: DiagnosisG36RunOptionsPayload;
+  g42?: DiagnosisG42RunOptionsPayload;
   g52?: DiagnosisG52RunOptionsPayload;
   g61?: DiagnosisG61RunOptionsPayload;
   g62?: DiagnosisG62RunOptionsPayload;

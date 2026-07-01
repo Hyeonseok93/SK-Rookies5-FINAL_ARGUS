@@ -2,6 +2,8 @@
 
 export type G41ProbeMode = "base_only" | "sample" | "full";
 
+export type G41DiagnosisPreset = "minimal" | "full" | "manual";
+
 export interface G41DiagnosisOptions {
   probeMode: G41ProbeMode;
   sampleSize: number;
@@ -15,35 +17,49 @@ export interface G41DiagnosisOptions {
   cookieAttrStrict: boolean;
 }
 
-export const DEFAULT_G41_OPTIONS: G41DiagnosisOptions = {
-  probeMode: "sample",
-  sampleSize: 40,
-  maxEndpoints: 80,
+/** 동작 확인 — login matrix + cookie flags만 (httpx cross/tamper 없음). */
+export const MINIMAL_G41_OPTIONS: G41DiagnosisOptions = {
+  probeMode: "base_only",
+  sampleSize: 20,
+  maxEndpoints: 40,
   timeout: 8,
-  maxPairsPerEndpoint: 12,
-  crossCookieEnabled: true,
-  tamperEnabled: true,
-  tamperMaxEndpoints: 30,
+  maxPairsPerEndpoint: 6,
+  crossCookieEnabled: false,
+  tamperEnabled: false,
+  tamperMaxEndpoints: 15,
   cookieAttrEnabled: true,
   cookieAttrStrict: true,
 };
 
-export const QUICK_G41_OPTIONS: G41DiagnosisOptions = {
-  ...DEFAULT_G41_OPTIONS,
-  probeMode: "sample",
-  sampleSize: 20,
-  maxEndpoints: 40,
-  maxPairsPerEndpoint: 6,
-  tamperMaxEndpoints: 15,
+/** 전수 — api-tree full + cross-cookie + tamper 전체. */
+export const FULL_G41_OPTIONS: G41DiagnosisOptions = {
+  probeMode: "full",
+  sampleSize: 500,
+  maxEndpoints: 500,
+  timeout: 10,
+  maxPairsPerEndpoint: 20,
+  crossCookieEnabled: true,
+  tamperEnabled: true,
+  tamperMaxEndpoints: 200,
+  cookieAttrEnabled: true,
+  cookieAttrStrict: true,
 };
 
-export const FULL_G41_OPTIONS: G41DiagnosisOptions = {
-  ...DEFAULT_G41_OPTIONS,
-  probeMode: "full",
-  sampleSize: 120,
-  maxEndpoints: 200,
-  maxPairsPerEndpoint: 20,
-  tamperMaxEndpoints: 60,
+export const DEFAULT_G41_OPTIONS = MINIMAL_G41_OPTIONS;
+
+/** @deprecated use MINIMAL_G41_OPTIONS */
+export const QUICK_G41_OPTIONS = MINIMAL_G41_OPTIONS;
+
+export function g41OptionsForPreset(preset: G41DiagnosisPreset): G41DiagnosisOptions {
+  if (preset === "full") return { ...FULL_G41_OPTIONS };
+  if (preset === "minimal") return { ...MINIMAL_G41_OPTIONS };
+  return { ...MINIMAL_G41_OPTIONS };
+}
+
+export const G41_PRESET_LABELS: Record<G41DiagnosisPreset, string> = {
+  minimal: "최소 진단",
+  full: "전체 진단",
+  manual: "수동 입력",
 };
 
 export function g41OptionsToPayload(options: G41DiagnosisOptions) {

@@ -1,5 +1,4 @@
 import type { G62DiagnosisOptions } from "../lib/g62DiagnosisOptions";
-import { DEFAULT_G62_OPTIONS } from "../lib/g62DiagnosisOptions";
 
 function Check({
   label,
@@ -107,5 +106,3 @@ export function G62DiagnosisOptionsPanel({
     </div>
   );
 }
-
-export { DEFAULT_G62_OPTIONS };

@@ -83,8 +83,10 @@ def run_module(
     g36_opts = None
     g35_opts = None
     g32_opts = None
+    g34_opts = None
     g15_opts = None
     g41_opts = None
+    g42_opts = None
     if body and body.g15 is not None:
         g15_opts = body.g15.model_dump(exclude_none=True)
     if body and body.g41 is not None:
@@ -111,6 +113,10 @@ def run_module(
         g35_opts = body.g35.model_dump(exclude_none=True)
     if body and body.g32 is not None:
         g32_opts = body.g32.model_dump(exclude_none=True)
+    if body and body.g34 is not None:
+        g34_opts = body.g34.model_dump(exclude_none=True)
+    if body and body.g42 is not None:
+        g42_opts = body.g42.model_dump(exclude_none=True)
     try:
         report = diagnosis_service.run_section(
             section_id,
@@ -127,6 +133,8 @@ def run_module(
             g36_options=g36_opts,
             g35_options=g35_opts,
             g32_options=g32_opts,
+            g34_options=g34_opts,
+            g42_options=g42_opts,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

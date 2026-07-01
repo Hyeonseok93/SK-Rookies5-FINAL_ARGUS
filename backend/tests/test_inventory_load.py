@@ -8,6 +8,7 @@ from pathlib import Path
 from inventory.load import find_openapi_spec, load_best_api_tree, load_cached_tree
 from inventory.net import probe_base_url, probe_url
 from inventory.schema import ApiTree, InventoryMeta
+from inventory.upload_retention import prune_upload_batches
 
 
 def test_load_best_api_tree_prefers_verified(tmp_path: Path):
@@ -57,3 +58,28 @@ def test_probe_url_rewrites_localhost_when_env(monkeypatch):
 def test_probe_base_url_keeps_localhost_without_env(monkeypatch):
     monkeypatch.delenv("ARGUS_PROBE_HOST", raising=False)
     assert probe_base_url("http://localhost:8080") == "http://localhost:8080"
+
+
+def test_prune_upload_batches_keeps_newest_five(tmp_path: Path):
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    for i in range(7):
+        batch = uploads / f"batch-{i}"
+        batch.mkdir()
+        (batch / "openapi.json").write_text("{}", encoding="utf-8")
+        ts = 1_700_000_000 + i
+        import os
+
+        os.utime(batch, (ts, ts))
+
+    removed = prune_upload_batches(uploads, keep_max=5)
+    assert set(removed) == {"batch-0", "batch-1"}
+    remaining = sorted(p.name for p in uploads.iterdir() if p.is_dir())
+    assert remaining == [f"batch-{i}" for i in range(2, 7)]
+
+
+def test_prune_upload_batches_noop_when_under_limit(tmp_path: Path):
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    (uploads / "only").mkdir()
+    assert prune_upload_batches(uploads, keep_max=5) == []

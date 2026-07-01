@@ -470,6 +470,25 @@ class DiagnosisG32RunOptions(BaseModel):
     wrong_password: str | None = None
     probe_account_email: str | None = None
     strict: bool | None = None
+    max_login_entries: int | None = Field(default=None, ge=0, le=50)
+
+
+class DiagnosisG34RunOptions(BaseModel):
+    """Per-run overrides for guideline 3-4 admin separation scan."""
+
+    inventory_scope: Literal["login_only", "full"] | None = None
+
+
+class DiagnosisG42RunOptions(BaseModel):
+    """Per-run overrides for guideline 4-2 token/session safety scan."""
+
+    timeout: float | None = Field(default=None, ge=1.0, le=60.0)
+    relogin_enabled: bool | None = None
+    duplicate_login_enabled: bool | None = None
+    duplicate_login_ip_enabled: bool | None = None
+    logout_enabled: bool | None = None
+    client_logout_enabled: bool | None = None
+    probe_account_email: str | None = None
 
 
 class DiagnosisRunSectionRequest(BaseModel):
@@ -477,8 +496,10 @@ class DiagnosisRunSectionRequest(BaseModel):
     g41: DiagnosisG41RunOptions | None = None
     g22: DiagnosisG22RunOptions | None = None
     g32: DiagnosisG32RunOptions | None = None
+    g34: DiagnosisG34RunOptions | None = None
     g35: DiagnosisG35RunOptions | None = None
     g36: DiagnosisG36RunOptions | None = None
+    g42: DiagnosisG42RunOptions | None = None
     g52: DiagnosisG52RunOptions | None = None
     g61: DiagnosisG61RunOptions | None = None
     g62: DiagnosisG62RunOptions | None = None

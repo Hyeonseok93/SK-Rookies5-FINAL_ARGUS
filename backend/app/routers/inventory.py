@@ -47,6 +47,7 @@ from app.services.zap_util import ZapNotAvailableError
 from app.services import discover_progress
 from inventory.load import load_cached_tree
 from inventory.schema import ApiTree
+from inventory.upload_retention import prune_upload_batches
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
@@ -431,6 +432,7 @@ async def build_attack_surface(
         )
 
     artifacts = persist_inventory(tree, DATA_DIR, openapi_path)
+    prune_upload_batches(UPLOAD_DIR)
     stats = InventoryStats(**compute_stats(tree))
     return BuildInventoryResponse(
         ok=True,

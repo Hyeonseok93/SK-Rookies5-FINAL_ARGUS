@@ -67,6 +67,14 @@ def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
             base_g32 = dict(raw.get("diagnosis_3_2") or {})
             base_g32.update(raw_overrides["diagnosis_3_2"])
             raw = {**raw, "diagnosis_3_2": base_g32}
+        elif "diagnosis_3_4" in raw_overrides:
+            base_g34 = dict(raw.get("diagnosis_3_4") or {})
+            base_g34.update(raw_overrides["diagnosis_3_4"])
+            raw = {**raw, "diagnosis_3_4": base_g34}
+        elif "diagnosis_4_2" in raw_overrides:
+            base_g42 = dict(raw.get("diagnosis_4_2") or {})
+            base_g42.update(raw_overrides["diagnosis_4_2"])
+            raw = {**raw, "diagnosis_4_2": base_g42}
         elif "diagnosis_1_5" in raw_overrides:
             base_g15 = dict(raw.get("diagnosis_1_5") or {})
             base_g15.update(raw_overrides["diagnosis_1_5"])
@@ -131,8 +139,10 @@ def run_section(
     g36_options: dict | None = None,
     g35_options: dict | None = None,
     g32_options: dict | None = None,
+    g34_options: dict | None = None,
     g15_options: dict | None = None,
     g41_options: dict | None = None,
+    g42_options: dict | None = None,
 ) -> SectionReport:
     if section_id not in SECTION_BY_ID:
         raise KeyError(f"Unknown section: {section_id}")
@@ -165,10 +175,14 @@ def run_section(
         overrides = {"diagnosis_3_5": {k: v for k, v in g35_options.items() if v is not None}}
     elif g32_options and section_id == "3-2":
         overrides = {"diagnosis_3_2": {k: v for k, v in g32_options.items() if v is not None}}
+    elif g34_options and section_id == "3-4":
+        overrides = {"diagnosis_3_4": {k: v for k, v in g34_options.items() if v is not None}}
     elif g15_options and section_id == "1-5":
         overrides = {"diagnosis_1_5": {k: v for k, v in g15_options.items() if v is not None}}
     elif g41_options and section_id == "4-1":
         overrides = {"diagnosis_4_1": {k: v for k, v in g41_options.items() if v is not None}}
+    elif g42_options and section_id == "4-2":
+        overrides = {"diagnosis_4_2": {k: v for k, v in g42_options.items() if v is not None}}
 
     ctx = _context(overrides)
     from app.services import diagnosis_progress as dp

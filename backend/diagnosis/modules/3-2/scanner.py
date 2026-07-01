@@ -37,6 +37,7 @@ class ScanOptions:
     wrong_password: str = "__ARGUS_INVALID_PASSWORD__"
     probe_account_email: str | None = None
     strict: bool = True
+    max_login_entries: int = 0
 
 
 @dataclass
@@ -58,6 +59,7 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
         if cfg.get("probe_account_email")
         else None,
         strict=bool(cfg.get("strict", True)),
+        max_login_entries=max(0, min(int(cfg.get("max_login_entries", 0)), 50)),
     )
 
 
@@ -97,6 +99,8 @@ def run_g32_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     auth_cfg = ctx.raw_config.get("auth") or {}
 
     entries = configured_login_entries(auth_cfg)
+    if opts.max_login_entries > 0:
+        entries = entries[: opts.max_login_entries]
     accounts = valid_login_accounts(load_test_accounts().get("accounts") or [])
 
     if not entries:

@@ -2,6 +2,8 @@
 
 export type G71ProbeMode = "base_only" | "sample" | "full";
 
+export type G71DiagnosisPreset = "minimal" | "full" | "manual";
+
 export interface G71DiagnosisOptions {
   strictRisky: boolean;
   timeout: number;
@@ -12,7 +14,7 @@ export interface G71DiagnosisOptions {
   zapMaxMinutes: number;
 }
 
-export const DEFAULT_G71_OPTIONS: G71DiagnosisOptions = {
+export const MINIMAL_G71_OPTIONS: G71DiagnosisOptions = {
   strictRisky: true,
   timeout: 8,
   extraProbePaths: "",
@@ -21,6 +23,18 @@ export const DEFAULT_G71_OPTIONS: G71DiagnosisOptions = {
   useZap: false,
   zapMaxMinutes: 10,
 };
+
+export const FULL_G71_OPTIONS: G71DiagnosisOptions = {
+  strictRisky: true,
+  timeout: 10,
+  extraProbePaths: "",
+  probeMode: "full",
+  sampleSize: 20,
+  useZap: true,
+  zapMaxMinutes: 15,
+};
+
+export const DEFAULT_G71_OPTIONS = MINIMAL_G71_OPTIONS;
 
 export const RELAXED_G71_OPTIONS: G71DiagnosisOptions = {
   strictRisky: false,
@@ -32,10 +46,16 @@ export const RELAXED_G71_OPTIONS: G71DiagnosisOptions = {
   zapMaxMinutes: 10,
 };
 
-export const FULL_G71_OPTIONS: G71DiagnosisOptions = {
-  ...DEFAULT_G71_OPTIONS,
-  probeMode: "full",
-  timeout: 10,
+export function g71OptionsForPreset(preset: G71DiagnosisPreset): G71DiagnosisOptions {
+  if (preset === "full") return { ...FULL_G71_OPTIONS };
+  if (preset === "minimal") return { ...MINIMAL_G71_OPTIONS };
+  return { ...MINIMAL_G71_OPTIONS };
+}
+
+export const G71_PRESET_LABELS: Record<G71DiagnosisPreset, string> = {
+  minimal: "최소 진단",
+  full: "전체 진단",
+  manual: "수동 입력",
 };
 
 export function g71OptionsToPayload(options: G71DiagnosisOptions) {

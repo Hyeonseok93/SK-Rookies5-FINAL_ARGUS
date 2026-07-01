@@ -3,11 +3,9 @@ import {
   ChevronDown,
   Crosshair,
   Database,
-  Layers,
   RefreshCw,
   ShieldCheck,
   Stethoscope,
-  Zap,
 } from "lucide-react";
 import argusLogo from "./assets/argus_logo.png";
 import { BuildSourcePanel } from "./components/BuildSourcePanel";
@@ -503,8 +501,6 @@ function App() {
             active={page === "diagnosis"}
             onClick={() => setPage("diagnosis")}
           />
-          <NavItem icon={Layers} label="Sources" disabled />
-          <NavItem icon={Zap} label="ZAP Export" disabled />
         </nav>
         <div className="border-t border-cyber-border p-4 text-xs text-cyber-muted">
           <div className="flex items-center gap-2">

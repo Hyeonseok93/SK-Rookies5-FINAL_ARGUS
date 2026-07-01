@@ -2,6 +2,8 @@
 
 export type G74ProbeMode = "base_only" | "sample" | "full";
 
+export type G74DiagnosisPreset = "minimal" | "full" | "manual";
+
 export interface G74DiagnosisOptions {
   strict: boolean;
   checkCookies: boolean;
@@ -13,7 +15,8 @@ export interface G74DiagnosisOptions {
   zapMaxMinutes: number;
 }
 
-export const DEFAULT_G74_OPTIONS: G74DiagnosisOptions = {
+/** Smoke test — Base URL only, httpx only. */
+export const MINIMAL_G74_OPTIONS: G74DiagnosisOptions = {
   strict: true,
   checkCookies: true,
   timeout: 8,
@@ -22,6 +25,22 @@ export const DEFAULT_G74_OPTIONS: G74DiagnosisOptions = {
   sampleSize: 20,
   useZap: false,
   zapMaxMinutes: 10,
+};
+
+export const DEFAULT_G74_OPTIONS: G74DiagnosisOptions = {
+  ...MINIMAL_G74_OPTIONS,
+};
+
+/** Full inventory + httpx + ZAP passive. */
+export const FULL_G74_OPTIONS: G74DiagnosisOptions = {
+  strict: true,
+  checkCookies: true,
+  timeout: 10,
+  extraProbePaths: "",
+  probeMode: "full",
+  sampleSize: 20,
+  useZap: true,
+  zapMaxMinutes: 15,
 };
 
 export const RELAXED_G74_OPTIONS: G74DiagnosisOptions = {
@@ -35,11 +54,11 @@ export const RELAXED_G74_OPTIONS: G74DiagnosisOptions = {
   zapMaxMinutes: 10,
 };
 
-export const FULL_G74_OPTIONS: G74DiagnosisOptions = {
-  ...DEFAULT_G74_OPTIONS,
-  probeMode: "full",
-  timeout: 10,
-};
+export function g74OptionsForPreset(preset: G74DiagnosisPreset): G74DiagnosisOptions {
+  if (preset === "full") return { ...FULL_G74_OPTIONS };
+  if (preset === "minimal") return { ...MINIMAL_G74_OPTIONS };
+  return { ...DEFAULT_G74_OPTIONS };
+}
 
 export function g74OptionsToPayload(options: G74DiagnosisOptions) {
   const paths = options.extraProbePaths
@@ -85,3 +104,9 @@ export function g74OptionsSummary(options: G74DiagnosisOptions): string {
   }
   return parts.join(" · ");
 }
+
+export const G74_PRESET_LABELS: Record<G74DiagnosisPreset, string> = {
+  minimal: "최소 진단",
+  full: "전체 진단",
+  manual: "수동 입력",
+};

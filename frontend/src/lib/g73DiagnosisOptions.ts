@@ -2,6 +2,8 @@
 
 export type G73ProbeMode = "base_only" | "sample" | "full";
 
+export type G73DiagnosisPreset = "minimal" | "full" | "manual";
+
 export interface G73DiagnosisOptions {
   strict: boolean;
   includeCdnHeaders: boolean;
@@ -13,7 +15,8 @@ export interface G73DiagnosisOptions {
   zapMaxMinutes: number;
 }
 
-export const DEFAULT_G73_OPTIONS: G73DiagnosisOptions = {
+/** Smoke test — Base URL only, httpx only. */
+export const MINIMAL_G73_OPTIONS: G73DiagnosisOptions = {
   strict: true,
   includeCdnHeaders: false,
   timeout: 8,
@@ -22,6 +25,22 @@ export const DEFAULT_G73_OPTIONS: G73DiagnosisOptions = {
   sampleSize: 20,
   useZap: false,
   zapMaxMinutes: 10,
+};
+
+export const DEFAULT_G73_OPTIONS: G73DiagnosisOptions = {
+  ...MINIMAL_G73_OPTIONS,
+};
+
+/** Full inventory + httpx + ZAP passive. */
+export const FULL_G73_OPTIONS: G73DiagnosisOptions = {
+  strict: true,
+  includeCdnHeaders: false,
+  timeout: 10,
+  extraProbePaths: "",
+  probeMode: "full",
+  sampleSize: 20,
+  useZap: true,
+  zapMaxMinutes: 15,
 };
 
 export const RELAXED_G73_OPTIONS: G73DiagnosisOptions = {
@@ -35,11 +54,11 @@ export const RELAXED_G73_OPTIONS: G73DiagnosisOptions = {
   zapMaxMinutes: 10,
 };
 
-export const FULL_G73_OPTIONS: G73DiagnosisOptions = {
-  ...DEFAULT_G73_OPTIONS,
-  probeMode: "full",
-  timeout: 10,
-};
+export function g73OptionsForPreset(preset: G73DiagnosisPreset): G73DiagnosisOptions {
+  if (preset === "full") return { ...FULL_G73_OPTIONS };
+  if (preset === "minimal") return { ...MINIMAL_G73_OPTIONS };
+  return { ...DEFAULT_G73_OPTIONS };
+}
 
 export function g73OptionsToPayload(options: G73DiagnosisOptions) {
   const paths = options.extraProbePaths
@@ -83,3 +102,9 @@ export function g73OptionsSummary(options: G73DiagnosisOptions): string {
   if (options.useZap) parts.push(`ZAP passive 10036/10037 · ${options.zapMaxMinutes}m max`);
   return parts.join(" · ");
 }
+
+export const G73_PRESET_LABELS: Record<G73DiagnosisPreset, string> = {
+  minimal: "최소 진단",
+  full: "전체 진단",
+  manual: "수동 입력",
+};

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, ChevronDown, Loader2, Stethoscope } from "lucide-react";
 import { G32DiagnosisStartDialog } from "./G32DiagnosisStartDialog";
+import { G34DiagnosisStartDialog } from "./G34DiagnosisStartDialog";
 import { G35DiagnosisStartDialog } from "./G35DiagnosisStartDialog";
 import { G36DiagnosisStartDialog } from "./G36DiagnosisStartDialog";
+import { G42DiagnosisStartDialog } from "./G42DiagnosisStartDialog";
 import { G15DiagnosisStartDialog } from "./G15DiagnosisStartDialog";
 import { G41DiagnosisStartDialog } from "./G41DiagnosisStartDialog";
 import { G52DiagnosisStartDialog } from "./G52DiagnosisStartDialog";
@@ -28,6 +30,7 @@ import {
 } from "../lib/g41DiagnosisOptions";
 import {
   DEFAULT_G22_OPTIONS,
+  g22OptionsSummary,
   g22OptionsToPayload,
   type G22DiagnosisOptions,
 } from "../lib/g22DiagnosisOptions";
@@ -56,6 +59,12 @@ import {
   type G32DiagnosisOptions,
 } from "../lib/g32DiagnosisOptions";
 import {
+  DEFAULT_G34_OPTIONS,
+  g34OptionsToPayload,
+  g34OptionsSummary,
+  type G34DiagnosisOptions,
+} from "../lib/g34DiagnosisOptions";
+import {
   DEFAULT_G35_OPTIONS,
   g35OptionsToPayload,
   g35OptionsSummary,
@@ -67,6 +76,12 @@ import {
   g36OptionsSummary,
   type G36DiagnosisOptions,
 } from "../lib/g36DiagnosisOptions";
+import {
+  DEFAULT_G42_OPTIONS,
+  g42OptionsToPayload,
+  g42OptionsSummary,
+  type G42DiagnosisOptions,
+} from "../lib/g42DiagnosisOptions";
 import {
   DEFAULT_G72_OPTIONS,
   g72OptionsToPayload,
@@ -216,10 +231,14 @@ export function DiagnosisPage() {
   const [g74Options, setG74Options] = useState<G74DiagnosisOptions>(DEFAULT_G74_OPTIONS);
   const [g32DialogOpen, setG32DialogOpen] = useState(false);
   const [g32Options, setG32Options] = useState<G32DiagnosisOptions>(DEFAULT_G32_OPTIONS);
+  const [g34DialogOpen, setG34DialogOpen] = useState(false);
+  const [g34Options, setG34Options] = useState<G34DiagnosisOptions>(DEFAULT_G34_OPTIONS);
   const [g35DialogOpen, setG35DialogOpen] = useState(false);
   const [g35Options, setG35Options] = useState<G35DiagnosisOptions>(DEFAULT_G35_OPTIONS);
   const [g36DialogOpen, setG36DialogOpen] = useState(false);
   const [g36Options, setG36Options] = useState<G36DiagnosisOptions>(DEFAULT_G36_OPTIONS);
+  const [g42DialogOpen, setG42DialogOpen] = useState(false);
+  const [g42Options, setG42Options] = useState<G42DiagnosisOptions>(DEFAULT_G42_OPTIONS);
   const [g52DialogOpen, setG52DialogOpen] = useState(false);
   const [g52Options, setG52Options] = useState<G52DiagnosisOptions>(DEFAULT_G52_OPTIONS);
   const [g61DialogOpen, setG61DialogOpen] = useState(false);
@@ -275,7 +294,7 @@ export function DiagnosisPage() {
   const handleRun = useCallback(
     async (
       sectionId: string,
-      options?: G15DiagnosisOptions | G41DiagnosisOptions | G22DiagnosisOptions | G32DiagnosisOptions | G35DiagnosisOptions | G36DiagnosisOptions | G52DiagnosisOptions | G61DiagnosisOptions | G62DiagnosisOptions | G71DiagnosisOptions | G72DiagnosisOptions | G73DiagnosisOptions | G74DiagnosisOptions,
+      options?: G15DiagnosisOptions | G41DiagnosisOptions | G42DiagnosisOptions | G22DiagnosisOptions | G32DiagnosisOptions | G34DiagnosisOptions | G35DiagnosisOptions | G36DiagnosisOptions | G52DiagnosisOptions | G61DiagnosisOptions | G62DiagnosisOptions | G71DiagnosisOptions | G72DiagnosisOptions | G73DiagnosisOptions | G74DiagnosisOptions,
     ) => {
       const mod = catalogById[sectionId];
       if (!mod?.diagnosable || !mod?.implemented) return;
@@ -287,15 +306,16 @@ export function DiagnosisPage() {
         setRunningSummary(g15OptionsSummary(options as G15DiagnosisOptions));
       } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
         setRunningSummary(g41OptionsSummary(options as G41DiagnosisOptions));
+      } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
+        setRunningSummary(g42OptionsSummary(options as G42DiagnosisOptions));
       } else if (sectionId === "2-2" && options && "useHttpx" in options) {
-        const g22 = options as G22DiagnosisOptions;
-        setRunningSummary(
-          `${g22.useHttpx ? "httpx" : ""}${g22.useHttpx && g22.useZap ? " + " : ""}${g22.useZap ? "ZAP" : ""}${!g22.useHttpx && !g22.useZap ? "설계 리뷰만" : ""}`,
-        );
+        setRunningSummary(g22OptionsSummary(options as G22DiagnosisOptions));
       } else if (sectionId === "7-1" && options && "strictRisky" in options) {
         setRunningSummary(g71OptionsSummary(options as G71DiagnosisOptions));
       } else if (sectionId === "3-2" && options && "maxAttempts" in options) {
         setRunningSummary(g32OptionsSummary(options as G32DiagnosisOptions));
+      } else if (sectionId === "3-4" && options && "inventoryScope" in options) {
+        setRunningSummary(g34OptionsSummary(options as G34DiagnosisOptions));
       } else if (sectionId === "3-5" && options && "probeMode" in options && !("requireRobotsTxt" in options)) {
         setRunningSummary(g35OptionsSummary(options as G35DiagnosisOptions));
       } else if (sectionId === "3-6" && options && "probeMode" in options && !("requireRobotsTxt" in options)) {
@@ -324,12 +344,16 @@ export function DiagnosisPage() {
           body = g15OptionsToPayload(options as G15DiagnosisOptions);
         } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
           body = g41OptionsToPayload(options as G41DiagnosisOptions);
+        } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
+          body = g42OptionsToPayload(options as G42DiagnosisOptions);
         } else if (sectionId === "2-2" && options && "useHttpx" in options) {
           body = g22OptionsToPayload(options as G22DiagnosisOptions);
         } else if (sectionId === "7-1" && options && "strictRisky" in options) {
           body = g71OptionsToPayload(options as G71DiagnosisOptions);
         } else if (sectionId === "3-2" && options && "maxAttempts" in options) {
           body = g32OptionsToPayload(options as G32DiagnosisOptions);
+        } else if (sectionId === "3-4" && options && "inventoryScope" in options) {
+          body = g34OptionsToPayload(options as G34DiagnosisOptions);
         } else if (sectionId === "3-5" && options && "probeMode" in options && !("requireRobotsTxt" in options)) {
           body = g35OptionsToPayload(options as G35DiagnosisOptions);
         } else if (sectionId === "3-6" && options && "probeMode" in options && !("requireRobotsTxt" in options)) {
@@ -372,12 +396,20 @@ export function DiagnosisPage() {
         setG41DialogOpen(true);
         return;
       }
+      if (sectionId === "4-2") {
+        setG42DialogOpen(true);
+        return;
+      }
       if (sectionId === "2-2") {
         setG22DialogOpen(true);
         return;
       }
       if (sectionId === "3-2") {
         setG32DialogOpen(true);
+        return;
+      }
+      if (sectionId === "3-4") {
+        setG34DialogOpen(true);
         return;
       }
       if (sectionId === "3-5") {
@@ -435,6 +467,24 @@ export function DiagnosisPage() {
       setG41Options(options);
       setG41DialogOpen(false);
       void handleRun("4-1", options);
+    },
+    [handleRun],
+  );
+
+  const handleG34Start = useCallback(
+    (options: G34DiagnosisOptions) => {
+      setG34Options(options);
+      setG34DialogOpen(false);
+      void handleRun("3-4", options);
+    },
+    [handleRun],
+  );
+
+  const handleG42Start = useCallback(
+    (options: G42DiagnosisOptions) => {
+      setG42Options(options);
+      setG42DialogOpen(false);
+      void handleRun("4-2", options);
     },
     [handleRun],
   );
@@ -715,6 +765,12 @@ export function DiagnosisPage() {
         onClose={() => setG41DialogOpen(false)}
         onStart={handleG41Start}
       />
+      <G42DiagnosisStartDialog
+        open={g42DialogOpen && !runningId}
+        initialOptions={g42Options}
+        onClose={() => setG42DialogOpen(false)}
+        onStart={handleG42Start}
+      />
       <G22DiagnosisStartDialog
         open={g22DialogOpen && !runningId}
         initialOptions={g22Options}
@@ -750,6 +806,12 @@ export function DiagnosisPage() {
         initialOptions={g32Options}
         onClose={() => setG32DialogOpen(false)}
         onStart={handleG32Start}
+      />
+      <G34DiagnosisStartDialog
+        open={g34DialogOpen && !runningId}
+        initialOptions={g34Options}
+        onClose={() => setG34DialogOpen(false)}
+        onStart={handleG34Start}
       />
       <G35DiagnosisStartDialog
         open={g35DialogOpen && !runningId}

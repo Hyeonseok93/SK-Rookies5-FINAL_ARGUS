@@ -212,6 +212,7 @@ def analyze_separation(
     login_entries: list[dict[str, Any]],
     inventory: InventorySlice,
     extra_admin_hosts: list[str] | None = None,
+    inventory_scope: str = "full",
 ) -> tuple[list[DiagnosisFinding], dict[str, Any]]:
     findings: list[DiagnosisFinding] = []
     stats: dict[str, Any] = {
@@ -294,6 +295,10 @@ def analyze_separation(
                 )
             )
         stats["shared_login_origins"] = shared_origins
+
+    if inventory_scope != "full":
+        stats["inventory_scope"] = inventory_scope
+        return findings, stats
 
     # Admin UI on same base as user frontend (SPA /admin on user host)
     same_server_admin_ui: list[dict[str, str]] = []

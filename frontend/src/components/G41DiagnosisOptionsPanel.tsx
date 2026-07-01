@@ -1,9 +1,4 @@
 import type { G41DiagnosisOptions, G41ProbeMode } from "../lib/g41DiagnosisOptions";
-import {
-  DEFAULT_G41_OPTIONS,
-  FULL_G41_OPTIONS,
-  QUICK_G41_OPTIONS,
-} from "../lib/g41DiagnosisOptions";
 
 function Check({
   label,
@@ -83,30 +78,6 @@ export function G41DiagnosisOptionsPanel({
 }) {
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => onChange(QUICK_G41_OPTIONS)}
-          className="rounded border border-cyber-border/60 px-2 py-1 text-[10px] text-cyber-muted hover:border-cyan-400/40 hover:text-cyan-300"
-        >
-          Quick
-        </button>
-        <button
-          type="button"
-          onClick={() => onChange(DEFAULT_G41_OPTIONS)}
-          className="rounded border border-cyber-border/60 px-2 py-1 text-[10px] text-cyber-muted hover:border-cyan-400/40 hover:text-cyan-300"
-        >
-          Default
-        </button>
-        <button
-          type="button"
-          onClick={() => onChange(FULL_G41_OPTIONS)}
-          className="rounded border border-cyber-border/60 px-2 py-1 text-[10px] text-cyber-muted hover:border-cyan-400/40 hover:text-cyan-300"
-        >
-          Full
-        </button>
-      </div>
-
       <div>
         <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-cyber-muted">
           Probe mode

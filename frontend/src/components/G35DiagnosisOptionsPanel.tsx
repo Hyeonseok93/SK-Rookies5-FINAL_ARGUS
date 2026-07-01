@@ -1,5 +1,4 @@
 import type { G35DiagnosisOptions, G35ProbeMode } from "../lib/g35DiagnosisOptions";
-import { DEFAULT_G35_OPTIONS } from "../lib/g35DiagnosisOptions";
 
 function ProbeModeOption({
   mode,
@@ -100,16 +99,6 @@ export function G35DiagnosisOptionsPanel({
           className="w-full rounded border border-cyber-border/60 bg-cyber-bg px-2 py-1.5 font-mono text-xs text-white"
         />
       </label>
-
-      <button
-        type="button"
-        onClick={() => onChange(DEFAULT_G35_OPTIONS)}
-        className="rounded border border-cyan-400/40 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-500/10"
-      >
-        기본값으로
-      </button>
     </div>
   );
 }
-
-export { DEFAULT_G35_OPTIONS };

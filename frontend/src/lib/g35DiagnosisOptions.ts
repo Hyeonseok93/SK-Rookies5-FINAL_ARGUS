@@ -2,16 +2,40 @@
 
 export type G35ProbeMode = "base_only" | "sample" | "full";
 
+export type G35DiagnosisPreset = "minimal" | "full" | "manual";
+
 export interface G35DiagnosisOptions {
   probeMode: G35ProbeMode;
   sampleSize: number;
   timeout: number;
 }
 
-export const DEFAULT_G35_OPTIONS: G35DiagnosisOptions = {
-  probeMode: "sample",
+/** 동작 확인 — Base `/` + robots.txt만. */
+export const MINIMAL_G35_OPTIONS: G35DiagnosisOptions = {
+  probeMode: "base_only",
   sampleSize: 50,
   timeout: 8,
+};
+
+/** 전수 — api-tree GET path 전체. */
+export const FULL_G35_OPTIONS: G35DiagnosisOptions = {
+  probeMode: "full",
+  sampleSize: 500,
+  timeout: 10,
+};
+
+export const DEFAULT_G35_OPTIONS = MINIMAL_G35_OPTIONS;
+
+export function g35OptionsForPreset(preset: G35DiagnosisPreset): G35DiagnosisOptions {
+  if (preset === "full") return { ...FULL_G35_OPTIONS };
+  if (preset === "minimal") return { ...MINIMAL_G35_OPTIONS };
+  return { ...MINIMAL_G35_OPTIONS };
+}
+
+export const G35_PRESET_LABELS: Record<G35DiagnosisPreset, string> = {
+  minimal: "최소 진단",
+  full: "전체 진단",
+  manual: "수동 입력",
 };
 
 export function g35OptionsToPayload(options: G35DiagnosisOptions) {

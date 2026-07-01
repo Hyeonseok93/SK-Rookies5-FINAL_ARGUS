@@ -35,8 +35,22 @@ class ScanResult:
     message: str = ""
 
 
+@dataclass
+class ScanOptions:
+    inventory_scope: str = "full"
+
+
+def _scan_options(raw: dict[str, Any]) -> ScanOptions:
+    cfg = raw.get("diagnosis_3_4") or raw.get("scan_3_4") or {}
+    scope = str(cfg.get("inventory_scope", "full")).strip().lower()
+    if scope not in ("login_only", "full"):
+        scope = "full"
+    return ScanOptions(inventory_scope=scope)
+
+
 def run_g34_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     _ = module_dir
+    opts = _scan_options(ctx.raw_config or {})
     targets = _load_local("targets")
     rules = _load_local("separation_rules")
 
@@ -70,6 +84,7 @@ def run_g34_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         login_entries=login_entries,
         inventory=inventory,
         extra_admin_hosts=extra_admin_hosts,
+        inventory_scope=opts.inventory_scope,
     )
     phase("3-4: analysis complete", phase_name="analyzing", done=1, total=1)
 
