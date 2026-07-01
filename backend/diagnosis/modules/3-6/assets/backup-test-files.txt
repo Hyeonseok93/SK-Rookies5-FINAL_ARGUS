@@ -1,0 +1,87 @@
+# Guideline 3-6 — backup & test file probes (GET base + path)
+# Archives & backups
+backup.zip
+backup.tar
+backup.tar.gz
+backup.rar
+backup.7z
+backup.sql
+backup.sql.gz
+backup.bak
+backup.old
+site.zip
+www.zip
+html.zip
+public.zip
+dump.sql
+database.sql
+db.sql
+db_backup.sql
+admin.zip
+# Env & config backups
+.env
+.env.local
+.env.production
+.env.development
+.env.backup
+.env.old
+.env.bak
+web.config
+web.config.bak
+application.properties
+application.yml
+application.yaml
+application-prod.yml
+application-dev.yml
+config.json
+config.yml
+config.yaml
+config.php.bak
+settings.py
+settings.json
+secrets.json
+credentials.json
+wp-config.php
+wp-config.php.bak
+configuration.php
+# Test / debug / staging
+test.html
+test.htm
+test.php
+test.jsp
+test.aspx
+test.txt
+test.zip
+test.sql
+demo.html
+demo.php
+debug.html
+debug.php
+staging.html
+staging.php
+dev.html
+dev.php
+tmp.php
+temp.php
+phpinfo.php
+info.php
+phpinfo
+# VCS & editor leftovers
+.git/config
+.git/HEAD
+.gitignore
+.svn/entries
+.DS_Store
+Thumbs.db
+# Logs (often left in prod)
+error.log
+access.log
+debug.log
+laravel.log
+storage/logs/laravel.log
+# Sensitive names
+passwords.txt
+users.txt
+accounts.txt
+customer_data.csv
+payment.log

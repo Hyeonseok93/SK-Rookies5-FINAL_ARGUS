@@ -1,0 +1,275 @@
+section_id: 4-2
+title: 인증(세션 및 토큰) 값 안전성 설정 여부
+chapter: 4
+status: fail
+implemented: true
+findings:
+- severity: info
+  message: 4-2 scan statistics
+  evidence:
+    stats:
+      sessions: 5
+      auth_source: verify_cache
+      probe_path: /api/v1/members/me
+      login_matrix_accounts: 5
+      login_entries: 2
+      probe_account: yerin@travel.com
+      probe_login_url: http://host.docker.internal:8080/api/v1/auth/login
+      token_analysis:
+        tokens_analyzed: 10
+        jwt_tokens: 10
+        opaque_tokens: 0
+      probe_base_url: http://host.docker.internal:8080
+      duplicate_login_ip_findings: 2
+      logout_urls: []
+      auth_logout_gap:
+        login_endpoints:
+        - POST http://localhost:5173/api/v1/auth/admin/login
+        - POST http://localhost:5173/api/v1/auth/login
+        - POST http://localhost:8080/api/v1/auth/admin/login
+        - POST http://localhost:8080/api/v1/auth/login
+        - POST http://localhost:8081/api/v1/auth/admin/login
+        - POST http://localhost:8081/api/v1/auth/login
+        logout_endpoints: []
+      client_logout_findings: 2
+      lifecycle:
+        relogin:
+          login_url: http://host.docker.internal:8080/api/v1/auth/login
+          email: yerin@travel.com
+          first:
+            access: true
+            refresh: true
+          second:
+            access: true
+            refresh: true
+        duplicate_login:
+          login_url: http://host.docker.internal:8080/api/v1/auth/login
+          email: yerin@travel.com
+          first_session_status_after_second_login: 200
+          second_session_status: 200
+        duplicate_login_cross_ip:
+          login_url: http://host.docker.internal:8080/api/v1/auth/login
+          email: yerin@travel.com
+          client_ip_a: 203.0.113.10
+          client_ip_b: 198.51.100.20
+          first_session_status_same_ip: 200
+          first_session_status_foreign_ip: 200
+          second_session_status: 200
+        client_logout:
+          login_url: http://host.docker.internal:8080/api/v1/auth/login
+          email: yerin@travel.com
+          mode: client_only
+          has_access_token: true
+          has_refresh_token: true
+          status_before_client_logout: 200
+          status_after_client_logout: 200
+          refresh_status_after_client_logout: 200
+          refresh_probe_mode: body
+      findings: 12
+      by_severity:
+        high: 2
+        medium: 9
+        low: 1
+        info: 0
+- severity: medium
+  message: '[4-2] JWT lifetime 1209600s exceeds recommended 1800s for `yerin@travel.com`'
+  evidence:
+    token_label: refresh
+    login_url: http://host.docker.internal:8080/api/v1/auth/login
+    email: yerin@travel.com
+    token_length: 188
+    algorithm: HS512
+    jwt_header:
+      alg: HS512
+    jwt_claims:
+      exp: 1784113863
+      iat: 1782904263
+      sub: yerin@travel.com
+    rule_id: 4-2-jwt-long-lived
+    reason: exp-iat=1209600s > max 1800s
+    lifetime_sec: 1209600
+    max_lifetime_sec: 1800
+    remediation: Shorten access-token lifetime and use refresh rotation
+- severity: medium
+  message: '[4-2] JWT lifetime 1209600s exceeds recommended 1800s for `ondecar@travel.com`'
+  evidence:
+    token_label: refresh
+    login_url: http://host.docker.internal:8080/api/v1/auth/login
+    email: ondecar@travel.com
+    token_length: 191
+    algorithm: HS512
+    jwt_header:
+      alg: HS512
+    jwt_claims:
+      exp: 1784113863
+      iat: 1782904263
+      sub: ondecar@travel.com
+    rule_id: 4-2-jwt-long-lived
+    reason: exp-iat=1209600s > max 1800s
+    lifetime_sec: 1209600
+    max_lifetime_sec: 1800
+    remediation: Shorten access-token lifetime and use refresh rotation
+- severity: medium
+  message: '[4-2] JWT lifetime 1209600s exceeds recommended 1800s for `admin@travel.com`'
+  evidence:
+    token_label: refresh
+    login_url: http://host.docker.internal:8080/api/v1/auth/admin/login
+    email: admin@travel.com
+    token_length: 188
+    algorithm: HS512
+    jwt_header:
+      alg: HS512
+    jwt_claims:
+      exp: 1784113863
+      iat: 1782904263
+      sub: admin@travel.com
+    rule_id: 4-2-jwt-long-lived
+    reason: exp-iat=1209600s > max 1800s
+    lifetime_sec: 1209600
+    max_lifetime_sec: 1800
+    remediation: Shorten access-token lifetime and use refresh rotation
+- severity: medium
+  message: '[4-2] JWT lifetime 1209600s exceeds recommended 1800s for `jiho@travel.com`'
+  evidence:
+    token_label: refresh
+    login_url: http://host.docker.internal:8080/api/v1/auth/login
+    email: jiho@travel.com
+    token_length: 187
+    algorithm: HS512
+    jwt_header:
+      alg: HS512
+    jwt_claims:
+      exp: 1784113864
+      iat: 1782904264
+      sub: jiho@travel.com
+    rule_id: 4-2-jwt-long-lived
+    reason: exp-iat=1209600s > max 1800s
+    lifetime_sec: 1209600
+    max_lifetime_sec: 1800
+    remediation: Shorten access-token lifetime and use refresh rotation
+- severity: medium
+  message: '[4-2] JWT lifetime 1209600s exceeds recommended 1800s for `airluna@travel.com`'
+  evidence:
+    token_label: refresh
+    login_url: http://host.docker.internal:8080/api/v1/auth/login
+    email: airluna@travel.com
+    token_length: 191
+    algorithm: HS512
+    jwt_header:
+      alg: HS512
+    jwt_claims:
+      exp: 1784113864
+      iat: 1782904264
+      sub: airluna@travel.com
+    rule_id: 4-2-jwt-long-lived
+    reason: exp-iat=1209600s > max 1800s
+    lifetime_sec: 1209600
+    max_lifetime_sec: 1800
+    remediation: Shorten access-token lifetime and use refresh rotation
+- severity: high
+  message: '[4-2] Same token reissued on re-login for `yerin@travel.com` (access_token,
+    refresh_token)'
+  evidence:
+    rule_id: 4-2-token-reuse
+    reason: identical access_token and refresh_token on consecutive logins
+    login_url: http://host.docker.internal:8080/api/v1/auth/login
+    email: yerin@travel.com
+    reused_fields:
+    - access_token
+    - refresh_token
+    remediation: Issue a new session/token on every successful login
+- severity: medium
+  message: '[4-2] Concurrent sessions allowed for `yerin@travel.com` (first token
+    still valid after second login)'
+  evidence:
+    rule_id: 4-2-duplicate-login
+    reason: first login token still returns 200 after second login
+    login_url: http://host.docker.internal:8080/api/v1/auth/login
+    email: yerin@travel.com
+    probe_path: /api/v1/members/me
+    probe_status_first: 200
+    probe_status_second: 200
+    remediation: Invalidate prior server-side session on new login or bind session
+      to a unique server key
+- severity: medium
+  message: '[4-2] Concurrent sessions from different IPs for `yerin@travel.com` (203.0.113.10
+    then 198.51.100.20)'
+  evidence:
+    login_url: http://host.docker.internal:8080/api/v1/auth/login
+    email: yerin@travel.com
+    probe_path: /api/v1/members/me
+    client_ip_a: 203.0.113.10
+    client_ip_b: 198.51.100.20
+    probe_status_first_same_ip: 200
+    probe_status_first_foreign_ip: 200
+    probe_status_second: 200
+    rule_id: 4-2-duplicate-login-cross-ip
+    reason: first login token still valid on original IP after second login from a
+      different simulated client IP
+    remediation: Invalidate prior sessions on new login or bind sessions to client
+      IP when policy requires single-location access
+- severity: low
+  message: '[4-2] Session token not bound to login IP for `yerin@travel.com` (valid
+    under 198.51.100.20 after login from 203.0.113.10)'
+  evidence:
+    login_url: http://host.docker.internal:8080/api/v1/auth/login
+    email: yerin@travel.com
+    probe_path: /api/v1/members/me
+    client_ip_a: 203.0.113.10
+    client_ip_b: 198.51.100.20
+    probe_status_first_same_ip: 200
+    probe_status_first_foreign_ip: 200
+    probe_status_second: 200
+    rule_id: 4-2-no-ip-session-binding
+    reason: first session returns 200 when probed with foreign IP header 198.51.100.20
+    remediation: Bind access tokens to issuing client IP or use server-side session
+      records that track source IP
+- severity: medium
+  message: '[4-2] No server logout API in inventory (client-only logout likely) —
+    e.g. `POST http://localhost:5173/api/v1/auth/admin/login`'
+  evidence:
+    rule_id: 4-2-no-server-logout-api
+    reason: login endpoints present but no logout/sign-out API in inventory or config
+    email: yerin@travel.com
+    login_url: http://host.docker.internal:8080/api/v1/auth/login
+    login_endpoints:
+    - POST http://localhost:5173/api/v1/auth/admin/login
+    - POST http://localhost:5173/api/v1/auth/login
+    - POST http://localhost:8080/api/v1/auth/admin/login
+    - POST http://localhost:8080/api/v1/auth/login
+    - POST http://localhost:8081/api/v1/auth/admin/login
+    - POST http://localhost:8081/api/v1/auth/login
+    remediation: Add POST /api/v1/auth/logout that revokes refresh tokens server-side,
+      or document stateless JWT expiry-only logout policy
+- severity: medium
+  message: '[4-2] Access token still valid after client-only logout for `yerin@travel.com`
+    (no server revoke — JWT valid until exp)'
+  evidence:
+    login_url: http://host.docker.internal:8080/api/v1/auth/login
+    email: yerin@travel.com
+    probe_path: /api/v1/members/me
+    refresh_path: /api/v1/auth/refresh
+    status_before_client_logout: 200
+    logout_mode: client_only_no_server_call
+    rule_id: 4-2-token-valid-after-client-logout
+    reason: auth probe returned 200 without server logout API
+    status_after_client_logout: 200
+    remediation: Add server-side logout/revocation or accept JWT expiry-only policy
+      with short access-token TTL
+- severity: high
+  message: '[4-2] Refresh token still issues access after client-only logout for `yerin@travel.com`'
+  evidence:
+    login_url: http://host.docker.internal:8080/api/v1/auth/login
+    email: yerin@travel.com
+    probe_path: /api/v1/members/me
+    refresh_path: /api/v1/auth/refresh
+    status_before_client_logout: 200
+    logout_mode: client_only_no_server_call
+    rule_id: 4-2-refresh-valid-after-client-logout
+    reason: refresh endpoint returned 200 via body after simulated client logout
+    refresh_status: 200
+    refresh_probe_mode: body
+    remediation: Revoke refresh tokens server-side on logout and delete Redis/session
+      entries
+message: '4-2 token safety: 2 high finding(s)'
+checked_at: '2026-07-01T11:26:38.380683+00:00'

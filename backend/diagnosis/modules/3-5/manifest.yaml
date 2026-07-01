@@ -1,0 +1,5 @@
+id: "3-5"
+title: "검색엔진 정보 노출 가능성"
+chapter: 3
+implemented: true
+engine: httpx

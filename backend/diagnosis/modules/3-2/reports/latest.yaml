@@ -1,0 +1,276 @@
+section_id: 3-2
+title: 인증 실패 횟수 제한
+chapter: 3
+status: fail
+implemented: true
+findings:
+- severity: info
+  message: 3-2 scan statistics
+  evidence:
+    stats:
+      login_entries: 2
+      accounts_available: 5
+      max_attempts: 12
+      strict: true
+      errors: 0
+      entry:host.docker.internal:8080·login:
+        login_entries: 1
+        probed: 1
+        limit_detected: 0
+        no_limit: 1
+        errors: 0
+        max_attempts: 12
+        account_email: yerin@travel.com
+        strict: true
+      probed: 2
+      limit_detected: 0
+      no_limit: 2
+      httpx_findings: 2
+- severity: medium
+  message: '[3-2] No auth failure limit at `host.docker.internal:8080·login` — 12
+    wrong-password attempt(s), response unchanged'
+  evidence:
+    rule_id: 3-2-auth-failure-limit
+    engine: httpx
+    login_url: http://host.docker.internal:8080/api/v1/auth/admin/login
+    login_label: host.docker.internal:8080·login
+    probe_mode: json
+    account_email: admin@travel.com
+    max_attempts: 12
+    attempts:
+    - attempt: 1
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 2
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 3
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 4
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 5
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 6
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 7
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 8
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 9
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 10
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 11
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 12
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    analysis:
+      detected: false
+      limit_type: none
+      detected_at_attempt: null
+      reason: no lockout signal within 12 attempt(s)
+      differences: []
+      baseline:
+        scenario: attempt_1
+        email: admin@travel.com
+        http_status: 401
+        primary_message: 인증에 실패하였습니다.
+        error_code: AUTH-001
+        content_type: application/json
+        body_preview: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"AUTH-001","systemMessage":"인증에
+          실패하였습니다.","details":null},"timestamp":"2026-07-01T11:19:01.956268149"}'
+        body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+          실패하였습니다.","details":null},""}'
+        json_fields:
+          message: 인증에 실패하였습니다.
+          error.code: AUTH-001
+          error.message: 인증에 실패하였습니다.
+        error: null
+      trigger_snapshot: null
+    remediation: Enforce account lockout or rate limiting after repeated failed logins
+      (e.g. lock account or return 429 after N failures)
+    trigger: no_lockout_detected
+    reason: no lockout signal within 12 attempt(s)
+- severity: medium
+  message: '[3-2] No auth failure limit at `host.docker.internal:8080·login` — 12
+    wrong-password attempt(s), response unchanged'
+  evidence:
+    rule_id: 3-2-auth-failure-limit
+    engine: httpx
+    login_url: http://host.docker.internal:8080/api/v1/auth/login
+    login_label: host.docker.internal:8080·login
+    probe_mode: json
+    account_email: yerin@travel.com
+    max_attempts: 12
+    attempts:
+    - attempt: 1
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 2
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 3
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 4
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 5
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 6
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 7
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 8
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 9
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 10
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 11
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    - attempt: 12
+      http_status: 401
+      error_code: AUTH-001
+      primary_message: 인증에 실패하였습니다.
+      body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+        실패하였습니다.","details":null},""}'
+      error: null
+    analysis:
+      detected: false
+      limit_type: none
+      detected_at_attempt: null
+      reason: no lockout signal within 12 attempt(s)
+      differences: []
+      baseline:
+        scenario: attempt_1
+        email: yerin@travel.com
+        http_status: 401
+        primary_message: 인증에 실패하였습니다.
+        error_code: AUTH-001
+        content_type: application/json
+        body_preview: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"AUTH-001","systemMessage":"인증에
+          실패하였습니다.","details":null},"timestamp":"2026-07-01T11:19:03.410796695"}'
+        body_fingerprint: '{"success":false,"data":null,"message":"인증에 실패하였습니다.","error":{"code":"auth-001","systemmessage":"인증에
+          실패하였습니다.","details":null},""}'
+        json_fields:
+          message: 인증에 실패하였습니다.
+          error.code: AUTH-001
+          error.message: 인증에 실패하였습니다.
+        error: null
+      trigger_snapshot: null
+    remediation: Enforce account lockout or rate limiting after repeated failed logins
+      (e.g. lock account or return 429 after N failures)
+    trigger: no_lockout_detected
+    reason: no lockout signal within 12 attempt(s)
+message: Missing auth failure limit on 2/2 login entry(s) (12 wrong-password attempts)
+checked_at: '2026-07-01T11:19:04.701833+00:00'

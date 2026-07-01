@@ -1,0 +1,56 @@
+﻿[
+  {
+    "finding_id": "2-2-9b7ecce719",
+    "ok": false,
+    "output_dir": "C:\\Users\\hyunm\\WorkStation\\Zap\\ARGUS_1\\backend\\diagnosis\\modules\\2-2\\reports\\evidence\\2-2-9b7ecce719\\replay",
+    "message": "replay completed with verification failures",
+    "steps": [
+      {
+        "step_id": "s01_auth_anonymous",
+        "action": "set_auth",
+        "ok": true,
+        "message": "",
+        "artifacts": {}
+      },
+      {
+        "step_id": "s02_anon",
+        "action": "http",
+        "ok": false,
+        "message": "sha256 mismatch (got b5e308a3aee6280c…)",
+        "artifacts": {
+          "response_file": "s02_anon_response.pdf",
+          "screenshot": "s02_anon_screenshot.png",
+          "panel_html": "s02_anon_panel.html"
+        }
+      },
+      {
+        "step_id": "s03_auth_authenticated",
+        "action": "set_auth",
+        "ok": true,
+        "message": "",
+        "artifacts": {}
+      },
+      {
+        "step_id": "s04_auth",
+        "action": "http",
+        "ok": false,
+        "message": "sha256 mismatch (got e8df42843d7c1389…)",
+        "artifacts": {
+          "response_file": "s04_auth_response.pdf",
+          "screenshot": "s04_auth_screenshot.png",
+          "panel_html": "s04_auth_panel.html"
+        }
+      },
+      {
+        "step_id": "s05_compare",
+        "action": "compare",
+        "ok": true,
+        "message": "",
+        "artifacts": {
+          "screenshot": "s05_compare_screenshot.png",
+          "panel_html": "s05_compare_panel.html"
+        }
+      }
+    ]
+  }
+]

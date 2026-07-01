@@ -1,0 +1,8 @@
+section_id: 2-1
+title: 악성코드파일 업로드
+chapter: 2
+status: pending
+implemented: true
+findings: []
+message: 모듈 껍데기 — 진단 로직 미구현
+checked_at: '2026-07-01T14:54:14.010645+00:00'

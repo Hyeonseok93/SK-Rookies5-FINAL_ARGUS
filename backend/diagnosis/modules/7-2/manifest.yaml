@@ -1,0 +1,6 @@
+id: "7-2"
+title: "파일 목록화 가능성"
+chapter: 7
+implemented: true
+engine: httpx+zap
+zap_optional: true

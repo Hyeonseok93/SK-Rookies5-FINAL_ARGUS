@@ -1,0 +1,24 @@
+# Onde URL List (from 2단계 엔드포인트 구조 정의서 v2)
+# One path per line. Lines starting with # are ignored.
+# GET assumed. Uses frontend_base_url from ARGUS config (http://localhost:5173).
+
+/
+/flight
+/car
+/insurance
+/map
+/feed
+/mypage
+/payment
+/payment/callback
+/seller
+/oauth2/redirect
+/signup/email
+/admin/login
+/admin
+/admin/settlement
+/401
+/403
+/404
+/500
+/503

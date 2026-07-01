@@ -1,0 +1,31 @@
+# URL List — one path or full URL per line (GET assumed)
+# Lines starting with # are ignored.
+# Paths use frontend_base_url from config (default http://localhost:5173).
+#
+# Query parameters are OPTIONAL (| param, param) — parser supports them.
+# Onde SPA uses path-only routes; search params go to API List instead.
+#
+# Formats:
+#   /flight
+#   /oauth2/redirect | code, state
+
+/
+/flight
+/car
+/insurance
+/map
+/feed
+/mypage
+/payment
+/payment/callback
+/seller
+/oauth2/redirect
+/signup/email
+/admin/login
+/admin
+/admin/settlement
+/401
+/403
+/404
+/500
+/503

@@ -1,0 +1,5 @@
+id: "7-4"
+title: "취약한 보안설정"
+chapter: 7
+implemented: true
+engine: httpx+zap

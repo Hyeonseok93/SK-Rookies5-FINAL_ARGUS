@@ -1,0 +1,79 @@
+"""Load findings from section reports and run evidence replay."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from app.services.test_accounts_service import load_test_accounts
+from diagnosis.replay.runner import ReplayRunResult, run_replay_plan
+from diagnosis.replay.schema import ReplayPlan
+from diagnosis.registry import get_module
+
+
+def _report_path(section_id: str, module_dir: Path) -> Path:
+    return module_dir / "reports" / "latest.yaml"
+
+
+def list_replayable_findings(section_id: str) -> list[dict[str, Any]]:
+    mod = get_module(section_id)
+    if mod is None:
+        return []
+    path = _report_path(section_id, mod.module_dir)
+    if not path.is_file():
+        return []
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    out: list[dict[str, Any]] = []
+    for f in raw.get("findings") or []:
+        if not isinstance(f, dict):
+            continue
+        ev = f.get("evidence") or {}
+        replay = ev.get("replay")
+        if not replay or not ev.get("replayable", True):
+            continue
+        out.append(
+            {
+                "severity": f.get("severity"),
+                "message": f.get("message"),
+                "finding_id": ev.get("finding_id") or replay.get("finding_id"),
+                "rule_id": ev.get("rule_id") or replay.get("rule_id"),
+                "replay": replay,
+            }
+        )
+    return out
+
+
+def run_section_replay(
+    section_id: str,
+    *,
+    finding_id: str | None = None,
+    raw_config: dict[str, Any] | None = None,
+    use_playwright: bool = True,
+) -> list[ReplayRunResult]:
+    mod = get_module(section_id)
+    if mod is None:
+        raise KeyError(f"Unknown section: {section_id}")
+
+    artifacts_root = mod.module_dir / "reports" / "evidence"
+    findings = list_replayable_findings(section_id)
+    if finding_id:
+        findings = [f for f in findings if f.get("finding_id") == finding_id]
+    if not findings:
+        return []
+
+    accounts = load_test_accounts().get("accounts") or []
+    results: list[ReplayRunResult] = []
+    for row in findings:
+        plan = ReplayPlan.from_dict(row["replay"])
+        results.append(
+            run_replay_plan(
+                plan,
+                artifacts_root=artifacts_root,
+                raw_config=raw_config,
+                test_accounts=accounts,
+                use_playwright=use_playwright,
+            )
+        )
+    return results

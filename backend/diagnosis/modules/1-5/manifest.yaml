@@ -1,0 +1,5 @@
+id: "1-5"
+title: "검증되지 않은 리다이렉트와 포워드"
+chapter: 1
+implemented: true
+engine: httpx+zap

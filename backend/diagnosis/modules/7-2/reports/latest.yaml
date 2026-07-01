@@ -1,0 +1,150 @@
+section_id: 7-2
+title: 파일 목록화 가능성
+chapter: 7
+status: fail
+implemented: true
+findings:
+- severity: info
+  message: 7-2 scan statistics
+  evidence:
+    stats:
+      targets: 4440
+      probed: 4440
+      unreachable: 6
+      issues: 1
+      by_severity:
+        medium: 1
+        low: 0
+        info: 0
+      probe_mode: full
+      sample_size: 20
+      base_urls: 3
+      wordlist_paths: 557
+      wordlist_files:
+      - directory-wordlist-comprehensive.txt
+      wordlist_from_files: 547
+      wordlist_from_forced_browse: 10
+      wordlist_total: 557
+      inventory_endpoints: 465
+      inventory_paths_added: 183
+      inventory_fallback: false
+      httpx:
+        probed: 4440
+        issues: 1
+      zap:
+        zap_proxy: http://zap:8090
+        workspace_reset_before:
+          session_name: argus-g72-start
+          alerts_cleared: true
+          new_session: true
+          gc: true
+        seeded: 300
+        seed_cap: 300
+        seed_candidates: 300
+        priority_seeded: 1
+        passive_remaining: 0
+        active_scans: 3
+        alerts: 1
+        workspace_reset_after:
+          session_name: argus-g72-done
+          alerts_cleared: true
+          new_session: true
+          gc: true
+      raw_issues: 2
+      collapsed_issues: 2
+- severity: info
+  message: '[7-2] Unreachable probe target: http://localhost:5173/assets'
+  evidence:
+    rule_id: 7-2-directory-listing
+    url: http://host.docker.internal:5173/assets
+    base_url: http://localhost:5173
+    error: '[Errno 101] Network is unreachable'
+- severity: info
+  message: '[7-2] Unreachable probe target: http://localhost:8081/Catalina/'
+  evidence:
+    rule_id: 7-2-directory-listing
+    url: http://host.docker.internal:8081/Catalina/
+    base_url: http://localhost:8081
+    error: '[Errno 101] Network is unreachable'
+- severity: info
+  message: '[7-2] Unreachable probe target: http://localhost:8081/contents'
+  evidence:
+    rule_id: 7-2-directory-listing
+    url: http://host.docker.internal:8081/contents
+    base_url: http://localhost:8081
+    error: '[Errno 101] Network is unreachable'
+- severity: info
+  message: '[7-2] Unreachable probe target: http://localhost:8081/tmp/'
+  evidence:
+    rule_id: 7-2-directory-listing
+    url: http://host.docker.internal:8081/tmp/
+    base_url: http://localhost:8081
+    error: '[Errno 101] Network is unreachable'
+- severity: info
+  message: '[7-2] Unreachable probe target: http://localhost:8081/trace'
+  evidence:
+    rule_id: 7-2-directory-listing
+    url: http://host.docker.internal:8081/trace
+    base_url: http://localhost:8081
+    error: '[Errno 101] Network is unreachable'
+- severity: info
+  message: '[7-2] Unreachable probe target: http://localhost:8081/tracer/'
+  evidence:
+    rule_id: 7-2-directory-listing
+    url: http://host.docker.internal:8081/tracer/
+    base_url: http://localhost:8081
+    error: '[Errno 101] Network is unreachable'
+- severity: medium
+  message: '[7-2] Directory listing (nginx_autoindex): `http://localhost:5173/assets/`
+    — directory_listing_multiple'
+  evidence:
+    rule_id: 7-2-directory-listing
+    source: httpx
+    engine: httpx
+    base_url: http://localhost:5173
+    url: http://host.docker.internal:5173/assets/
+    label: http://localhost:5173/assets/
+    probe_source: wordlist
+    url_variant: trailing_slash
+    http_status: 200
+    content_type: text/html
+    reason: directory_listing_multiple
+    listing_type: nginx_autoindex
+    matched_patterns:
+    - apache_index
+    - nginx_autoindex_title
+    file_link_count: 10
+    remediation: 'nginx: set autoindex off; in server/location block'
+    body_preview: "<html>\r <head><title>Index of /assets/</title></head>\r <body>\r\
+      \ <h1>Index of /assets/</h1><hr><pre><a href=\"../\">../</a>\r <a href=\"401-6RYfZl1O.png\"\
+      >401-6RYfZl1O.png</a>                                   28-Jun-2026 01:18  \
+      \           1037181\r <a href=\"403-ByeqCQos.png\">403-ByeqCQos.png</a>    \
+      \                               28-Jun-2026 01:18             1054583\r <a href=\"\
+      404-B79HPghY.png\">404-B79HPghY.png</a>                                   28-Jun-2026\
+      \ 01:18             1114103\r <a href=\"500-UmQ"
+    affected_urls:
+    - http://host.docker.internal:5173/assets/
+    affected_count: 1
+- severity: medium
+  message: '[7-2] Directory listing (zap_passive_directory_browsing): `http://host.docker.internal:5173/assets/`
+    — Directory Browsing'
+  evidence:
+    rule_id: 7-2-directory-listing
+    listing_type: zap_passive_directory_browsing
+    source: zap
+    engine: zap
+    reason: Directory Browsing
+    plugin_id: '10033'
+    url: http://host.docker.internal:5173/assets/
+    label: http://host.docker.internal:5173/assets/
+    base_url: http://localhost:5173
+    param: ''
+    risk: Medium
+    evidence: <title>Index of /assets/</title>
+    trigger: zap_rule_10033
+    trigger_label: ZAP Rule 10033 (Directory Browsing, passive)
+    affected_urls:
+    - http://host.docker.internal:5173/assets/
+    affected_count: 1
+message: 'Directory listing: 2 unique issue(s) from 4440 probe(s) (full)'
+checked_at: '2026-07-01T11:16:38.950804+00:00'

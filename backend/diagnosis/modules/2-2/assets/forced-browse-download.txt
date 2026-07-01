@@ -1,0 +1,144 @@
+# Forced browse — Guideline 2-2 (GET base_url + path, full wordlist always)
+# Generic download / export endpoints
+download.jsp
+download.do
+filedownload.cmd
+fileDownload
+fileDownload.do
+download
+download.php
+download.aspx
+export
+export.csv
+export.xlsx
+report.pdf
+upload
+uploads
+files
+file
+attachment
+getfile
+readfile
+# Archives & backups
+backup.zip
+backup.tar
+backup.tar.gz
+backup.rar
+backup.7z
+backup.sql
+backup.sql.gz
+dump.sql
+database.sql
+db.sql
+site.zip
+www.zip
+html.zip
+public.zip
+# Env & config
+.env
+.env.local
+.env.production
+.env.development
+.env.backup
+.env.old
+.env.bak
+web.config
+web.config.bak
+application.properties
+application.yml
+application.yaml
+application-prod.yml
+application-dev.yml
+config.json
+config.yml
+config.yaml
+settings.py
+settings.json
+secrets.json
+credentials.json
+# Apache / nginx / IIS
+.htaccess
+.htpasswd
+nginx.conf
+httpd.conf
+# Git & VCS
+.git/config
+.git/HEAD
+.gitignore
+.svn/entries
+.hg/hgrc
+# Java / Spring
+WEB-INF/web.xml
+META-INF/MANIFEST.MF
+actuator
+actuator/env
+actuator/heapdump
+actuator/mappings
+actuator/configprops
+actuator/health
+jolokia
+# PHP / CMS common
+wp-config.php
+wp-config.php.bak
+configuration.php
+config.php
+phpinfo.php
+info.php
+# API docs (often leak schema)
+swagger-ui
+swagger-ui.html
+swagger.json
+openapi.json
+api-docs
+v2/api-docs
+v3/api-docs
+graphql
+graphiql
+# Cloud / k8s / docker
+docker-compose.yml
+docker-compose.yaml
+.kube/config
+aws/credentials
+# SSH / keys
+id_rsa
+id_rsa.pub
+id_dsa
+.ssh/id_rsa
+authorized_keys
+# Logs
+error.log
+access.log
+debug.log
+laravel.log
+storage/logs/laravel.log
+var/log/apache2/access.log
+var/log/nginx/access.log
+# OS paths (direct exposure via misconfigured static)
+etc/passwd
+etc/shadow
+proc/self/environ
+windows/win.ini
+windows/system32/drivers/etc/hosts
+# Sensitive filenames
+passwords.txt
+users.txt
+accounts.txt
+admin.zip
+db_backup.sql
+customer_data.csv
+payment.log
+# Tomcat / Java app server
+manager/html
+host-manager/html
+# Node
+package-lock.json
+.npmrc
+# Misc probes
+crossdomain.xml
+clientaccesspolicy.xml
+server-status
+server-info
+phpmyadmin
+adminer.php
+.DS_Store
+Thumbs.db

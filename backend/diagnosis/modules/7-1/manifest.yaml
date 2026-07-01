@@ -1,0 +1,6 @@
+id: "7-1"
+title: "Client Request Method"
+chapter: 7
+implemented: true
+engine: httpx+zap
+zap_optional: true

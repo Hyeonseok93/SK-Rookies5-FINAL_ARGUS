@@ -1,0 +1,6 @@
+id: "2-2"
+title: "중요 정보 파일 다운로드 가능성"
+chapter: 2
+implemented: true
+engine: httpx+zap
+mvp_version: 1

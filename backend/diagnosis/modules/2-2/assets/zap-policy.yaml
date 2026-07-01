@@ -1,0 +1,34 @@
+# v1 Active Scan policy — Download-Security-2-2
+# Used by diagnosis/modules/2-2 scanner (see zap-2-2-scan/plans/2-2-download-scan.yaml)
+
+parameters:
+  name: Download-Security-2-2
+
+policyDefinition:
+  defaultThreshold: Off
+  defaultStrength: Medium
+  rules:
+    - id: 6
+      name: Path Traversal
+      threshold: Medium
+      strength: High
+    - id: 0
+      name: Directory Browsing
+      threshold: Medium
+      strength: Medium
+    - id: 40035
+      name: Hidden File Finder
+      threshold: Medium
+      strength: Medium
+    - id: 40034
+      name: .env Information Leak
+      threshold: Medium
+      strength: Low
+    - id: 40032
+      name: .htaccess Information Leak
+      threshold: Medium
+      strength: Low
+    - id: 40008
+      name: Parameter Tampering
+      threshold: Medium
+      strength: Medium

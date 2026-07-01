@@ -1,0 +1,243 @@
+section_id: 4-1
+title: 쿠키(Cookie) 및 웹 스토리지(Web Storage) 조작 가능성
+chapter: 4
+status: fail
+implemented: true
+findings:
+- severity: info
+  message: 4-1 scan statistics
+  evidence:
+    stats:
+      probe_mode: full
+      sessions: 5
+      session_emails:
+      - admin@travel.com
+      - airluna@travel.com
+      - jiho@travel.com
+      - ondecar@travel.com
+      - yerin@travel.com
+      auth_source: verify_cache
+      auth_profiles:
+      - bearer
+      - cookie_access
+      - cookie_refresh
+      - dual
+      - browser_full
+      login_matrix:
+        accounts: 5
+        login_entries: 2
+      cookie_attr:
+        entries: 2
+        from_cache: 2
+        live_login: 0
+        errors: 0
+        empty_cookies: 0
+        issues: 0
+        by_check_type: {}
+      endpoints_candidate: 80
+      auth_requirement:
+        auth_required: 55
+        public: 0
+        optional_auth: 51
+        unknown: 359
+      auth_filter:
+        input: 80
+        kept: 11
+        skipped: 69
+        counts:
+          auth_required: 11
+          public: 0
+          optional_auth: 19
+          unknown: 50
+          unindexed: 0
+        auth_required_only: true
+        skipped_sample:
+        - endpoint_id: http://localhost:5173:GET:/admin
+          reason: optional_auth
+          anonymous_status: '200'
+        - endpoint_id: http://localhost:5173:GET:/admin/login
+          reason: optional_auth
+          anonymous_status: '200'
+        - endpoint_id: http://localhost:5173:GET:/admin/settlement
+          reason: optional_auth
+          anonymous_status: '200'
+        - endpoint_id: http://localhost:5173:GET:/api/v1/admin/accommodations/pending
+          reason: unknown
+          anonymous_status: '401'
+        - endpoint_id: http://localhost:5173:GET:/api/v1/admin/accommodations/search
+          reason: unknown
+          anonymous_status: '401'
+        - endpoint_id: http://localhost:5173:GET:/api/v1/admin/approvals/pending
+          reason: unknown
+          anonymous_status: '401'
+        - endpoint_id: http://localhost:5173:GET:/api/v1/admin/bookings/flights/{scheduleId}/export
+          reason: unknown
+          anonymous_status: '401'
+        - endpoint_id: http://localhost:5173:GET:/api/v1/admin/dashboard/charts
+          reason: unknown
+          anonymous_status: '401'
+        - endpoint_id: http://localhost:5173:GET:/api/v1/admin/dashboard/operational
+          reason: unknown
+          anonymous_status: '401'
+        - endpoint_id: http://localhost:5173:GET:/api/v1/admin/dashboard/summary
+          reason: unknown
+          anonymous_status: '401'
+        - endpoint_id: http://localhost:5173:GET:/api/v1/admin/members
+          reason: unknown
+          anonymous_status: '401'
+        - endpoint_id: http://localhost:5173:GET:/api/v1/admin/posts
+          reason: unknown
+          anonymous_status: '401'
+      endpoints: 11
+      cross_cookie:
+        endpoints: 11
+        sessions: 5
+        auth_profiles:
+        - bearer
+        - cookie_access
+        - cookie_refresh
+        - dual
+        - browser_full
+        pairs: 496
+        probed: 1276
+        cross_status_both_ok: 480
+        cross_same_body: 0
+        cross_body_mismatch: 432
+        cross_generic_excluded: 48
+        by_profile:
+          bearer:
+            cross_same_body: 0
+          cookie_access:
+            cross_same_body: 0
+          cookie_refresh:
+            cross_same_body: 0
+          dual:
+            cross_same_body: 0
+          browser_full:
+            cross_same_body: 0
+        errors: 0
+      tamper:
+        endpoints: 1
+        sessions: 5
+        auth_profiles:
+        - bearer
+        - cookie_access
+        - cookie_refresh
+        - dual
+        - browser_full
+        probed: 105
+        tamper_accepted: 1
+        tamper_combo_ok_isolated_rejected: 29
+        tamper_frontend_only_skipped: 0
+        by_profile:
+          bearer:
+            tamper_accepted: 1
+          cookie_access:
+            tamper_accepted: 0
+          cookie_refresh:
+            tamper_accepted: 0
+          dual:
+            tamper_accepted: 0
+          browser_full:
+            tamper_accepted: 0
+        errors: 0
+      findings: 3
+      by_severity:
+        high: 1
+        medium: 0
+        info: 2
+- severity: info
+  message: Login entry × account matrix (5 account(s)) from verify report
+  evidence:
+    rule_id: 4-1-login-matrix
+    trigger: login_entry_report
+    engine: inventory
+    accounts:
+    - email: yerin@travel.com
+      successful_login_urls:
+      - http://host.docker.internal:8080/api/v1/auth/login
+      entry_specific: true
+      exclusive_login_url: http://host.docker.internal:8080/api/v1/auth/login
+    - email: ondecar@travel.com
+      successful_login_urls:
+      - http://host.docker.internal:8080/api/v1/auth/login
+      entry_specific: true
+      exclusive_login_url: http://host.docker.internal:8080/api/v1/auth/login
+    - email: admin@travel.com
+      successful_login_urls:
+      - http://host.docker.internal:8080/api/v1/auth/admin/login
+      entry_specific: true
+      exclusive_login_url: http://host.docker.internal:8080/api/v1/auth/admin/login
+    - email: jiho@travel.com
+      successful_login_urls:
+      - http://host.docker.internal:8080/api/v1/auth/login
+      entry_specific: true
+      exclusive_login_url: http://host.docker.internal:8080/api/v1/auth/login
+    - email: airluna@travel.com
+      successful_login_urls:
+      - http://host.docker.internal:8080/api/v1/auth/login
+      entry_specific: true
+      exclusive_login_url: http://host.docker.internal:8080/api/v1/auth/login
+    login_entries:
+    - url: http://host.docker.internal:8080/api/v1/auth/admin/login
+      label: host.docker.internal:8080·login
+      base_url: http://localhost:8080
+      source: inventory
+      kind: api
+      method: POST
+      path: /api/v1/auth/admin/login
+    - url: http://host.docker.internal:8080/api/v1/auth/login
+      label: host.docker.internal:8080·login
+      base_url: http://localhost:8080
+      source: inventory
+      kind: api
+      method: POST
+      path: /api/v1/auth/login
+    entry_specific_accounts:
+    - yerin@travel.com
+    - ondecar@travel.com
+    - admin@travel.com
+    - jiho@travel.com
+    - airluna@travel.com
+    related_sections:
+    - 4-1
+- severity: info
+  message: 'Endpoint auth requirement index (465 from verify): auth_required 55, public
+    0, optional 51'
+  evidence:
+    rule_id: 4-1-auth-requirement-index
+    trigger: verify_report
+    engine: inventory
+    summary:
+      auth_required: 55
+      public: 0
+      optional_auth: 51
+      unknown: 359
+    cookie_probe_relevant: 55
+    related_sections:
+    - 4-1
+- severity: high
+  message: 'Tampered auth accepted [bearer] (empty_bearer): GET /api/v1/admin/members
+    (HTTP 200, owner HTTP 200)'
+  evidence:
+    rule_id: 4-1-cookie-tamper
+    trigger: empty_bearer
+    auth_profile: bearer
+    tamper_confirmed_isolated: false
+    isolated_profile: null
+    confirm_http_status: null
+    engine: httpx
+    endpoint_id: http://localhost:8080:GET:/api/v1/admin/members
+    method: GET
+    path: /api/v1/admin/members
+    base_url: http://localhost:8080
+    url: http://host.docker.internal:8080/api/v1/admin/members?pageable=1
+    account_email: admin@travel.com
+    login_url: http://host.docker.internal:8080/api/v1/auth/admin/login
+    login_label: login
+    owner_http_status: 200
+    tamper_http_status: 200
+    related_sections:
+    - 4-1
+message: '4-1 cookie: 1 high, 0 medium finding(s)'
+checked_at: '2026-07-01T11:21:59.444724+00:00'

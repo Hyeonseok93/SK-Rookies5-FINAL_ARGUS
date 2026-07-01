@@ -1,0 +1,179 @@
+{
+  "finding_id": "2-2-e5d51bde70",
+  "section_id": "2-2",
+  "rule_id": "2-2-unauth-download",
+  "replay": {
+    "version": 1,
+    "finding_id": "2-2-e5d51bde70",
+    "replayable": true,
+    "rule_id": "2-2-unauth-download",
+    "env": {
+      "public_base_url": "http://localhost:5173",
+      "section_id": "2-2"
+    },
+    "auth": {
+      "login_url": "http://host.docker.internal:8080/api/v1/auth/admin/login",
+      "account_email": "yerin@travel.com",
+      "delivery": "cookie",
+      "cookie_name": "accessToken",
+      "id_field": "email",
+      "pw_field": "password"
+    },
+    "artifacts_dir": "2-2-e5d51bde70",
+    "steps": [
+      {
+        "id": "s01_auth_anonymous",
+        "action": "set_auth",
+        "label": "Auth: anonymous",
+        "auth": "anonymous"
+      },
+      {
+        "id": "u02_navigate",
+        "action": "navigate",
+        "label": "메인 페이지",
+        "capture": [
+          "screenshot"
+        ],
+        "url": "http://localhost:5173/"
+      },
+      {
+        "id": "u03_navigate",
+        "action": "navigate",
+        "label": "마이페이지",
+        "capture": [
+          "screenshot"
+        ],
+        "url": "http://localhost:5173/mypage"
+      },
+      {
+        "id": "u04_scroll",
+        "action": "scroll",
+        "label": "정산서 발급 위젯",
+        "capture": [
+          "screenshot"
+        ],
+        "selector": "#reportTemplate"
+      },
+      {
+        "id": "u05_click",
+        "action": "click",
+        "label": "통합 정산서 PDF 다운로드 버튼",
+        "capture": [
+          "screenshot"
+        ],
+        "selector": "button:has-text('통합 정산서 PDF 다운로드')"
+      },
+      {
+        "id": "s02_anon",
+        "action": "http",
+        "label": "Anonymous download probe",
+        "auth": "anonymous",
+        "request": {
+          "method": "POST",
+          "url": "http://localhost:8080/api/v1/report/integrated",
+          "headers": {
+            "Accept": "application/json, text/plain, */*",
+            "User-Agent": "ARGUS-Probe/1.0",
+            "Content-Type": "application/json"
+          },
+          "body": "{\"memberId\": 1, \"template\": \"verification\", \"logoUrl\": \"https://onde.click/assets/logo.png\"}"
+        },
+        "expect": {
+          "status": 200,
+          "sha256": "95c40340ddcaae30bae87379f7148d5741465dbe44c1291492a590224df22d1f",
+          "min_size": 465792
+        },
+        "capture": [
+          "response_file",
+          "evidence_screenshot"
+        ],
+        "artifact_refs": {
+          "response_file": "s02_anon_response.pdf"
+        }
+      },
+      {
+        "id": "s03_auth_authenticated",
+        "action": "set_auth",
+        "label": "Auth: authenticated",
+        "auth": "authenticated",
+        "account_email": "yerin@travel.com"
+      },
+      {
+        "id": "u08_navigate",
+        "action": "navigate",
+        "label": "메인 페이지",
+        "capture": [
+          "screenshot"
+        ],
+        "url": "http://localhost:5173/"
+      },
+      {
+        "id": "u09_navigate",
+        "action": "navigate",
+        "label": "마이페이지",
+        "capture": [
+          "screenshot"
+        ],
+        "url": "http://localhost:5173/mypage"
+      },
+      {
+        "id": "u10_scroll",
+        "action": "scroll",
+        "label": "정산서 발급 위젯",
+        "capture": [
+          "screenshot"
+        ],
+        "selector": "#reportTemplate"
+      },
+      {
+        "id": "u11_click",
+        "action": "click",
+        "label": "통합 정산서 PDF 다운로드 버튼",
+        "capture": [
+          "screenshot"
+        ],
+        "selector": "button:has-text('통합 정산서 PDF 다운로드')"
+      },
+      {
+        "id": "s04_auth",
+        "action": "http",
+        "label": "Authenticated probe (yerin@travel.com)",
+        "auth": "authenticated",
+        "account_email": "yerin@travel.com",
+        "request": {
+          "method": "POST",
+          "url": "http://localhost:8080/api/v1/report/integrated",
+          "headers": {
+            "Accept": "application/json, text/plain, */*",
+            "User-Agent": "ARGUS-Probe/1.0",
+            "Cookie": "accessToken=eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJ5ZXJpbkB0cmF2ZWwuY29tIiwicm9sZSI6IlJPTEVfVVNFUiIsImlhdCI6MTc4MjkwNDI2MywiZXhwIjoxNzgyOTA2MDYzfQ.4rpBkJ-WYeKxdQBzmhPc5RxTN-F-6zvDzgb1f3EUFeAz3L3k347fzWfGuPWHBHLVBJT0cDm7PP6lpfcXCH1PLw",
+            "Content-Type": "application/json"
+          },
+          "body": "{\"memberId\": 1, \"template\": \"verification\", \"logoUrl\": \"https://onde.click/assets/logo.png\"}"
+        },
+        "expect": {
+          "status": 200,
+          "sha256": "26fcd61492598729f115b5dc2c37283d8ff153b4a2ae2a54f1c5f6c1b6a2b65e",
+          "min_size": 465792
+        },
+        "capture": [
+          "response_file",
+          "evidence_screenshot"
+        ],
+        "artifact_refs": {
+          "response_file": "s04_auth_response.pdf"
+        }
+      },
+      {
+        "id": "s05_compare",
+        "action": "compare",
+        "label": "Anonymous vs authenticated download",
+        "capture": [
+          "evidence_screenshot"
+        ],
+        "left": "s02_anon",
+        "right": "s04_auth"
+      }
+    ]
+  }
+}

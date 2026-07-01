@@ -1,0 +1,5 @@
+id: "5-2"
+title: "요청 및 응답 값 내 주요정보 포함여부 확인"
+chapter: 5
+implemented: true
+engine: httpx

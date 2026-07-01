@@ -1,0 +1,29 @@
+# Onde URL List — frontend SPA routes (Onde_Frontend verified)
+# Format: /path   or   /path | param, param  (parser supports optional query)
+#
+# Onde does NOT read location.search on any route (no useSearchParams).
+# Search state → React state / Zustand → backend API (see onde-api-list.params.txt).
+# OAuth tokens arrive via HttpOnly cookies, not URL query.
+#
+# GET assumed. Uses frontend_base_url from ARGUS config (http://localhost:5173).
+
+/
+/flight
+/car
+/insurance
+/map
+/feed
+/mypage
+/payment
+/payment/callback
+/seller
+/oauth2/redirect
+/signup/email
+/admin/login
+/admin
+/admin/settlement
+/401
+/403
+/404
+/500
+/503

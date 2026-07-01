@@ -1,0 +1,190 @@
+section_id: 3-6
+title: 백업 파일 및 테스트 파일 존재 여부
+chapter: 3
+status: pass
+implemented: true
+findings:
+- severity: info
+  message: 3-6 scan statistics
+  evidence:
+    stats:
+      probe_mode: full
+      sample_size: 20
+      base_urls: 3
+      wordlist_files:
+      - backup-test-files.txt
+      - forced-browse-download.txt
+      wordlist_total: 106
+      inventory_endpoints: 465
+      inventory_paths_added: 0
+      inventory_fallback: false
+      targets: 318
+      auth_mode: anonymous
+      probed: 318
+      unreachable: 0
+      issues: 0
+      by_severity:
+        high: 0
+        medium: 0
+        low: 0
+        info: 0
+      auth_configured: true
+      auth_sessions: 5
+      anonymous:
+        auth_mode: anonymous
+        targets: 318
+        probed: 318
+        unreachable: 0
+        issues: 0
+        by_severity:
+          high: 0
+          medium: 0
+          low: 0
+          info: 0
+      authenticated_sessions:
+      - email: yerin@travel.com
+        login_label: login
+        login_url: http://host.docker.internal:8080/api/v1/auth/login
+        auth_mode: authenticated:yerin@travel.com:login
+        targets: 318
+        probed: 318
+        unreachable: 0
+        issues: 0
+        by_severity:
+          high: 0
+          medium: 0
+          low: 0
+          info: 0
+      - email: ondecar@travel.com
+        login_label: login
+        login_url: http://host.docker.internal:8080/api/v1/auth/login
+        auth_mode: authenticated:ondecar@travel.com:login
+        targets: 318
+        probed: 318
+        unreachable: 0
+        issues: 0
+        by_severity:
+          high: 0
+          medium: 0
+          low: 0
+          info: 0
+      - email: admin@travel.com
+        login_label: login
+        login_url: http://host.docker.internal:8080/api/v1/auth/admin/login
+        auth_mode: authenticated:admin@travel.com:login
+        targets: 318
+        probed: 318
+        unreachable: 0
+        issues: 0
+        by_severity:
+          high: 0
+          medium: 0
+          low: 0
+          info: 0
+      - email: jiho@travel.com
+        login_label: login
+        login_url: http://host.docker.internal:8080/api/v1/auth/login
+        auth_mode: authenticated:jiho@travel.com:login
+        targets: 318
+        probed: 318
+        unreachable: 0
+        issues: 0
+        by_severity:
+          high: 0
+          medium: 0
+          low: 0
+          info: 0
+      - email: airluna@travel.com
+        login_label: login
+        login_url: http://host.docker.internal:8080/api/v1/auth/login
+        auth_mode: authenticated:airluna@travel.com:login
+        targets: 318
+        probed: 318
+        unreachable: 6
+        issues: 0
+        by_severity:
+          high: 0
+          medium: 0
+          low: 0
+          info: 0
+      authenticated:
+        sessions: 5
+        probed: 318
+        issues: 0
+      httpx:
+        probed: 318
+        issues: 0
+        passes: 6
+      raw_issues: 0
+      collapsed_issues: 0
+      httpx_findings: 6
+- severity: info
+  message: '[3-6][authenticated:airluna@travel.com:login] Unreachable probe target:
+    http://localhost:8080/application.properties'
+  evidence:
+    rule_id: 3-6-backup-test-file
+    engine: httpx
+    auth_mode: authenticated:airluna@travel.com:login
+    url: http://host.docker.internal:8080/application.properties
+    base_url: http://localhost:8080
+    path: /application.properties
+    error: '[Errno 101] Network is unreachable'
+- severity: info
+  message: '[3-6][authenticated:airluna@travel.com:login] Unreachable probe target:
+    http://localhost:8080/backup.7z'
+  evidence:
+    rule_id: 3-6-backup-test-file
+    engine: httpx
+    auth_mode: authenticated:airluna@travel.com:login
+    url: http://host.docker.internal:8080/backup.7z
+    base_url: http://localhost:8080
+    path: /backup.7z
+    error: '[Errno 101] Network is unreachable'
+- severity: info
+  message: '[3-6][authenticated:airluna@travel.com:login] Unreachable probe target:
+    http://localhost:8080/backup.bak'
+  evidence:
+    rule_id: 3-6-backup-test-file
+    engine: httpx
+    auth_mode: authenticated:airluna@travel.com:login
+    url: http://host.docker.internal:8080/backup.bak
+    base_url: http://localhost:8080
+    path: /backup.bak
+    error: '[Errno 101] Network is unreachable'
+- severity: info
+  message: '[3-6][authenticated:airluna@travel.com:login] Unreachable probe target:
+    http://localhost:8080/backup.tar'
+  evidence:
+    rule_id: 3-6-backup-test-file
+    engine: httpx
+    auth_mode: authenticated:airluna@travel.com:login
+    url: http://host.docker.internal:8080/backup.tar
+    base_url: http://localhost:8080
+    path: /backup.tar
+    error: '[Errno 101] Network is unreachable'
+- severity: info
+  message: '[3-6][authenticated:airluna@travel.com:login] Unreachable probe target:
+    http://localhost:8080/config.json'
+  evidence:
+    rule_id: 3-6-backup-test-file
+    engine: httpx
+    auth_mode: authenticated:airluna@travel.com:login
+    url: http://host.docker.internal:8080/config.json
+    base_url: http://localhost:8080
+    path: /config.json
+    error: '[Errno 101] Network is unreachable'
+- severity: info
+  message: '[3-6][authenticated:airluna@travel.com:login] Unreachable probe target:
+    http://localhost:8080/config.yml'
+  evidence:
+    rule_id: 3-6-backup-test-file
+    engine: httpx
+    auth_mode: authenticated:airluna@travel.com:login
+    url: http://host.docker.internal:8080/config.yml
+    base_url: http://localhost:8080
+    path: /config.yml
+    error: '[Errno 101] Network is unreachable'
+message: No exposed backup/test files on 318 probe(s) (full) — auth passes (yerin@travel.com
+  · login, ondecar@travel.com · login, admin@travel.com · login, jiho@travel.com ·
+  login, airluna@travel.com · login)
+checked_at: '2026-07-01T11:21:29.645433+00:00'

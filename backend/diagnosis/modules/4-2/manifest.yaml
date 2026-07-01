@@ -1,0 +1,5 @@
+id: "4-2"
+title: "인증(세션 및 토큰) 값 안전성 설정 여부"
+chapter: 4
+implemented: true
+engine: httpx

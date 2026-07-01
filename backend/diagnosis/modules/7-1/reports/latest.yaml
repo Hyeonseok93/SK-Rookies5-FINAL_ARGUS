@@ -1,0 +1,56 @@
+section_id: 7-1
+title: Client Request Method
+chapter: 7
+status: pass
+implemented: true
+findings:
+- severity: info
+  message: 7-1 scan statistics
+  evidence:
+    stats:
+      targets: 408
+      probed: 408
+      unreachable: 0
+      issues: 0
+      strict_risky: true
+      by_severity:
+        high: 0
+        medium: 0
+        low: 0
+        info: 0
+      trace_probes: 408
+      options_probes: 408
+      probe_mode: full
+      sample_size: 20
+      base_urls: 3
+      inventory_endpoints: 465
+      inventory_matched: 465
+      inventory_fallback: false
+      inventory_selected: 405
+      httpx:
+        probed: 408
+        issues: 0
+      zap:
+        zap_proxy: http://zap:8090
+        mode: active_90028
+        workspace_reset_before:
+          session_name: argus-g71-start
+          alerts_cleared: true
+          new_session: true
+          gc: true
+        seeded: 200
+        seed_cap: 200
+        seed_candidates: 200
+        priority_seeded: 0
+        passive_remaining: 0
+        active_scans: 3
+        alerts: 0
+        workspace_reset_after:
+          session_name: argus-g71-done
+          alerts_cleared: true
+          new_session: true
+          gc: true
+      raw_issues: 0
+      collapsed_issues: 0
+message: No insecure HTTP methods on 408 probe(s) (full)
+checked_at: '2026-07-01T11:16:59.010418+00:00'

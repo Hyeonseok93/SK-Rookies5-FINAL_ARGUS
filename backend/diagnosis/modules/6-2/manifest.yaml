@@ -1,0 +1,5 @@
+id: "6-2"
+title: "일괄적인 오류 처리 페이지 존재 여부"
+chapter: 6
+implemented: true
+engine: httpx+zap

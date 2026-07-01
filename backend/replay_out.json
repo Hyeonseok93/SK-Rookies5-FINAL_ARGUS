@@ -1,0 +1,97 @@
+﻿[
+  {
+    "finding_id": "2-2-9b7ecce719",
+    "ok": false,
+    "output_dir": "C:\\Users\\hyunm\\WorkStation\\Zap\\ARGUS_1\\backend\\diagnosis\\modules\\2-2\\reports\\evidence\\2-2-9b7ecce719\\replay",
+    "message": "replay completed with verification failures",
+    "steps": [
+      {
+        "step_id": "s01_auth_anonymous",
+        "action": "set_auth",
+        "ok": true,
+        "message": "",
+        "artifacts": {}
+      },
+      {
+        "step_id": "s02_anon",
+        "action": "http",
+        "ok": false,
+        "message": "sha256 mismatch (got d377f65f36f877fa…)",
+        "artifacts": {
+          "response_file": "s02_anon_response.pdf",
+          "panel_html": "s02_anon_panel.html"
+        }
+      },
+      {
+        "step_id": "s03_auth_authenticated",
+        "action": "set_auth",
+        "ok": true,
+        "message": "",
+        "artifacts": {}
+      },
+      {
+        "step_id": "s04_auth",
+        "action": "http",
+        "ok": false,
+        "message": "sha256 mismatch (got be6bf453a6f46e0c…)",
+        "artifacts": {
+          "response_file": "s04_auth_response.pdf",
+          "panel_html": "s04_auth_panel.html"
+        }
+      },
+      {
+        "step_id": "s05_compare",
+        "action": "compare",
+        "ok": true,
+        "message": "",
+        "artifacts": {
+          "panel_html": "s05_compare_panel.html"
+        }
+      }
+    ]
+  },
+  {
+    "finding_id": "2-2-eaa4ecba49",
+    "ok": false,
+    "output_dir": "C:\\Users\\hyunm\\WorkStation\\Zap\\ARGUS_1\\backend\\diagnosis\\modules\\2-2\\reports\\evidence\\2-2-eaa4ecba49\\replay",
+    "message": "replay completed with verification failures",
+    "steps": [
+      {
+        "step_id": "s01_auth_authenticated",
+        "action": "set_auth",
+        "ok": true,
+        "message": "",
+        "artifacts": {}
+      },
+      {
+        "step_id": "s02_baseline",
+        "action": "http",
+        "ok": false,
+        "message": "sha256 mismatch (got 509cc38fa6a7f1a7…)",
+        "artifacts": {
+          "response_file": "s02_baseline_response.pdf",
+          "panel_html": "s02_baseline_panel.html"
+        }
+      },
+      {
+        "step_id": "s03_payload",
+        "action": "http",
+        "ok": false,
+        "message": "sha256 mismatch (got 565710771835afed…)",
+        "artifacts": {
+          "response_file": "s03_payload_response.pdf",
+          "panel_html": "s03_payload_panel.html"
+        }
+      },
+      {
+        "step_id": "s04_compare",
+        "action": "compare",
+        "ok": true,
+        "message": "",
+        "artifacts": {
+          "panel_html": "s04_compare_panel.html"
+        }
+      }
+    ]
+  }
+]

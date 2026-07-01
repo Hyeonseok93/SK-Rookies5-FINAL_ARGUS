@@ -1,0 +1,6 @@
+id: "7-3"
+title: "서버 헤더정보 노출"
+chapter: 7
+implemented: true
+engine: httpx+zap
+zap_optional: true

@@ -1,0 +1,5 @@
+id: "3-2"
+title: "인증 실패 횟수 제한"
+chapter: 3
+implemented: true
+engine: httpx
