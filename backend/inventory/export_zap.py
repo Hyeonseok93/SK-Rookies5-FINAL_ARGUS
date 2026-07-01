@@ -90,14 +90,26 @@ def export_requestor_seeds(tree: ApiTree) -> list[dict[str, Any]]:
     return seeds
 
 
-def export_zap_bundle(tree: ApiTree, openapi_path: Path | None = None) -> dict[str, Any]:
+def export_zap_bundle(
+    tree: ApiTree,
+    openapi_path: Path | None = None,
+    *,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
     imports: list[dict[str, Any]] = []
     if openapi_path and openapi_path.is_file():
+        from inventory.upload_batch import openapi_ref_for_bundle
+
+        ref = (
+            openapi_ref_for_bundle(openapi_path, data_dir)
+            if data_dir is not None
+            else str(openapi_path.resolve()).replace("\\", "/")
+        )
         imports.append(
             {
                 "type": "openapi",
-                "file": str(openapi_path.resolve()).replace("\\", "/"),
-                "note": "Use zap.openapi.import_file(file, target) per target base_url",
+                "file": ref,
+                "note": "Uploaded via Dashboard Build — data/uploads/{batch-id}/openapi.*",
             }
         )
 
@@ -114,9 +126,13 @@ def export_zap_bundle(tree: ApiTree, openapi_path: Path | None = None) -> dict[s
     }
 
 
-def write_zap_exports(tree: ApiTree, out_dir: Path, openapi_path: Path | None = None) -> None:
+def write_zap_exports(
+    tree: ApiTree,
+    out_dir: Path,
+    openapi_path: Path | None = None,
+) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    bundle = export_zap_bundle(tree, openapi_path)
+    bundle = export_zap_bundle(tree, openapi_path, data_dir=out_dir)
     (out_dir / "zap-requestor-seeds.json").write_text(
         json.dumps(bundle["requestor_seeds"], indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",

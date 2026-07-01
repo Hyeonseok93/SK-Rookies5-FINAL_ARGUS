@@ -41,12 +41,24 @@ def test_find_openapi_spec_from_bundle(tmp_path: Path):
     spec.parent.mkdir(parents=True)
     spec.write_text('{"openapi":"3.0.0","paths":{}}', encoding="utf-8")
     bundle = {
-        "openapi_imports": [{"type": "openapi", "file": str(spec)}],
+        "openapi_imports": [{"type": "openapi", "file": "uploads/batch-1/openapi.json"}],
     }
     (data_dir / "zap-inventory-bundle.json").write_text(json.dumps(bundle), encoding="utf-8")
 
     found = find_openapi_spec(data_dir)
-    assert found == spec
+    assert found == spec.resolve()
+
+
+def test_find_openapi_spec_resolves_absolute_bundle_path(tmp_path: Path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    spec = data_dir / "uploads" / "abc" / "openapi.yaml"
+    spec.parent.mkdir(parents=True)
+    spec.write_text("openapi: 3.0.0\npaths: {}", encoding="utf-8")
+    bundle = {"openapi_imports": [{"type": "openapi", "file": str(spec)}]}
+    (data_dir / "zap-inventory-bundle.json").write_text(json.dumps(bundle), encoding="utf-8")
+
+    assert find_openapi_spec(data_dir) == spec.resolve()
 
 
 def test_probe_url_rewrites_localhost_when_env(monkeypatch):

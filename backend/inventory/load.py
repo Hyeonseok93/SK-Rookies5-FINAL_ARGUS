@@ -38,20 +38,25 @@ def load_cached_tree(data_dir: Path, *, inventory: str = "ready") -> ApiTree | N
 
 
 def find_openapi_spec(data_dir: Path) -> Path | None:
-    """Latest uploaded OpenAPI spec from bundle metadata or uploads batch."""
+    """Latest uploaded OpenAPI spec from bundle metadata or newest uploads batch."""
+    from inventory.upload_batch import resolve_openapi_ref
+
     bundle_path = data_dir / "zap-inventory-bundle.json"
     if bundle_path.is_file():
         raw = json.loads(bundle_path.read_text(encoding="utf-8"))
         for item in raw.get("openapi_imports") or []:
-            p = Path(str(item.get("file", "")))
-            if p.is_file():
-                return p
+            found = resolve_openapi_ref(data_dir, str(item.get("file", "")))
+            if found is not None:
+                return found
+
     uploads = data_dir / "uploads"
-    if uploads.is_dir():
-        patterns = ("*/openapi.json", "*/openapi.yaml", "*/openapi.yml")
-        candidates: list[Path] = []
-        for pattern in patterns:
-            candidates.extend(uploads.glob(pattern))
-        if candidates:
-            return max(candidates, key=lambda p: p.stat().st_mtime)
+    if not uploads.is_dir():
+        return None
+
+    patterns = ("*/openapi.json", "*/openapi.yaml", "*/openapi.yml")
+    candidates: list[Path] = []
+    for pattern in patterns:
+        candidates.extend(uploads.glob(pattern))
+    if candidates:
+        return max(candidates, key=lambda p: p.stat().st_mtime).resolve()
     return None

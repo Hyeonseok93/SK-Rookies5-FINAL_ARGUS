@@ -47,6 +47,7 @@ from app.services.zap_util import ZapNotAvailableError
 from app.services import discover_progress
 from inventory.load import load_cached_tree
 from inventory.schema import ApiTree
+from inventory.upload_batch import ensure_batch_dir, write_batch_manifest
 from inventory.upload_retention import prune_upload_batches
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
@@ -368,17 +369,22 @@ async def build_attack_surface(
             message="Select at least one data source and upload a file.",
         )
 
-    batch_dir = UPLOAD_DIR / uuid.uuid4().hex
+    batch_id = uuid.uuid4().hex
+    batch_dir = ensure_batch_dir(UPLOAD_DIR, batch_id)
     url_list_path: Path | None = None
     api_list_path: Path | None = None
     openapi_path: Path | None = None
+    url_list_name: str | None = None
+    api_list_name: str | None = None
+    openapi_name: str | None = None
 
     if url_list_enabled:
         if not url_list_file or not url_list_file.filename:
             return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="URL List file required.")
         if not _ext_ok(url_list_file.filename, {".txt"}):
             return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="URL List: use .txt (one URL per line)")
-        url_list_path = batch_dir / "url-list.txt"
+        url_list_name = "url-list.txt"
+        url_list_path = batch_dir / url_list_name
         await _save_upload(url_list_file, url_list_path)
 
     if api_list_enabled:
@@ -386,7 +392,8 @@ async def build_attack_surface(
             return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="API List file required.")
         if not _ext_ok(api_list_file.filename, {".txt"}):
             return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="API List: use .txt (METHOD /path per line)")
-        api_list_path = batch_dir / "api-list.txt"
+        api_list_name = "api-list.txt"
+        api_list_path = batch_dir / api_list_name
         await _save_upload(api_list_file, api_list_path)
 
     if openapi_enabled:
@@ -394,8 +401,17 @@ async def build_attack_surface(
             return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Swagger file required.")
         if not _ext_ok(openapi_file.filename, {".json", ".yaml", ".yml"}):
             return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Swagger file: use .json or .yaml")
-        openapi_path = batch_dir / f"openapi{Path(openapi_file.filename).suffix.lower()}"
+        openapi_name = f"openapi{Path(openapi_file.filename).suffix.lower()}"
+        openapi_path = batch_dir / openapi_name
         await _save_upload(openapi_file, openapi_path)
+
+    write_batch_manifest(
+        batch_dir,
+        batch_id=batch_id,
+        url_list=url_list_name,
+        api_list=api_list_name,
+        openapi=openapi_name,
+    )
 
     cfg = load_config()
     saved_bases = resolved_base_url_strings()
@@ -432,6 +448,9 @@ async def build_attack_surface(
         )
 
     artifacts = persist_inventory(tree, DATA_DIR, openapi_path)
+    artifacts["upload_batch"] = f"uploads/{batch_id}"
+    if openapi_path is not None:
+        artifacts["openapi_upload"] = f"uploads/{batch_id}/{openapi_name}"
     prune_upload_batches(UPLOAD_DIR)
     stats = InventoryStats(**compute_stats(tree))
     return BuildInventoryResponse(

@@ -13,8 +13,8 @@ inventory:
     include_frontend_routes: true
     frontend_base_url: "http://localhost:5173"
   openapi:
-    enabled: true
-    path: "../../argus/swagger.json"
+    enabled: false
+    path: ""
     base_url: "http://localhost:8080"
   url_list:
     enabled: false

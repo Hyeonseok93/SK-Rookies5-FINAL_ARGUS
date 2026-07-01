@@ -54,11 +54,16 @@ def build_inventory_from_dict(
     if openapi:
         if saved_openapi_path and saved_openapi_path.is_file():
             oa_cfg = inv.get("openapi") or {}
+            spec_base = oa_cfg.get("base_url")
+            if not spec_base:
+                targets = cfg.get("targets") or []
+                if targets:
+                    spec_base = str(targets[0].get("base_url") or "").rstrip("/") or None
             trees.append(
                 load_openapi_inventory(
                     saved_openapi_path,
                     bases,
-                    spec_base_url=oa_cfg.get("base_url"),
+                    spec_base_url=spec_base,
                 )
             )
         else:
