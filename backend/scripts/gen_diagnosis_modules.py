@@ -39,9 +39,6 @@ def main() -> None:
         assets = module_dir / "assets"
         assets.mkdir(exist_ok=True)
         (assets / ".gitkeep").write_text("", encoding="utf-8")
-        reports = module_dir / "reports"
-        reports.mkdir(exist_ok=True)
-        (reports / ".gitkeep").write_text("", encoding="utf-8")
         print(f"created {section_id}")
     print(f"total {len(SECTIONS)}")
 

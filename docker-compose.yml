@@ -41,9 +41,9 @@ services:
     volumes:
       # Zap 워크스페이스 (MD, swagger.json) — 읽기 전용
       - ..:/workspace:ro
-      # 빌드 산출물 유지
+      # 빌드·진단 산출물 유지 (uploads, report, api-tree 등)
       - ./backend/data:/app/data
-      # 진단 모듈 코드 + reports/latest.yaml → 호스트와 동기화
+      # 진단 모듈 코드 → 호스트와 동기화
       - ./backend/diagnosis/modules:/app/diagnosis/modules
     extra_hosts:
       - "host.docker.internal:host-gateway"

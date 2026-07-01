@@ -9,6 +9,7 @@ from typing import Any
 
 from app.services.zap_util import ZapNotAvailableError
 from diagnosis.context import DiagnosisContext
+from diagnosis.paths import section_evidence_dir
 from diagnosis.replay.normalize import collect_probe_base_urls, filter_endpoints_by_probe_bases
 from diagnosis.probe_auth import all_account_auths
 from diagnosis.replay.recorder import ReplaySession
@@ -160,7 +161,7 @@ def run_g22_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     replay_session = ReplaySession(
         section_id="2-2",
-        artifacts_root=module_dir / "reports" / "evidence",
+        artifacts_root=section_evidence_dir(ctx.data_dir, "2-2"),
         raw_config=raw,
         account_auth=auth,
     )

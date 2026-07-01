@@ -11,7 +11,7 @@ from app.services.test_accounts_service import load_test_accounts
 from diagnosis.replay.runner import ReplayRunResult, run_replay_plan
 from diagnosis.replay.schema import ReplayPlan
 from diagnosis.context import DiagnosisContext
-from diagnosis.paths import resolve_report_path
+from diagnosis.paths import resolve_report_path, section_evidence_dir
 from diagnosis.registry import get_module
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -61,7 +61,7 @@ def run_section_replay(
     if mod is None:
         raise KeyError(f"Unknown section: {section_id}")
 
-    artifacts_root = mod.module_dir / "reports" / "evidence"
+    artifacts_root = section_evidence_dir(DATA_DIR, section_id)
     findings = list_replayable_findings(section_id)
     if finding_id:
         findings = [f for f in findings if f.get("finding_id") == finding_id]

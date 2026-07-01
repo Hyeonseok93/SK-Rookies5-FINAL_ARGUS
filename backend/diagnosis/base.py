@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 from diagnosis.context import DiagnosisContext
-from diagnosis.paths import diagnosis_report_dir, resolve_report_path
+from diagnosis.paths import resolve_report_path, section_report_path
 from diagnosis.result import SectionReport, utc_now_iso
 
 
@@ -44,7 +44,7 @@ class DiagnosisModule(ABC):
         """Execute diagnosis for this guideline section."""
 
     def save_report(self, ctx: DiagnosisContext, report: SectionReport) -> Path:
-        path = diagnosis_report_dir(ctx.data_dir, self.section_id) / "latest.yaml"
+        path = section_report_path(ctx.data_dir, self.section_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             yaml.safe_dump(report.to_dict(), allow_unicode=True, sort_keys=False),
