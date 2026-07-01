@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from app.services.zap_util import probe_url
+from inventory.load import load_api_tree
+from inventory.net import probe_base_url, probe_url
 from diagnosis.replay.normalize import collect_probe_base_urls as collect_base_urls, filter_endpoints_by_probe_bases
 from inventory.probe_build import build_probe_request
 from inventory.schema import ApiTree, Endpoint, build_full_url, split_path_query
@@ -67,16 +68,6 @@ SKIP_FUZZ_PARAM_NAMES = frozenset(
 )
 
 
-def load_api_tree(data_dir: Path | None) -> ApiTree | None:
-    if data_dir is None:
-        return None
-    for name in ("api-tree-verified.json", "api-tree-ready.json", "api-tree.json"):
-        path = data_dir / name
-        if path.is_file():
-            return ApiTree.load(path)
-    return None
-
-
 def resolve_sink_base(raw_config: dict[str, Any] | None) -> str:
     cfg = (raw_config or {}).get("diagnosis_1_5") or {}
     env = os.environ.get("ARGUS_REDIRECT_SINK_BASE", "").strip()
@@ -103,10 +94,6 @@ def resolve_cors_probe_origin(raw_config: dict[str, Any] | None, sink_base: str)
 
 def _probe_base_fn(url: str) -> str:
     return probe_url(url.rstrip("/"))
-
-
-def probe_base_url(url: str) -> str:
-    return _probe_base_fn(url)
 
 
 def should_fuzz_param(name: str, *, param_in: str) -> bool:

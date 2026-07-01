@@ -36,6 +36,8 @@ def get_modules() -> dict[str, DiagnosisModule]:
         module_dir = MODULES_DIR / section_id
         if not module_dir.is_dir():
             continue
+        if not (module_dir / "module.py").is_file():
+            continue
         registered[section_id] = _load_module_from_dir(module_dir)
     return registered
 

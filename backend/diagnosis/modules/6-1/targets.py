@@ -9,18 +9,10 @@ from typing import Any, Literal
 
 from diagnosis.replay.normalize import collect_probe_base_urls, filter_endpoints_by_probe_bases
 from inventory.schema import ApiTree, Endpoint
+from inventory.load import load_api_tree
 
 ProbeMode = Literal["sample", "full"]
 
-
-def load_api_tree(data_dir: Path | None) -> ApiTree | None:
-    if data_dir is None:
-        return None
-    for name in ("api-tree-verified.json", "api-tree-ready.json", "api-tree.json"):
-        path = data_dir / name
-        if path.is_file():
-            return ApiTree.load(path)
-    return None
 
 
 def _stable_sample_key(ep: Endpoint) -> int:

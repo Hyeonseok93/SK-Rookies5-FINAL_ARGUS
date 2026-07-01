@@ -4,17 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.zap_util import (
-    apply_auth_to_zap,
-    connect_zap,
-    ensure_zap_proxy,
-    probe_url,
-    reset_zap_workspace,
-    seed_probe_urls,
-    select_seed_urls,
-    wait_for_passive_scan,
-)
+from app.services.zap_util import probe_url
 from diagnosis.result import DiagnosisFinding
+from diagnosis.zap_passive import run_passive_zap_phase
 
 # 7-4 scope: missing/weak security headers and cookies (passive only).
 SECURITY_PLUGIN_IDS: frozenset[str] = frozenset(
@@ -140,45 +132,16 @@ def run_zap_phase(
     seed_cap: int = 200,
     priority_seed_urls: list[str] | None = None,
 ) -> tuple[list[DiagnosisFinding], dict[str, Any]]:
-    zap_cfg = raw_config.get("zap") or {}
-    scan_cfg = raw_config.get("diagnosis_7_4") or raw_config.get("scan_7_4") or {}
-    if scan_cfg.get("zap_enabled") is False:
-        return [], {"zap": "skipped"}
-
-    proxy = ensure_zap_proxy(zap_cfg)
-    api_key = str(zap_cfg.get("api_key") or "")
-    zap = connect_zap(proxy, api_key)
-    stats: dict[str, Any] = {"zap_proxy": proxy, "mode": "passive_only"}
-    findings: list[DiagnosisFinding] = []
-    passive_wait = max(30, min(max_minutes * 60, 600))
-    try:
-        stats["workspace_reset_before"] = reset_zap_workspace(zap, session_name="argus-g74-start")
-        apply_auth_to_zap(zap, auth)
-        configure_74_scanners(zap)
-
-        seed_urls = select_seed_urls(
-            probe_targets,
-            seed_cap,
-            priority_urls=priority_seed_urls,
-        )
-        seeded = seed_probe_urls(zap, seed_urls)
-        passive_remaining = wait_for_passive_scan(zap, max_seconds=passive_wait)
-        findings = collect_zap_security_findings(zap, base_urls)
-        stats.update(
-            {
-                "seeded": seeded,
-                "seed_cap": seed_cap,
-                "seed_candidates": len(seed_urls),
-                "priority_seeded": len(priority_seed_urls or []),
-                "passive_wait_seconds": passive_wait,
-                "passive_remaining": passive_remaining,
-                "alerts": len(findings),
-            }
-        )
-    finally:
-        try:
-            stats["workspace_reset_after"] = reset_zap_workspace(zap, session_name="argus-g74-done")
-        except Exception as exc:
-            stats["workspace_reset_after"] = {"error": str(exc)}
-
-    return findings, stats
+    return run_passive_zap_phase(
+        raw_config,
+        probe_targets,
+        base_urls,
+        auth,
+        scan_cfg_keys=("diagnosis_7_4", "scan_7_4"),
+        session_prefix="argus-g74",
+        configure_scanners=configure_74_scanners,
+        collect_findings=collect_zap_security_findings,
+        max_minutes=max_minutes,
+        seed_cap=seed_cap,
+        priority_seed_urls=priority_seed_urls,
+    )

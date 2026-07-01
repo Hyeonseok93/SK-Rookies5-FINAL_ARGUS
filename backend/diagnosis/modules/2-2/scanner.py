@@ -14,6 +14,7 @@ from diagnosis.probe_auth import all_account_auths
 from diagnosis.replay.recorder import ReplaySession
 from diagnosis.result import DiagnosisFinding
 from inventory.schema import ApiTree, Endpoint
+from inventory.load import load_api_tree
 
 _MODULE_DIR = Path(__file__).resolve().parent
 
@@ -60,13 +61,6 @@ class ScanResult:
     status: str = "completed"
     message: str = ""
 
-
-def load_api_tree(data_dir: Path) -> ApiTree | None:
-    for name in ("api-tree-verified.json", "api-tree-ready.json", "api-tree.json"):
-        path = data_dir / name
-        if path.is_file():
-            return ApiTree.load(path)
-    return None
 
 
 def _scan_options(raw: dict[str, Any]) -> ScanOptions:

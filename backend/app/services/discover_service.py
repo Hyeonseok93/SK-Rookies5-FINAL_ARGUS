@@ -35,6 +35,7 @@ from app.services.zap_util import (
 )
 from inventory.enrich_from_traffic import enrich_tree_from_built_probes, enrich_tree_from_observations
 from inventory.merge import merge_trees
+from inventory.load import find_openapi_spec
 from inventory.schema import ApiTree, Endpoint, InventoryMeta, build_full_url
 
 
@@ -43,21 +44,6 @@ def _load_raw_config(config_path: Path) -> dict[str, Any]:
         return {}
     return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
 
-
-def _find_openapi_path(data_dir: Path) -> Path | None:
-    bundle_path = data_dir / "zap-inventory-bundle.json"
-    if bundle_path.is_file():
-        raw = json.loads(bundle_path.read_text(encoding="utf-8"))
-        for item in raw.get("openapi_imports") or []:
-            p = Path(str(item.get("file", "")))
-            if p.is_file():
-                return p
-    uploads = data_dir / "uploads"
-    if uploads.is_dir():
-        candidates = sorted(uploads.glob("*/openapi.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if candidates:
-            return candidates[0]
-    return None
 
 
 def _frontend_base(bases: list[str]) -> str | None:
@@ -194,7 +180,7 @@ def discover_inventory_sync(
     # Step 2 — OpenAPI import per API base
     discover_progress.update(phase="openapi", message="Importing Swagger into ZAP…", step=2)
     discover_progress.persist(data_dir)
-    openapi_path = _find_openapi_path(data_dir)
+    openapi_path = find_openapi_spec(data_dir)
     if discover_cfg.get("openapi_import", True) and openapi_path:
         for base in api_bases:
             target = probe_url(base)

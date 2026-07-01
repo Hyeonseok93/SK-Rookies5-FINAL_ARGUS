@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from diagnosis.replay.normalize import collect_probe_base_urls, probe_base_key, probe_base_keys
 from app.services.zap_util import probe_url
 from inventory.schema import ApiTree, Endpoint, build_full_url
+from inventory.load import load_api_tree
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 
@@ -27,14 +28,6 @@ def _load_raw_config() -> dict[str, Any]:
         return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     return {}
 
-
-def load_api_tree(data_dir: Path | None = None) -> ApiTree | None:
-    root = data_dir or DATA_DIR
-    for name in ("api-tree-verified.json", "api-tree-ready.json", "api-tree.json"):
-        path = root / name
-        if path.is_file():
-            return ApiTree.load(path)
-    return None
 
 
 LOGIN_PATH_POSITIVE = re.compile(
@@ -143,7 +136,7 @@ def discover_login_entries(
     if raw_config is None:
         raw_config = _load_raw_config()
 
-    tree = load_api_tree(data_dir)
+    tree = load_api_tree(data_dir or DATA_DIR)
     if not tree or not tree.endpoints:
         return []
 

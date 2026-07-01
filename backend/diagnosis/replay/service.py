@@ -10,11 +10,16 @@ import yaml
 from app.services.test_accounts_service import load_test_accounts
 from diagnosis.replay.runner import ReplayRunResult, run_replay_plan
 from diagnosis.replay.schema import ReplayPlan
+from diagnosis.context import DiagnosisContext
+from diagnosis.paths import resolve_report_path
 from diagnosis.registry import get_module
+
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 
 def _report_path(section_id: str, module_dir: Path) -> Path:
-    return module_dir / "reports" / "latest.yaml"
+    ctx = DiagnosisContext(data_dir=DATA_DIR)
+    return resolve_report_path(ctx=ctx, section_id=section_id, module_dir=module_dir)
 
 
 def list_replayable_findings(section_id: str) -> list[dict[str, Any]]:

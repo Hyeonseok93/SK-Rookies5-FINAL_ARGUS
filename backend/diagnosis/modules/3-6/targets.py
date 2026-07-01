@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 from diagnosis.replay.normalize import collect_probe_base_urls, dedupe_probe_bases
 from inventory.schema import ApiTree, Endpoint, split_path_query
+from inventory.load import load_api_tree
+from inventory.net import probe_base_url
 
 ProbeMode = Literal["base_only", "sample", "full"]
 
@@ -25,27 +27,6 @@ _FILE_EXT_HINT = frozenset(
 _TEST_SEGMENTS = frozenset({"test", "demo", "debug", "staging", "dev", "tmp", "temp"})
 
 
-def load_api_tree(data_dir: Path | None) -> ApiTree | None:
-    if data_dir is None:
-        return None
-    for name in ("api-tree-verified.json", "api-tree-ready.json", "api-tree.json"):
-        path = data_dir / name
-        if path.is_file():
-            return ApiTree.load(path)
-    return None
-
-
-def probe_base_url(base_url: str) -> str:
-    parsed = urlparse(base_url.rstrip("/"))
-    host = (parsed.hostname or "").lower()
-    if host not in ("localhost", "127.0.0.1"):
-        return base_url.rstrip("/")
-    probe_host = os.environ.get("ARGUS_PROBE_HOST", "").strip()
-    if not probe_host:
-        return base_url.rstrip("/")
-    port = f":{parsed.port}" if parsed.port else ""
-    scheme = parsed.scheme or "http"
-    return f"{scheme}://{probe_host}{port}"
 
 
 def collect_base_urls(raw_config: dict[str, Any] | None) -> list[str]:

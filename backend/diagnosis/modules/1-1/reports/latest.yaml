@@ -1,8 +1,0 @@
-section_id: 1-1
-title: XSS / CSRF 공격 가능성
-chapter: 1
-status: pending
-implemented: true
-findings: []
-message: 모듈 껍데기 — 진단 로직 미구현
-checked_at: '2026-07-01T14:54:00.405018+00:00'

@@ -32,6 +32,11 @@ def _tree(*endpoints: Endpoint) -> ApiTree:
     return ApiTree(meta=InventoryMeta(app_name="test"), endpoints=list(endpoints))
 
 
+def test_targets_exports_collect_base_urls():
+    targets = _load_targets()
+    assert callable(getattr(targets, "collect_base_urls", None))
+
+
 def test_base_only_three_bases(monkeypatch):
     targets = _load_targets()
     _patch_dashboard(
@@ -54,7 +59,9 @@ def test_sample_limits_per_base(monkeypatch):
     eps.insert(0, Endpoint(method="GET", path="/", base_url="http://localhost:8080"))
     tree = _tree(*eps)
 
-    monkeypatch.setattr(targets, "load_api_tree", lambda _d: tree)
+    monkeypatch.setattr(
+        "diagnosis.probe_targets.load_api_tree", lambda _d: tree
+    )
     urls, meta = targets.build_probe_urls(
         {},
         data_dir=_DATA,
@@ -74,7 +81,7 @@ def test_full_uses_all_inventory_paths(monkeypatch):
         Endpoint(method="GET", path="/health", base_url="http://localhost:8080"),
         Endpoint(method="POST", path="/api/foo", base_url="http://localhost:8080"),
     ]
-    monkeypatch.setattr(targets, "load_api_tree", lambda _d: _tree(*eps))
+    monkeypatch.setattr("diagnosis.probe_targets.load_api_tree", lambda _d: _tree(*eps))
     urls, meta = targets.build_probe_urls({}, data_dir=_DATA, probe_mode="full")
     assert meta["inventory_selected"] == 2
     assert len(urls) == 3
@@ -83,7 +90,7 @@ def test_full_uses_all_inventory_paths(monkeypatch):
 def test_inventory_fallback_without_tree(monkeypatch):
     targets = _load_targets()
     _patch_dashboard(monkeypatch, ["http://localhost:8080"])
-    monkeypatch.setattr(targets, "load_api_tree", lambda _d: None)
+    monkeypatch.setattr("diagnosis.probe_targets.load_api_tree", lambda _d: None)
     urls, meta = targets.build_probe_urls({}, data_dir=_DATA, probe_mode="full")
     assert meta["inventory_fallback"] is True
     assert len(urls) == 1

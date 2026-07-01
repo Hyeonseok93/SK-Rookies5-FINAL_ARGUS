@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY diagnosis ./diagnosis
 COPY inventory ./inventory
+COPY integrations ./integrations
 COPY parsers ./parsers
 COPY config.yaml config.docker.yaml ./
 

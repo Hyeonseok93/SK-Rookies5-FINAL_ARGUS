@@ -16,18 +16,10 @@ from app.services.zap_util import probe_url
 from diagnosis.probe_auth import all_account_auths_with_meta
 from diagnosis.replay.normalize import filter_endpoints_by_probe_bases, filter_login_entry_report
 from inventory.schema import ApiTree, Endpoint
+from inventory.load import load_api_tree
 
 ProbeMode = Literal["base_only", "sample", "full"]
 
-
-def load_api_tree(data_dir: Path | None) -> ApiTree | None:
-    if data_dir is None:
-        return None
-    for name in ("api-tree-verified.json", "api-tree-ready.json", "api-tree.json"):
-        path = data_dir / name
-        if path.is_file():
-            return ApiTree.load(path)
-    return None
 
 
 def load_login_report(data_dir: Path, raw_config: dict[str, Any] | None) -> dict[str, Any] | None:

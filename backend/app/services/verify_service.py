@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 
@@ -21,6 +19,7 @@ from app.services.probe_report import endpoint_keeps_in_inventory, group_probe_r
 from app.services.test_accounts_service import load_test_accounts
 from inventory.enrich_from_traffic import enrich_from_probe_response
 from inventory.merge import merge_endpoints
+from inventory.net import probe_base_url
 from inventory.probe_build import build_probe_request
 from inventory.schema import ApiTree, Endpoint, InventoryMeta
 from inventory.merge import merge_endpoint_headers
@@ -32,29 +31,13 @@ from inventory.traffic_params import (
     observation_to_response_params,
 )
 
-PROBE_HOST = os.environ.get("ARGUS_PROBE_HOST", "").strip()
-
-
-def _probe_base_url(base_url: str) -> str:
-    """Map localhost to probe host only when ARGUS_PROBE_HOST is set (Docker)."""
-    parsed = urlparse(base_url.rstrip("/"))
-    host = (parsed.hostname or "").lower()
-    if host not in ("localhost", "127.0.0.1"):
-        return base_url.rstrip("/")
-    if not PROBE_HOST:
-        return base_url.rstrip("/")
-    port = f":{parsed.port}" if parsed.port else ""
-    scheme = parsed.scheme or "http"
-    return f"{scheme}://{PROBE_HOST}{port}"
-
-
 def _build_request(
     ep: Endpoint,
     account_auth: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return build_probe_request(
         ep,
-        probe_base_fn=_probe_base_url,
+        probe_base_fn=probe_base_url,
         account_auth=account_auth,
     )
 

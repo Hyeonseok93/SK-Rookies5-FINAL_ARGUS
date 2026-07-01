@@ -45,6 +45,7 @@ from app.services.verify_service import (
 from app.services.discover_service import discover_inventory_async
 from app.services.zap_util import ZapNotAvailableError
 from app.services import discover_progress
+from inventory.load import load_cached_tree
 from inventory.schema import ApiTree
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
@@ -65,15 +66,7 @@ SOURCE_DEFS = [
 
 
 def _load_cached_tree(inventory: str = "ready") -> ApiTree | None:
-    if inventory == "verified":
-        if API_TREE_VERIFIED_PATH.is_file():
-            return ApiTree.load(API_TREE_VERIFIED_PATH)
-        return None
-    if API_TREE_READY_PATH.is_file():
-        return ApiTree.load(API_TREE_READY_PATH)
-    if API_TREE_PATH.is_file():
-        return ApiTree.load(API_TREE_PATH)
-    return None
+    return load_cached_tree(DATA_DIR, inventory=inventory)
 
 
 def _find_endpoint_tree(endpoint_id: str) -> ApiTree | None:

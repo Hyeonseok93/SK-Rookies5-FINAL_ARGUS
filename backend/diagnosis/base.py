@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from diagnosis.context import DiagnosisContext
+from diagnosis.paths import diagnosis_report_dir, resolve_report_path
 from diagnosis.result import SectionReport, utc_now_iso
 
 
@@ -22,11 +23,15 @@ class DiagnosisModule(ABC):
     engine: str = "pending"
     module_dir: Path
 
-    def report_path(self) -> Path:
-        return self.module_dir / "reports" / "latest.yaml"
+    def report_path(self, ctx: DiagnosisContext | None = None) -> Path:
+        return resolve_report_path(
+            ctx=ctx,
+            section_id=self.section_id,
+            module_dir=self.module_dir,
+        )
 
     def load_report(self, ctx: DiagnosisContext) -> SectionReport | None:
-        path = self.report_path()
+        path = self.report_path(ctx)
         if not path.is_file():
             return None
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -39,7 +44,7 @@ class DiagnosisModule(ABC):
         """Execute diagnosis for this guideline section."""
 
     def save_report(self, ctx: DiagnosisContext, report: SectionReport) -> Path:
-        path = self.report_path()
+        path = diagnosis_report_dir(ctx.data_dir, self.section_id) / "latest.yaml"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             yaml.safe_dump(report.to_dict(), allow_unicode=True, sort_keys=False),

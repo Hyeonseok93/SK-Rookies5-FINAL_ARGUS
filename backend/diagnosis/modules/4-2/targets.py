@@ -18,19 +18,11 @@ from diagnosis.probe_auth import all_account_auths_with_meta
 from diagnosis.replay.normalize import collect_probe_base_urls, filter_endpoints_by_probe_bases
 from diagnosis.result import DiagnosisFinding
 from inventory.schema import ApiTree, build_full_url
+from inventory.load import load_api_tree
 
 LOGOUT_PATH_RE = re.compile(r"(?i)(/(auth/)?(logout|sign-?out)(/|$)|/logout$)")
 LOGIN_PATH_RE = re.compile(r"(?i)(/(auth/)?(login|sign-?in)(/|$)|/login$)")
 
-
-def load_api_tree(data_dir: Path | None) -> ApiTree | None:
-    if data_dir is None:
-        return None
-    for name in ("api-tree-verified.json", "api-tree-ready.json", "api-tree.json"):
-        path = data_dir / name
-        if path.is_file():
-            return ApiTree.load(path)
-    return None
 
 
 def load_login_report(data_dir: Path, raw_config: dict[str, Any] | None) -> dict[str, Any] | None:

@@ -11,34 +11,14 @@ from urllib.parse import urlparse
 
 from diagnosis.replay.normalize import collect_probe_base_urls, filter_endpoints_by_probe_bases
 from inventory.schema import ApiTree, Endpoint
+from inventory.load import load_api_tree
+from inventory.net import probe_base_url
 
 ProbeMode = Literal["sample", "full"]
 
 _API_PORTS = frozenset({8080, 8081, 8443, 8000, 3000})
 
 
-def probe_base_url(base_url: str) -> str:
-    """Map localhost to probe host when ARGUS_PROBE_HOST is set (Docker)."""
-    parsed = urlparse(base_url.rstrip("/"))
-    host = (parsed.hostname or "").lower()
-    if host not in ("localhost", "127.0.0.1"):
-        return base_url.rstrip("/")
-    probe_host = os.environ.get("ARGUS_PROBE_HOST", "").strip()
-    if not probe_host:
-        return base_url.rstrip("/")
-    port = f":{parsed.port}" if parsed.port else ""
-    scheme = parsed.scheme or "http"
-    return f"{scheme}://{probe_host}{port}"
-
-
-def load_api_tree(data_dir: Path | None) -> ApiTree | None:
-    if data_dir is None:
-        return None
-    for name in ("api-tree-verified.json", "api-tree-ready.json", "api-tree.json"):
-        path = data_dir / name
-        if path.is_file():
-            return ApiTree.load(path)
-    return None
 
 
 def _stable_sample_key(ep: Endpoint) -> int:

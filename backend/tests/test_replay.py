@@ -18,8 +18,7 @@ from diagnosis.result import DiagnosisFinding
 
 def test_probe_url_localhost_unchanged_without_docker_env(monkeypatch):
     monkeypatch.delenv("ARGUS_PROBE_HOST", raising=False)
-    monkeypatch.setattr("app.services.zap_util.PROBE_HOST", "")
-    from app.services.zap_util import probe_url
+    from inventory.net import probe_url
 
     url = "http://localhost:8080/api/v1/members/me"
     assert probe_url(url) == url
@@ -27,8 +26,7 @@ def test_probe_url_localhost_unchanged_without_docker_env(monkeypatch):
 
 def test_probe_url_rewrites_when_argus_probe_host_set(monkeypatch):
     monkeypatch.setenv("ARGUS_PROBE_HOST", "host.docker.internal")
-    monkeypatch.setattr("app.services.zap_util.PROBE_HOST", "host.docker.internal")
-    from app.services.zap_util import probe_url
+    from inventory.net import probe_url
 
     assert probe_url("http://localhost:8080/api") == "http://host.docker.internal:8080/api"
 

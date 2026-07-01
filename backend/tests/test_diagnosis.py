@@ -2,27 +2,39 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.services import diagnosis_service
 from diagnosis.catalog import SECTIONS
 from diagnosis.registry import list_registered_ids, module_dir
 
+SHELL_ONLY_SECTIONS = frozenset({"1-1", "1-2", "1-4", "1-6", "2-1"})
+
 
 def test_all_modules_registered():
-    assert len(list_registered_ids()) == len(SECTIONS)
+    assert len(list_registered_ids()) == len(SECTIONS) - len(SHELL_ONLY_SECTIONS)
 
 
 def test_catalog_matches_modules():
     catalog = diagnosis_service.catalog()
     assert len(catalog) == len(SECTIONS)
-    assert all(row["registered"] for row in catalog)
+    for row in catalog:
+        if row["id"] in SHELL_ONLY_SECTIONS:
+            assert row["registered"] is False
+            assert row["engine"] == "missing"
+        else:
+            assert row["registered"] is True
 
 
 def test_run_module_stub():
-    report = diagnosis_service.run_section("1-1")
-    assert report.section_id == "1-1"
-    assert report.status == "pending"
-    assert report.implemented is True
-    assert (module_dir("1-1") / "reports" / "latest.yaml").is_file()
+    from diagnosis.paths import diagnosis_report_path
+
+    report = diagnosis_service.run_section("1-3")
+    assert report.section_id == "1-3"
+    assert report.status == "not_implemented"
+    assert report.implemented is False
+    data_dir = Path(__file__).resolve().parents[1] / "data"
+    assert diagnosis_report_path(data_dir, "1-3").is_file()
 
 
 def test_not_diagnosable_sections():
