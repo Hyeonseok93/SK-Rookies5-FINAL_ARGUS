@@ -2,10 +2,11 @@
 api-tree.json
 api-tree-ready.json
 api-tree-verified.json
-discover-progress.json
+api-tree-ready.json
 verify-report.json
 zap-inventory-bundle.json
 zap-requestor-seeds.json
+discover-progress.json
 uploads/
 
 # User data — only created after explicit save
