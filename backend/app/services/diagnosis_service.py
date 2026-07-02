@@ -79,6 +79,10 @@ def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
             base_g15 = dict(raw.get("diagnosis_1_5") or {})
             base_g15.update(raw_overrides["diagnosis_1_5"])
             raw = {**raw, "diagnosis_1_5": base_g15}
+        elif "diagnosis_1_6" in raw_overrides:
+            base_g16 = dict(raw.get("diagnosis_1_6") or {})
+            base_g16.update(raw_overrides["diagnosis_1_6"])
+            raw = {**raw, "diagnosis_1_6": base_g16}
         elif "diagnosis_4_1" in raw_overrides:
             base_g41 = dict(raw.get("diagnosis_4_1") or {})
             base_g41.update(raw_overrides["diagnosis_4_1"])
@@ -141,6 +145,7 @@ def run_section(
     g32_options: dict | None = None,
     g34_options: dict | None = None,
     g15_options: dict | None = None,
+    g16_options: dict | None = None,
     g41_options: dict | None = None,
     g42_options: dict | None = None,
 ) -> SectionReport:
@@ -179,6 +184,8 @@ def run_section(
         overrides = {"diagnosis_3_4": {k: v for k, v in g34_options.items() if v is not None}}
     elif g15_options and section_id == "1-5":
         overrides = {"diagnosis_1_5": {k: v for k, v in g15_options.items() if v is not None}}
+    elif g16_options and section_id == "1-6":
+        overrides = {"diagnosis_1_6": {k: v for k, v in g16_options.items() if v is not None}}
     elif g41_options and section_id == "4-1":
         overrides = {"diagnosis_4_1": {k: v for k, v in g41_options.items() if v is not None}}
     elif g42_options and section_id == "4-2":
