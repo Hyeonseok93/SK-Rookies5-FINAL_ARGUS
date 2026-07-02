@@ -287,6 +287,27 @@ class DiagnosisSectionReportResponse(BaseModel):
     findings: list[DiagnosisFindingSummary] = Field(default_factory=list)
 
 
+class DiagnosisArtifactSummary(BaseModel):
+    path: str
+    name: str
+    size: int = 0
+    modified_at: str | None = None
+
+
+class DiagnosisArtifactContentResponse(BaseModel):
+    section_id: str
+    path: str
+    name: str
+    size: int = 0
+    truncated: bool = False
+    content: str = ""
+
+
+class DiagnosisArtifactsResponse(BaseModel):
+    section_id: str
+    artifacts: list[DiagnosisArtifactSummary] = Field(default_factory=list)
+
+
 class DiagnosisRunSectionResponse(BaseModel):
     ok: bool
     report: DiagnosisSectionReportResponse
