@@ -206,6 +206,20 @@ def test_dashboard_login_entries_merge(tmp_path, monkeypatch):
     assert manual[0]["label"] == "custom-modal-login"
 
 
+def test_resolve_login_entries_includes_explicit_config_urls(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.login_discovery_service.DATA_DIR", tmp_path)
+    _patch_dashboard(monkeypatch, ["http://localhost:8080"])
+    _write_tree(tmp_path)
+    raw = {"targets": [{"base_url": "http://localhost:8080"}]}
+    entries = resolve_login_entries(
+        {"login_urls": ["http://localhost:8080/api/v1/auth/login"]},
+        raw,
+        data_dir=tmp_path,
+    )
+    assert entries[0]["url"] == "http://localhost:8080/api/v1/auth/login"
+    assert entries[0]["source"] == "config"
+
+
 def test_discover_limits_to_dashboard_production_bases(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.login_discovery_service.DATA_DIR", tmp_path)
     monkeypatch.setattr(

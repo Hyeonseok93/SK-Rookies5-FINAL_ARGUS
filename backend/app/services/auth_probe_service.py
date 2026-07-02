@@ -140,7 +140,10 @@ def login_urls_for_account(
         return ok_urls
 
     failed = {str(u) for u in row.get("failed_login_urls") or [] if u}
-    if failed and len(failed) >= len(entry_urls):
+    # A previous report may refer to different origins (for example an old
+    # frontend proxy). Only suppress live login when every *current* URL is
+    # explicitly known to have failed.
+    if entry_urls and set(entry_urls).issubset(failed):
         return []
 
     return [u for u in entry_urls if u not in failed]

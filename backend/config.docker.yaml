@@ -42,6 +42,9 @@ auth:
   token_field: cookie.accessToken
   delivery: cookie
   cookie_name: accessToken
+  login_urls:
+    - "http://localhost:8080/api/v1/auth/login"
+    - "http://localhost:8080/api/v1/auth/admin/login"
 
 diagnosis_1_5:
   redirect_sink_base: "http://host.docker.internal:8001/argus-redirect-sink"

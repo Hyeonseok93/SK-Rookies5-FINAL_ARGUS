@@ -138,7 +138,12 @@ def list_endpoints(
             or needle in e.base_url.lower()
         ]
     if source:
-        items = [e for e in items if source in e.sources]
+        items = [
+            e
+            for e in items
+            if source in e.sources
+            or (source == "openapi" and any(value.startswith("openapi:") for value in e.sources))
+        ]
 
     items = sorted(
         items,
@@ -360,7 +365,7 @@ async def build_attack_surface(
     openapi_enabled: bool = Form(False),
     url_list_file: UploadFile | None = File(None),
     api_list_file: UploadFile | None = File(None),
-    openapi_file: UploadFile | None = File(None),
+    openapi_files: list[UploadFile] | None = File(None),
 ) -> BuildInventoryResponse:
     if not any([url_list_enabled, api_list_enabled, openapi_enabled]):
         return BuildInventoryResponse(
@@ -373,10 +378,10 @@ async def build_attack_surface(
     batch_dir = ensure_batch_dir(UPLOAD_DIR, batch_id)
     url_list_path: Path | None = None
     api_list_path: Path | None = None
-    openapi_path: Path | None = None
+    openapi_paths: list[Path] = []
     url_list_name: str | None = None
     api_list_name: str | None = None
-    openapi_name: str | None = None
+    openapi_names: list[str] = []
 
     if url_list_enabled:
         if not url_list_file or not url_list_file.filename:
@@ -397,20 +402,31 @@ async def build_attack_surface(
         await _save_upload(api_list_file, api_list_path)
 
     if openapi_enabled:
-        if not openapi_file or not openapi_file.filename:
+        if not openapi_files:
             return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Swagger file required.")
-        if not _ext_ok(openapi_file.filename, {".json", ".yaml", ".yml"}):
-            return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Swagger file: use .json or .yaml")
-        openapi_name = f"openapi{Path(openapi_file.filename).suffix.lower()}"
-        openapi_path = batch_dir / openapi_name
-        await _save_upload(openapi_file, openapi_path)
+        for index, upload in enumerate(openapi_files):
+            if not upload.filename:
+                continue
+            if not _ext_ok(upload.filename, {".json", ".yaml", ".yml"}):
+                return BuildInventoryResponse(
+                    ok=False,
+                    stats=InventoryStats(),
+                    message=f"Swagger file: use .json or .yaml ({upload.filename})",
+                )
+            suffix = Path(upload.filename).suffix.lower()
+            stored_path = batch_dir / f"openapi_{index}{suffix}"
+            await _save_upload(upload, stored_path)
+            openapi_paths.append(stored_path)
+            openapi_names.append(upload.filename)
+        if not openapi_paths:
+            return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Swagger file required.")
 
     write_batch_manifest(
         batch_dir,
         batch_id=batch_id,
         url_list=url_list_name,
         api_list=api_list_name,
-        openapi=openapi_name,
+        openapi=openapi_names,
     )
 
     cfg = load_config()
@@ -436,7 +452,8 @@ async def build_attack_surface(
         openapi=openapi_enabled,
         url_list_path=url_list_path,
         api_list_path=api_list_path,
-        openapi_path=openapi_path,
+        openapi_paths=openapi_paths,
+        openapi_source_names=openapi_names,
         base_urls=build_bases or None,
     )
 
@@ -447,10 +464,12 @@ async def build_attack_surface(
             message="No endpoints collected from uploaded files.",
         )
 
-    artifacts = persist_inventory(tree, DATA_DIR, openapi_path)
+    artifacts = persist_inventory(tree, DATA_DIR, openapi_paths)
     artifacts["upload_batch"] = f"uploads/{batch_id}"
-    if openapi_path is not None:
-        artifacts["openapi_upload"] = f"uploads/{batch_id}/{openapi_name}"
+    if openapi_paths:
+        artifacts["openapi_uploads"] = [
+            f"uploads/{batch_id}/{path.name}" for path in openapi_paths
+        ]
     prune_upload_batches(UPLOAD_DIR)
     stats = InventoryStats(**compute_stats(tree))
     return BuildInventoryResponse(

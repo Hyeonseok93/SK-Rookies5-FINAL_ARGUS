@@ -52,6 +52,27 @@ def test_login_urls_skips_all_failed():
     assert urls == []
 
 
+def test_login_urls_does_not_apply_stale_failures_to_new_origins():
+    entries = [
+        {"url": "http://api:8080/api/v1/auth/login"},
+        {"url": "http://api:8080/api/v1/auth/admin/login"},
+    ]
+    report = {
+        "accounts": [
+            {
+                "email": "a@ex.com",
+                "successful_login_urls": [],
+                "failed_login_urls": [
+                    "http://frontend:5173/api/v1/auth/login",
+                    "http://frontend:5173/api/v1/auth/admin/login",
+                ],
+            }
+        ]
+    }
+    urls = login_urls_for_account({"email": "a@ex.com", "password": "p"}, entries, report)
+    assert urls == [entry["url"] for entry in entries]
+
+
 def test_load_cached_account_auths_from_verify_report(tmp_path: Path):
     report = {
         "checked_at": "2026-01-01T00:00:00+00:00",
