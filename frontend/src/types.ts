@@ -1,6 +1,10 @@
 export type SourceId = "url_list" | "api_list" | "openapi";
 
-export type SourceFiles = Record<SourceId, File | null>;
+export type SourceFiles = {
+  url_list: File | null;
+  api_list: File | null;
+  openapi: File[];
+};
 
 export interface SourceOption {
   id: SourceId;
@@ -124,7 +128,7 @@ export interface EndpointDetail {
 export interface BuildResponse {
   ok: boolean;
   stats: InventoryStats;
-  artifacts: Record<string, string>;
+  artifacts: Record<string, string | string[]>;
   message: string;
 }
 

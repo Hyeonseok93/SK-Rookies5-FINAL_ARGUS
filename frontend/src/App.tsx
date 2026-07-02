@@ -85,7 +85,7 @@ const EMPTY_STATS: InventoryStats = {
 const EMPTY_FILES: SourceFiles = {
   url_list: null,
   api_list: null,
-  openapi: null,
+  openapi: [],
 };
 
 const EMPTY_LOGIN_ENTRY_REPORT: LoginEntryReportResponse = {
@@ -300,8 +300,13 @@ function App() {
       .catch(() => {});
   }, []);
 
-  const handleFileSelect = (id: SourceId, file: File | null) => {
-    setSourceFiles((prev) => ({ ...prev, [id]: file }));
+  const handleFileSelect = (id: SourceId, file: File | File[] | null) => {
+    setSourceFiles((prev) => {
+      if (id === "openapi") {
+        return { ...prev, openapi: Array.isArray(file) ? file : file ? [file] : [] };
+      }
+      return { ...prev, [id]: Array.isArray(file) ? (file[0] ?? null) : file };
+    });
   };
 
   const handleAddBaseUrl = () => {
@@ -461,7 +466,7 @@ function App() {
         selection: {
           url_list_enabled: sourceFiles.url_list != null,
           api_list_enabled: sourceFiles.api_list != null,
-          openapi_enabled: sourceFiles.openapi != null,
+          openapi_enabled: sourceFiles.openapi.length > 0,
         },
         files: sourceFiles,
       });

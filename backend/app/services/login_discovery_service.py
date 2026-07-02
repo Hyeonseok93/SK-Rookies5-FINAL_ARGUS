@@ -197,9 +197,33 @@ def resolve_login_entries(
     from diagnosis.replay.normalize import filter_login_entries_by_probe_bases
 
     by_url: dict[str, dict[str, str]] = {}
+    # Explicit API login URLs are authoritative. Keep their public/logical
+    # origin here; login_account_at() converts localhost to the Docker probe
+    # host immediately before making the request.
+    explicit_urls = auth_cfg.get("login_urls") or []
+    if isinstance(explicit_urls, str):
+        explicit_urls = [explicit_urls]
+    for raw_url in explicit_urls:
+        url = str(raw_url or "").strip().rstrip("/")
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            continue
+        by_url[url] = {
+            "url": url,
+            "label": _entry_label(url, multi=True),
+            "base_url": f"{parsed.scheme}://{parsed.netloc}",
+            "source": "config",
+            "kind": "api",
+            "method": "POST",
+            "path": parsed.path or "/",
+        }
     for entry in discover_login_entries(auth_cfg, raw_config, data_dir=data_dir):
-        by_url[entry["url"]] = entry
+        by_url.setdefault(entry["url"], entry)
     for entry in dashboard_login_entries(raw_config):
         by_url[entry["url"]] = entry
-    merged = sorted(by_url.values(), key=lambda e: (e.get("source") != "dashboard", e.get("url", "")))
+    source_rank = {"dashboard": 0, "config": 1, "inventory": 2}
+    merged = sorted(
+        by_url.values(),
+        key=lambda e: (source_rank.get(e.get("source", ""), 3), e.get("url", "")),
+    )
     return filter_login_entries_by_probe_bases(merged, raw_config)
