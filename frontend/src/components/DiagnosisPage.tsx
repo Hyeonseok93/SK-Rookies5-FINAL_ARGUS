@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, ChevronDown, Loader2, Stethoscope } from "lucide-react";
+import { G12DiagnosisStartDialog } from "./G12DiagnosisStartDialog";
 import { G32DiagnosisStartDialog } from "./G32DiagnosisStartDialog";
 import { G34DiagnosisStartDialog } from "./G34DiagnosisStartDialog";
 import { G35DiagnosisStartDialog } from "./G35DiagnosisStartDialog";
@@ -16,6 +17,12 @@ import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
 import { G74DiagnosisStartDialog } from "./G74DiagnosisStartDialog";
 import { fetchDiagnosisCatalog, fetchDiagnosisProgress, fetchDiagnosisReport, runDiagnosisSection } from "../lib/api";
+import {
+  DEFAULT_G12_OPTIONS,
+  g12OptionsSummary,
+  g12OptionsToPayload,
+  type G12DiagnosisOptions,
+} from "../lib/g12DiagnosisOptions";
 import {
   DEFAULT_G15_OPTIONS,
   g15OptionsSummary,
@@ -215,6 +222,8 @@ export function DiagnosisPage() {
   const [reports, setReports] = useState<Record<string, DiagnosisSectionReport>>({});
   const [runningId, setRunningId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [g12DialogOpen, setG12DialogOpen] = useState(false);
+  const [g12Options, setG12Options] = useState<G12DiagnosisOptions>(DEFAULT_G12_OPTIONS);
   const [g15DialogOpen, setG15DialogOpen] = useState(false);
   const [g15Options, setG15Options] = useState<G15DiagnosisOptions>(DEFAULT_G15_OPTIONS);
   const [g41DialogOpen, setG41DialogOpen] = useState(false);
@@ -294,7 +303,7 @@ export function DiagnosisPage() {
   const handleRun = useCallback(
     async (
       sectionId: string,
-      options?: G15DiagnosisOptions | G41DiagnosisOptions | G42DiagnosisOptions | G22DiagnosisOptions | G32DiagnosisOptions | G34DiagnosisOptions | G35DiagnosisOptions | G36DiagnosisOptions | G52DiagnosisOptions | G61DiagnosisOptions | G62DiagnosisOptions | G71DiagnosisOptions | G72DiagnosisOptions | G73DiagnosisOptions | G74DiagnosisOptions,
+      options?: G12DiagnosisOptions | G15DiagnosisOptions | G41DiagnosisOptions | G42DiagnosisOptions | G22DiagnosisOptions | G32DiagnosisOptions | G34DiagnosisOptions | G35DiagnosisOptions | G36DiagnosisOptions | G52DiagnosisOptions | G61DiagnosisOptions | G62DiagnosisOptions | G71DiagnosisOptions | G72DiagnosisOptions | G73DiagnosisOptions | G74DiagnosisOptions,
     ) => {
       const mod = catalogById[sectionId];
       if (!mod?.diagnosable || !mod?.implemented) return;
@@ -302,7 +311,9 @@ export function DiagnosisPage() {
       setError(null);
       setRunningId(sectionId);
       setOpenId(sectionId);
-      if (sectionId === "1-5" && options && "corsEnabled" in options) {
+      if (sectionId === "1-2" && options && "useDirect" in options) {
+        setRunningSummary(g12OptionsSummary(options as G12DiagnosisOptions));
+      } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
         setRunningSummary(g15OptionsSummary(options as G15DiagnosisOptions));
       } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
         setRunningSummary(g41OptionsSummary(options as G41DiagnosisOptions));
@@ -340,7 +351,9 @@ export function DiagnosisPage() {
 
       try {
         let body;
-        if (sectionId === "1-5" && options && "corsEnabled" in options) {
+        if (sectionId === "1-2" && options && "useDirect" in options) {
+          body = g12OptionsToPayload(options as G12DiagnosisOptions);
+        } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
           body = g15OptionsToPayload(options as G15DiagnosisOptions);
         } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
           body = g41OptionsToPayload(options as G41DiagnosisOptions);
@@ -388,6 +401,10 @@ export function DiagnosisPage() {
     (sectionId: string) => {
       const mod = catalogById[sectionId];
       if (!mod?.diagnosable || !mod?.implemented || runningId) return;
+      if (sectionId === "1-2") {
+        setG12DialogOpen(true);
+        return;
+      }
       if (sectionId === "1-5") {
         setG15DialogOpen(true);
         return;
@@ -451,6 +468,15 @@ export function DiagnosisPage() {
       void handleRun(sectionId);
     },
     [catalogById, handleRun, runningId],
+  );
+
+  const handleG12Start = useCallback(
+    (options: G12DiagnosisOptions) => {
+      setG12Options(options);
+      setG12DialogOpen(false);
+      void handleRun("1-2", options);
+    },
+    [handleRun],
   );
 
   const handleG15Start = useCallback(
@@ -753,6 +779,12 @@ export function DiagnosisPage() {
         ))}
       </div>
 
+      <G12DiagnosisStartDialog
+        open={g12DialogOpen && !runningId}
+        initialOptions={g12Options}
+        onClose={() => setG12DialogOpen(false)}
+        onStart={handleG12Start}
+      />
       <G15DiagnosisStartDialog
         open={g15DialogOpen && !runningId}
         initialOptions={g15Options}
