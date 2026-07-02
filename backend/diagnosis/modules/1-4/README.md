@@ -18,7 +18,7 @@ ARGUS는 OpenAPI(Swagger), URL 목록 또는 API 목록을 입력받아 SSRF와 
 
 ## 요구 사항과 설치
 
-- Python 3.14 이상
+- Python 3.12 이상
 - 의존성: `requests`, `python-owasp-zap-v2-4`
 
 `uv`를 사용하는 경우:
@@ -32,6 +32,19 @@ uv sync
 ```powershell
 python -m pip install requests python-owasp-zap-v2-4
 ```
+
+## 백엔드 통합
+
+이 폴더는 독립 CLI 도구인 동시에 ARGUS 플랫폼의 정식 진단 모듈입니다. `module.py`가 내보내는 `G14Module` 인스턴스는 `diagnosis/registry.py`에 의해 자동 등록됩니다.
+
+플랫폼 통합 실행 경로는 다음과 같습니다.
+
+1. 프론트에서 **1-4 진단 시작**을 선택합니다.
+2. 백엔드가 `G14Module.run(ctx)`를 호출합니다.
+3. 모듈은 공용 인벤토리인 api-tree에서 엔드포인트를 읽어 `ScanTarget`으로 변환합니다.
+4. 변환된 대상을 `precomputed_targets`로 `run_pipeline()`에 직접 주입합니다. 따라서 통합 실행은 CLI의 `--swagger` 파싱 경로를 거치지 않습니다.
+5. 대시보드에 등록된 테스트 계정마다 스캔을 반복합니다. 동일한 취약점이 여러 계정에서 확인되면 한 finding으로 중복 제거하고 확인 역할을 `evidence.confirmed_by_roles`에 병합합니다.
+6. 결과를 플랫폼 표준 `SectionReport`로 변환해 `data/report/1-4/latest.yaml`에 저장합니다.
 
 ## 기본 사용법
 
@@ -98,6 +111,12 @@ JSON 결과에는 전체 Swagger 대상 수, 검색 hit, 인증/기준 요청으
 - `evidence`: 판정 근거
 - `stored_ssrf_probe`: 별도 GET 검증 결과. 적합한 조회 엔드포인트가 없으면 `null`
 
+실행 방식에 따라 저장 경로가 다릅니다.
+
+- CLI 단독 실행: `--output`으로 지정한 JSON 파일. 예: `findings.json`
+- 백엔드 통합 실행 원본: `backend/diagnosis/modules/1-4/_last_run.{ROLE}.json`. 예: `_last_run.USER.json`, `_last_run.SELLER.json`. 역할별 감사 로그이며 `.gitignore`에 의해 Git에는 포함되지 않습니다.
+- 백엔드 통합 최종 리포트: `data/report/1-4/latest.yaml` (`backend/data/report/1-4/latest.yaml`)
+
 ## 테스트
 
 ```powershell
@@ -108,10 +127,25 @@ python -m unittest discover -v
 
 ## 파일 구성
 
-- `main.py`: CLI, 인증, 파이프라인 및 결과 병합
-- `input_parser.py`: 입력과 OpenAPI 스키마 정규화
-- `search_engine.py`: 의심 파라미터 정적 선별
-- `payload_injector.py`: baseline 및 페이로드 검증
-- `zap_engine.py`: OWASP ZAP 연동
-- `role_boundary.py`: 역할별 접근 경계 검사
-- `models.py`: 공통 데이터 모델
+| 그룹 | 파일 | 역할 |
+|---|---|---|
+| 엔진 핵심 | `main.py` | CLI 진입점 및 `run_pipeline()` 핵심 파이프라인 |
+| 엔진 핵심 | `input_parser.py` | Swagger/URL 목록/API 목록을 `ScanTarget`으로 정규화 |
+| 엔진 핵심 | `search_engine.py` | SSRF/LFI 의심 파라미터 정적 탐색 |
+| 엔진 핵심 | `payload_injector.py` | baseline 비교, 페이로드 주입 및 검증 |
+| 엔진 핵심 | `zap_engine.py` | OWASP ZAP Active Scan 연동 |
+| 엔진 핵심 | `role_boundary.py` | 역할별 접근 경계(401/403) 검사 |
+| 엔진 핵심 | `models.py` | `ScanTarget`, `ScanParam` 등 공통 데이터 모델 |
+| 백엔드 통합 | `module.py` | 진단 모듈 레지스트리 진입점 (`G14Module`) |
+| 백엔드 통합 | `manifest.yaml` | 모듈 메타데이터(id/title/chapter 등) |
+| 백엔드 통합 | `inventory_bridge.py` | api-tree `Endpoint`를 `ScanTarget`으로 변환 |
+| 백엔드 통합 | `report_mapper.py` | 엔진 결과를 `DiagnosisFinding`으로 변환 |
+| 테스트 | `test_main.py` | CLI 인증 및 실행 흐름 테스트 |
+| 테스트 | `test_search_engine.py` | 정적 탐색 회귀 테스트 |
+| 테스트 | `test_payload_injector.py` | baseline, 인증 갱신 및 주입 검증 테스트 |
+| 테스트 | `test_zap_engine.py` | ZAP 컨텍스트, import 및 정책 테스트 |
+| 테스트 | `test_report_mapper.py` | 역할별 결과 중복 제거 및 리포트 매핑 테스트 |
+| 설정 파일 | `pyproject.toml` | 의존성 및 Python 버전 명시 |
+| 설정 파일 | `uv.lock` | `uv` 의존성 잠금 파일 |
+| 설정 파일 | `.python-version` | 로컬 Python 버전 힌트 |
+| 설정 파일 | `.gitignore` | 실행 결과와 로컬 산출물 제외 규칙 |
