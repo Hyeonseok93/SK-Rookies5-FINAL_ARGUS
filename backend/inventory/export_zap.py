@@ -92,12 +92,14 @@ def export_requestor_seeds(tree: ApiTree) -> list[dict[str, Any]]:
 
 def export_zap_bundle(
     tree: ApiTree,
-    openapi_path: Path | None = None,
+    openapi_paths: list[Path] | None = None,
     *,
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
     imports: list[dict[str, Any]] = []
-    if openapi_path and openapi_path.is_file():
+    for openapi_path in openapi_paths or []:
+        if not openapi_path.is_file():
+            continue
         from inventory.upload_batch import openapi_ref_for_bundle
 
         ref = (
@@ -129,10 +131,10 @@ def export_zap_bundle(
 def write_zap_exports(
     tree: ApiTree,
     out_dir: Path,
-    openapi_path: Path | None = None,
+    openapi_paths: list[Path] | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    bundle = export_zap_bundle(tree, openapi_path, data_dir=out_dir)
+    bundle = export_zap_bundle(tree, openapi_paths, data_dir=out_dir)
     (out_dir / "zap-requestor-seeds.json").write_text(
         json.dumps(bundle["requestor_seeds"], indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",

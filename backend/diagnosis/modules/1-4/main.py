@@ -37,7 +37,7 @@ from role_boundary import (
 from search_engine import search_targets, SearchHit
 from payload_injector import PayloadInjector, OobCallbackProvider
 from zap_engine import ZapEngine, ZapAlertResult
-from models import DetectionSource
+from models import DetectionSource, ScanTarget
 
 
 LOGIN_PATH_CANDIDATES = [
@@ -339,6 +339,8 @@ def run_pipeline(
     role_aliases: Optional[List[str]] = None,
     resource_ids: Optional[Dict[str, List[str]]] = None,
     auth_refresh_callback: Optional[Callable[[], Optional[Dict[str, str]]]] = None,
+    precomputed_targets: Optional[List[ScanTarget]] = None,
+    on_progress: Optional[Callable[..., None]] = None,
 ):
     print("=" * 70)
     print("ARGUS - SSRF / File Inclusion 자동 진단 파이프라인 (ZAP 통합) 시작")
@@ -347,14 +349,17 @@ def run_pipeline(
     # ----------------------------------------------------------------
     # 1) 입력 정규화
     # ----------------------------------------------------------------
-    targets = parse_inputs(
-        url_list_text=url_list_text,
-        api_list_text=api_list_text,
-        swagger_source=swagger_source,
-        default_base_url=default_base_url,
-        swagger_host_override=swagger_host_override,
-        auth_headers=auth_headers,
-    )
+    if precomputed_targets is not None:
+        targets = precomputed_targets
+    else:
+        targets = parse_inputs(
+            url_list_text=url_list_text,
+            api_list_text=api_list_text,
+            swagger_source=swagger_source,
+            default_base_url=default_base_url,
+            swagger_host_override=swagger_host_override,
+            auth_headers=auth_headers,
+        )
     all_target_count = len(targets)
     targets = filter_targets_by_role(
         targets, scan_role, access_decisions=access_decisions, role_aliases=role_aliases
@@ -435,7 +440,7 @@ def run_pipeline(
         auth_refresh_callback=auth_refresh_callback,
         scan_targets=targets,
     )
-    injector_results = injector.inject_all(hits)
+    injector_results = injector.inject_all(hits, on_progress=on_progress)
     confirmed_injector = [r for r in injector_results if r.confirmed]
     print(f"[4/4] 자체 페이로드 인젝터 완료 -> 총 {len(injector_results)}회 시도, "
           f"{len(confirmed_injector)}건 취약점 확인")

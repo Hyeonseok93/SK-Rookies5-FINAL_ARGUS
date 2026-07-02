@@ -326,10 +326,21 @@ class PayloadInjector:
         self.skipped_failed_baseline_details: List[dict] = []
 
     # ----------------------------------------------------------------
-    def inject_all(self, hits: List[SearchHit]) -> List[InjectionResult]:
+    def inject_all(
+        self,
+        hits: List[SearchHit],
+        on_progress: Optional[Callable[..., None]] = None,
+    ) -> List[InjectionResult]:
         results: List[InjectionResult] = []
 
-        for hit in hits:
+        total = len(hits)
+        for index, hit in enumerate(hits, start=1):
+            if on_progress:
+                on_progress(
+                    done=index - 1,
+                    total=total,
+                    item=f"{hit.target.method} {hit.target.full_url} · {hit.param.name}",
+                )
             baseline = self._get_baseline(hit)
             if baseline is not None and baseline.status_code in (401, 403):
                 self.skipped_unauthorized_hits.append(hit)
@@ -399,6 +410,8 @@ class PayloadInjector:
             )
             self._apply_uniform_response_check(results[hit_result_start:], baseline)
 
+        if on_progress:
+            on_progress(done=total, total=total, item="payload injection complete")
         return results
 
     # ----------------------------------------------------------------

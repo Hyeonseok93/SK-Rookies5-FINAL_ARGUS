@@ -64,3 +64,4 @@ token-set*.json
 .DS_Store
 Thumbs.db
 Desktop.ini
+_last_run*.json

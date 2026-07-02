@@ -123,7 +123,7 @@ interface BuildSourcePanelProps {
   sources: SourceOption[];
   files: SourceFiles;
   building: boolean;
-  onFileSelect: (id: SourceId, file: File | null) => void;
+  onFileSelect: (id: SourceId, file: File | File[] | null) => void;
   onBuild: () => void;
   onClose: () => void;
 }
@@ -138,7 +138,9 @@ export function BuildSourcePanel({
   onClose,
 }: BuildSourcePanelProps) {
   const inputRefs = useRef<Partial<Record<SourceId, HTMLInputElement | null>>>({});
-  const readyCount = sources.filter((s) => files[s.id] != null).length;
+  const readyCount = sources.filter((source) =>
+    source.id === "openapi" ? files.openapi.length > 0 : files[source.id] != null,
+  ).length;
 
   const openPicker = (id: SourceId) => {
     inputRefs.current[id]?.click();
@@ -171,7 +173,7 @@ export function BuildSourcePanel({
           <div className="grid gap-3 overflow-visible p-5 pt-8 sm:grid-cols-3">
             {sources.map((source) => {
               const id = source.id;
-              const hasFile = files[id] != null;
+              const hasFile = id === "openapi" ? files.openapi.length > 0 : files[id] != null;
               const Icon = SOURCE_ICONS[id];
               const exampleImages = SOURCE_EXAMPLES[id];
 
@@ -185,11 +187,18 @@ export function BuildSourcePanel({
                       inputRefs.current[id] = el;
                     }}
                     type="file"
+                    multiple={id === "openapi"}
                     accept={FILE_ACCEPT[id]}
                     className="hidden"
                     onChange={(e) => {
-                      const file = e.target.files?.[0] ?? null;
-                      onFileSelect(id, file);
+                      if (id === "openapi") {
+                        const selected = Array.from(e.target.files ?? []);
+                        const byName = new Map(files.openapi.map((file) => [file.name, file]));
+                        for (const file of selected) byName.set(file.name, file);
+                        onFileSelect(id, Array.from(byName.values()));
+                      } else {
+                        onFileSelect(id, e.target.files?.[0] ?? null);
+                      }
                       e.target.value = "";
                     }}
                   />
@@ -223,9 +232,40 @@ export function BuildSourcePanel({
                       </div>
                     </div>
                     <p className="mt-3 truncate text-sm font-semibold text-white">
-                      {hasFile ? files[id]!.name : SOURCE_LABELS[id]}
+                      {id === "openapi" && files.openapi.length > 1
+                        ? `${files.openapi.length} Swagger files`
+                        : id === "openapi" && files.openapi.length === 1
+                          ? files.openapi[0].name
+                          : hasFile
+                            ? (files[id] as File).name
+                            : SOURCE_LABELS[id]}
                     </p>
                   </button>
+                  {id === "openapi" && files.openapi.length > 1 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {files.openapi.map((file) => (
+                        <span
+                          key={file.name}
+                          className="inline-flex max-w-full items-center gap-1 rounded border border-cyber-accent/30 bg-cyber-accent/10 px-2 py-1 text-[10px] text-cyber-accent"
+                        >
+                          <span className="truncate">{file.name}</span>
+                          <button
+                            type="button"
+                            className="shrink-0 rounded hover:text-white"
+                            aria-label={`Remove ${file.name}`}
+                            onClick={() =>
+                              onFileSelect(
+                                "openapi",
+                                files.openapi.filter((item) => item.name !== file.name),
+                              )
+                            }
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -31,7 +31,7 @@ class InventoryStats(BaseModel):
 class BuildInventoryResponse(BaseModel):
     ok: bool
     stats: InventoryStats
-    artifacts: dict[str, str] = Field(default_factory=dict)
+    artifacts: dict[str, Any] = Field(default_factory=dict)
     message: str = ""
 
 

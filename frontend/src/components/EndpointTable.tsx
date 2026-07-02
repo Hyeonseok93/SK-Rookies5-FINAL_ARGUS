@@ -4,10 +4,6 @@ import { MethodBadge } from "./ui";
 import { fetchEndpointDetail } from "../lib/api";
 import type { EndpointDetail, EndpointSummary, InventoryView } from "../types";
 
-function formatSources(sources: string[], display: Record<string, string>): string {
-  return sources.map((s) => display[s] ?? s).join(" + ");
-}
-
 function HeadersTable({ headers, emptyLabel }: { headers: EndpointDetail["request_headers"]; emptyLabel: string }) {
   if (headers.length === 0) {
     return <p className="px-3 py-2 text-xs text-cyber-muted">{emptyLabel}</p>;
@@ -266,7 +262,18 @@ export function EndpointTable({
                       </span>
                     )}
                   </td>
-                  <td className="py-2.5 text-cyber-muted">{formatSources(ep.sources, sourceDisplay)}</td>
+                  <td className="py-2.5">
+                    <div className="flex flex-wrap gap-1">
+                      {ep.sources.map((source) => (
+                        <span
+                          key={source}
+                          className="rounded border border-cyber-accent/25 bg-cyber-accent/10 px-1.5 py-0.5 text-[10px] text-cyber-muted"
+                        >
+                          {sourceDisplay[source] ?? source}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
                 </tr>
                 {expanded && (
                   <tr className="border-b border-cyber-border/50 bg-cyber-bg/40">
