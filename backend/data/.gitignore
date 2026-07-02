@@ -1,9 +1,11 @@
 # Build artifacts — created only after Merge & Build
 api-tree.json
 api-tree-verified.json
+api-tree-ready.json
 verify-report.json
 zap-inventory-bundle.json
 zap-requestor-seeds.json
+discover-progress.json
 uploads/
 
 # User data — only created after explicit save
