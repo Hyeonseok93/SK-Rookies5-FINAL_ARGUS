@@ -1,5 +1,6 @@
 # Build artifacts — created only after Merge & Build
 api-tree.json
+api-tree-ready.json
 api-tree-verified.json
 api-tree-ready.json
 verify-report.json

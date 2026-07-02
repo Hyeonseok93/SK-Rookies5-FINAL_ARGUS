@@ -90,6 +90,10 @@ def _example_value(schema: dict[str, Any]) -> str | None:
         if key in schema:
             val = schema[key]
             return str(val) if val is not None else None
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum:
+        first = enum[0]
+        return str(first) if first is not None else None
     return None
 
 
@@ -202,6 +206,7 @@ def load_openapi_inventory(
     base_urls: list[str],
     *,
     spec_base_url: str | None = None,
+    source_tag: str | None = None,
 ) -> ApiTree:
     if not spec_path.is_file():
         return ApiTree(
@@ -212,14 +217,19 @@ def load_openapi_inventory(
     spec = _load_spec(spec_path)
     paths = spec.get("paths") or {}
     servers = spec.get("servers") or []
-    default_base = spec_base_url
-    if not default_base and servers:
-        default_base = servers[0].get("url")
+    default_base = servers[0].get("url") if servers else None
+    if not default_base:
+        default_base = spec_base_url
     if not default_base:
         default_base = base_urls[0] if base_urls else "http://localhost"
 
-    bases = base_urls or [default_base.rstrip("/")]
+    # A spec's own server is authoritative. Dashboard/config bases are only a
+    # fallback for specs that do not declare servers.
+    bases = [str(default_base).rstrip("/")] if servers and default_base else (
+        base_urls or [str(default_base).rstrip("/")]
+    )
     endpoints: list[Endpoint] = []
+    source = f"openapi:{source_tag}" if source_tag else "openapi"
 
     for raw_path, path_item in paths.items():
         if not isinstance(path_item, dict):
@@ -248,12 +258,19 @@ def load_openapi_inventory(
                         request_params=request_params,
                         response_params=response_params,
                         request_headers=request_headers,
-                        sources=["openapi"],
+                        sources=[source],
                         kind="api",
                     )
                 )
 
+    # Preserve file provenance on parameter/header fields too.
+    for endpoint in endpoints:
+        for item in endpoint.request_params + endpoint.response_params:
+            item.sources = [source if value == "openapi" else value for value in item.sources]
+        for header in endpoint.request_headers + endpoint.response_headers:
+            header.sources = [source if value == "openapi" else value for value in header.sources]
+
     return ApiTree(
-        meta=InventoryMeta(sources_used=["openapi"] if endpoints else []),
+        meta=InventoryMeta(sources_used=[source] if endpoints else []),
         endpoints=endpoints,
     )
