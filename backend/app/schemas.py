@@ -329,6 +329,21 @@ class DiagnosisG15RunOptions(BaseModel):
     max_phase_b_jobs: int | None = Field(default=None, ge=20, le=10000)
 
 
+class DiagnosisG12RunOptions(BaseModel):
+    """Per-run overrides for guideline 1-2 injection scan (api-tree + ZAP + requests)."""
+
+    max_targets: int | None = Field(default=None, ge=5, le=500)
+    scan_all_inventory: bool | None = None
+    injector_enabled: bool | None = None
+    direct_enabled: bool | None = None
+    zap_enabled: bool | None = None
+    zap_max_minutes: int | None = Field(default=None, ge=1, le=120)
+    verification_mode: Literal["strict", "balanced", "aggressive"] | None = None
+    injection_types: list[str] | None = None
+    include_unsafe_methods: bool | None = None
+    keep_all_results: bool | None = None
+
+
 class DiagnosisG22RunOptions(BaseModel):
     """Per-run overrides for guideline 2-2 scan (merged into config for one execution)."""
 
@@ -492,6 +507,7 @@ class DiagnosisG42RunOptions(BaseModel):
 
 
 class DiagnosisRunSectionRequest(BaseModel):
+    g12: DiagnosisG12RunOptions | None = None
     g15: DiagnosisG15RunOptions | None = None
     g41: DiagnosisG41RunOptions | None = None
     g22: DiagnosisG22RunOptions | None = None

@@ -8,7 +8,7 @@ from app.services import diagnosis_service
 from diagnosis.catalog import SECTIONS
 from diagnosis.registry import list_registered_ids, module_dir
 
-SHELL_ONLY_SECTIONS = frozenset({"1-1", "1-2", "1-4", "1-6", "2-1"})
+SHELL_ONLY_SECTIONS = frozenset({"1-1", "1-4", "1-6", "2-1"})
 
 
 def test_all_modules_registered():

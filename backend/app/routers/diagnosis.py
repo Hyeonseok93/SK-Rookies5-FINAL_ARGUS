@@ -84,9 +84,12 @@ def run_module(
     g35_opts = None
     g32_opts = None
     g34_opts = None
+    g12_opts = None
     g15_opts = None
     g41_opts = None
     g42_opts = None
+    if body and body.g12 is not None:
+        g12_opts = body.g12.model_dump(exclude_none=True)
     if body and body.g15 is not None:
         g15_opts = body.g15.model_dump(exclude_none=True)
     if body and body.g41 is not None:
@@ -120,6 +123,7 @@ def run_module(
     try:
         report = diagnosis_service.run_section(
             section_id,
+            g12_options=g12_opts,
             g15_options=g15_opts,
             g41_options=g41_opts,
             g22_options=g22_opts,
