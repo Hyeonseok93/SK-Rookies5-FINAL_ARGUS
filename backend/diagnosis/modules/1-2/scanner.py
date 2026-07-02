@@ -222,11 +222,15 @@ def run_g12_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     # Phase 3: Direct injector on api-tree targets (branch --direct, api-tree adapted)
     if opts.injector_enabled and opts.direct_enabled and targets:
-        direct_progress = step_progress(total=len(targets), phase_name="injector", label="1-2 direct")
+        total_probes = sum(
+            len([p for p in t.params if p.location.value in {"query", "path", "body", "header"}])
+            for t in targets
+            if opts.include_unsafe_methods or t.method.upper() not in {"DELETE", "PATCH"}
+        ) * len(injection_types)
+        direct_progress = step_progress(total=max(total_probes, 1), phase_name="injector", label="1-2 direct")
 
         def _progress(probe: int, total: int, label: str) -> None:
-            done = min(len(targets), max(1, (probe * len(targets)) // max(probe, 1)))
-            direct_progress(done, label[:120])
+            direct_progress(min(probe, max(total, 1)), label[:120])
 
         direct_results, direct_stats = runner_mod.run_direct_verification(
             targets,

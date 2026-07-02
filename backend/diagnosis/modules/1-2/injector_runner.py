@@ -250,6 +250,11 @@ def run_direct_verification(
     skipped_methods = 0
     skipped_params = 0
     probes = 0
+    total_probes = sum(
+        len([p for p in t.params if p.location.value in {"query", "path", "body", "header"}])
+        for t in targets
+        if include_unsafe or t.method.upper() not in UNSAFE_METHODS
+    ) * len(injection_types)
 
     keep_statuses = {
         VerificationStatus.VERIFIED,
@@ -276,7 +281,7 @@ def run_direct_verification(
             for injection_type in injection_types:
                 probes += 1
                 if progress_cb:
-                    progress_cb(probes, len(targets), f"{method} {raw_url} ({param.name})")
+                    progress_cb(probes, max(total_probes, 1), f"{method} {raw_url} ({param.name})")
 
                 injector = injectors.get(injection_type)
                 if injector is None:
