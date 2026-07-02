@@ -31,6 +31,8 @@ def _load_local(name: str):
 def _bootstrap_locals():
     models = _load_local("models")
     sys.modules["models"] = models
+    sample_values = _load_local("sample_values")
+    sys.modules["sample_values"] = sample_values
     targets = _load_local("targets")
     payload_injector = _load_local("payload_injector")
     injector_runner = _load_local("injector_runner")
@@ -198,6 +200,7 @@ def run_g12_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                 raw,
                 ctx.data_dir,
                 jwt_token=jwt_token,
+                session_headers=session_headers,
                 max_minutes=opts.zap_max_minutes,
             )
             stats["zap"] = zap_stats
@@ -269,12 +272,18 @@ def run_g12_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             models_mod.VerificationStatus.SUSPECTED.value,
             models_mod.VerificationStatus.ERROR.value,
         }:
-            findings.append(_result_to_finding(result, models_mod, runner_mod, engine=engine))
+            if runner_mod.should_report_injection_finding(result):
+                findings.append(_result_to_finding(result, models_mod, runner_mod, engine=engine))
 
     verified = sum(
         1
         for f in findings
         if (f.evidence or {}).get("verification_status") == models_mod.VerificationStatus.VERIFIED.value
+    )
+    confirmed = sum(
+        1
+        for f in findings
+        if (f.evidence or {}).get("classification") in runner_mod.HIGH_CONFIDENCE_CLASSIFICATIONS
     )
     suspected = sum(
         1
@@ -285,16 +294,28 @@ def run_g12_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     stats.update(
         {
             "verified_findings": verified,
+            "confirmed_findings": confirmed,
             "suspected_findings": suspected,
+            "excluded_server_error_signals": sum(
+                1
+                for r in annotated
+                if (r.classification or "") in runner_mod.EXCLUDED_FROM_INJECTION_REPORT
+            ),
             "auth_present": bool(jwt_token or session_headers),
             "results_total": len(annotated),
             "findings_reported": len(findings),
         }
     )
 
-    if verified > 0:
+    if confirmed > 0:
         status = "fail"
-        message = f"Injection 정탐 {verified}건 (의심 {suspected}건)"
+        weak = max(0, verified - confirmed)
+        message = f"Injection 확정 {confirmed}건 (의심 {suspected}건)"
+        if weak:
+            message += f", boolean 등 약한 정탐 {weak}건"
+    elif verified > 0:
+        status = "warn"
+        message = f"Injection 약한 정탐 {verified}건 (boolean 등) — strict/time 재검증 권장 (의심 {suspected}건)"
     elif suspected > 0:
         status = "warn"
         message = f"Injection 의심 {suspected}건 — 수동 재검증 권장"

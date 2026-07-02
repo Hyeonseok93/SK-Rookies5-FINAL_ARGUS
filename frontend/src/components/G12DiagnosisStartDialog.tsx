@@ -13,7 +13,7 @@ import {
 
 const TABS: { id: G12DiagnosisPreset; icon: typeof Gauge; desc: string }[] = [
   { id: "minimal", icon: ZapOff, desc: "api-tree 40 · requests · ZAP OFF" },
-  { id: "full", icon: Zap, desc: "inventory 전체 · ZAP + requests" },
+  { id: "full", icon: Zap, desc: "inventory 전체 · ZAP + SQL direct" },
   { id: "manual", icon: Settings2, desc: "옵션 직접 설정" },
 ];
 
@@ -21,7 +21,7 @@ function PresetOverview({ preset, options }: { preset: "minimal" | "full"; optio
   const isMinimal = preset === "minimal";
   const checks = isMinimal
     ? ["api-tree verified inventory 상위 40", "requests direct — SQL/NoSQL/SSTI/Command", "ZAP OFF · 테스트 계정 인증", "수 분~十数 분"]
-    : ["api-tree inventory 전체", "ZAP Spider + Active Scan → requests 재검증", "direct requests (api-tree 파라미터)", "시간 크게 증가 가능"];
+    : ["api-tree inventory 전체", "ZAP Spider + Active Scan → requests 재검증", "direct SQL only · verification aggressive", "단독 CLI findings_full_injection과 동일 프로필"];
   return (
     <div className={`rounded-xl border p-4 ${isMinimal ? "border-cyan-400/30 bg-gradient-to-br from-cyan-500/10 to-transparent" : "border-amber-400/30 bg-gradient-to-br from-amber-500/10 to-transparent"}`}>
       <div className="mb-3 flex items-center gap-2">

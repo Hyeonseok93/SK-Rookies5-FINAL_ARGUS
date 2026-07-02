@@ -69,7 +69,13 @@ class ZapEngine:
     def log(self, message: str) -> None:
         print(f"[ZAP] {message}")
 
-    def configure_scan(self, target_url: str, swagger_url: str = "", jwt_token: str = "") -> None:
+    def configure_scan(
+        self,
+        target_url: str,
+        swagger_url: str = "",
+        jwt_token: str = "",
+        session_headers: Dict[str, str] | None = None,
+    ) -> None:
         self.log("Injection scan policy init (INSANE / LOW)...")
         try:
             self.zap.ascan.remove_scan_policy(scanpolicyname=self.policy_name)
@@ -90,6 +96,19 @@ class ZapEngine:
             self.log("Could not clear alerts via API; continuing.")
 
         self.zap.replacer.remove_rule(description="Auth_JWT")
+        self.zap.replacer.remove_rule(description="Auth_Cookie")
+        headers = session_headers or {}
+        cookie_val = headers.get("Cookie") or headers.get("cookie")
+        if cookie_val:
+            self.log("Registering Cookie with ZAP Replacer.")
+            self.zap.replacer.add_rule(
+                description="Auth_Cookie",
+                enabled=True,
+                matchtype="REQ_HEADER",
+                matchregex=False,
+                matchstring="Cookie",
+                replacement=str(cookie_val),
+            )
         if jwt_token:
             self.log("Registering JWT with ZAP Replacer.")
             auth_value = jwt_token if jwt_token.lower().startswith("bearer") else f"Bearer {jwt_token}"

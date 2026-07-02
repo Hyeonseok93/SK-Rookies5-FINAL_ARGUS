@@ -330,13 +330,57 @@ class BaseInjector:
     def _is_aggressive(self) -> bool:
         return self.verification_mode == "aggressive"
 
+    def _is_strict(self) -> bool:
+        return self.verification_mode == "strict"
+
+    def _strong_verified_methods(self, result: DetectionResult, verified_methods: List[str]) -> List[str]:
+        """High-confidence methods: time delay or DB error patterns (not boolean-only)."""
+        strong: List[str] = []
+        if "time_based" in verified_methods:
+            strong.append("time_based")
+        if "error_based" in verified_methods:
+            patterns = (result.verification_methods.get("error_based") or {}).get("matched_patterns") or []
+            if patterns:
+                strong.append("error_based")
+        return strong
+
+    def _finalize_verified(
+        self,
+        result: DetectionResult,
+        verified_methods: List[str],
+        baseline: ProbeResponse,
+        max_delay: float,
+    ) -> DetectionResult:
+        if self._is_strict():
+            strong = self._strong_verified_methods(result, verified_methods)
+            if strong:
+                reason = "Verified by " + ", ".join(strong) + " (strict: time/error-pattern)."
+                result.evidence = reason
+                return self._set_status(result, VerificationStatus.VERIFIED, reason)
+            reason = (
+                "Weak evidence rejected in strict mode: "
+                + ", ".join(verified_methods)
+                + " (boolean-only is not injection — needs time delay or DB error pattern)."
+            )
+            result.custom_time_delay_sec = max_delay
+            result.evidence = reason
+            return self._set_status(result, VerificationStatus.FALSE_POSITIVE, reason)
+
+        reason = "Verified by " + ", ".join(verified_methods) + "."
+        result.evidence = reason
+        return self._set_status(result, VerificationStatus.VERIFIED, reason)
+
     def _should_keep_as_suspected(self, result: DetectionResult, baseline: ProbeResponse) -> bool:
         if not self._is_aggressive():
             return False
-        high_or_medium = (result.risk or "").upper() in {"HIGH", "MEDIUM"}
         unstable_baseline = baseline.status_code.startswith("5") or baseline.status_code in {"TIMEOUT", "ERROR"}
         zap_had_attack = bool(result.zap_payload)
-        return high_or_medium and (unstable_baseline or zap_had_attack)
+        high_or_medium = (result.risk or "").upper() in {"HIGH", "MEDIUM"}
+        if high_or_medium and (unstable_baseline or zap_had_attack):
+            return True
+        if result.has_zap:
+            return False
+        return False
 
     def _verify_time_based(self, result: DetectionResult, baseline: ProbeResponse, headers: Dict[str, str], method: str) -> Tuple[bool, float]:
         max_delay = 0.0
@@ -412,8 +456,11 @@ class BaseInjector:
             self._add_method(
                 result,
                 "error_based",
-                VerificationStatus.SUSPECTED,
-                f"5xx response changed at {suspected_signal['location']}, but no database-specific error pattern was found.",
+                VerificationStatus.FALSE_POSITIVE,
+                (
+                    f"5xx at {suspected_signal['location']} without DB/parser error pattern — "
+                    "treated as input/server error, not injection."
+                ),
                 baseline_status_code=suspected_signal["baseline_status_code"],
                 status_code=suspected_signal["status_code"],
                 matched_patterns=[],
@@ -511,12 +558,19 @@ class BaseInjector:
                 verified_methods.append("time_based")
 
             if verified_methods:
-                reason = "Verified by " + ", ".join(verified_methods) + "."
-                result.evidence = reason
-                return self._set_status(result, VerificationStatus.VERIFIED, reason)
+                return self._finalize_verified(result, verified_methods, baseline, max_delay)
 
             if self._should_keep_as_suspected(result, baseline):
-                reason = "Kept as suspected in aggressive mode: ZAP reported injection risk, but active verification evidence was inconclusive."
+                if result.has_zap:
+                    reason = (
+                        "Kept as suspected in aggressive mode: ZAP reported injection risk, "
+                        "but active verification evidence was inconclusive."
+                    )
+                else:
+                    reason = (
+                        "Kept as suspected in aggressive mode: direct probe on unstable baseline "
+                        "with inconclusive verification evidence."
+                    )
                 if baseline.status_code.startswith("5"):
                     reason += " Baseline request returned 5xx, so the endpoint is not stable enough to dismiss safely."
                 result.evidence = reason

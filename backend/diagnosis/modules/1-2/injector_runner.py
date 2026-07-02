@@ -7,8 +7,11 @@ from collections import Counter
 from typing import Any, Iterable
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
+import requests
+
 from app.services.zap_util import probe_url
-from models import DetectionResult, InjectionType, ScanTarget, VerificationStatus
+from models import DetectionResult, InjectionType, ScanParam, ScanTarget, VerificationStatus
+from sample_values import alternate_samples, is_generic_sample
 
 UNSAFE_METHODS = {"DELETE", "PATCH"}
 DEFAULT_TYPES = (
@@ -56,6 +59,7 @@ def target_request(
     active_param_name: str = "",
     *,
     session_headers: dict[str, str] | None = None,
+    sample_overrides: dict[str, str] | None = None,
 ) -> tuple[str, str, dict[str, str]]:
     path = target.path
     query_params: list[tuple[str, str]] = []
@@ -65,7 +69,10 @@ def target_request(
         headers.update(session_headers)
 
     for param in target.params:
-        sample = param.sample_value if param.sample_value is not None else "argus-test"
+        if sample_overrides and param.name in sample_overrides:
+            sample = sample_overrides[param.name]
+        else:
+            sample = param.sample_value if param.sample_value is not None else "argus-test"
         if param.location.value == "path":
             placeholder = "{" + param.name + "}"
             if param.name != active_param_name and placeholder in path:
@@ -96,12 +103,132 @@ def target_request(
     return url, body, headers
 
 
+def _is_unstable_status(status_code: str) -> bool:
+    code = str(status_code or "")
+    return code.startswith("5") or code in {"TIMEOUT", "ERROR"}
+
+
+def _quick_probe(method: str, url: str, body: str, headers: dict[str, str]) -> str:
+    try:
+        response = requests.request(
+            method=method,
+            url=url,
+            headers=headers,
+            data=body.encode("utf-8") if body else None,
+            timeout=8,
+            allow_redirects=True,
+        )
+        return str(response.status_code)
+    except requests.exceptions.Timeout:
+        return "TIMEOUT"
+    except requests.exceptions.RequestException:
+        return "ERROR"
+
+
+def _param_type_hint(param: ScanParam) -> str:
+    schema = param.schema or {}
+    param_type = schema.get("type")
+    if isinstance(param_type, str) and param_type:
+        return param_type
+    if (param.sample_value or "").isdigit():
+        return "integer"
+    return "string"
+
+
+def stable_target_request(
+    target: ScanTarget,
+    active_param_name: str = "",
+    *,
+    session_headers: dict[str, str] | None = None,
+) -> tuple[str, str, dict[str, str]]:
+    """Pick request samples that yield a non-5xx baseline when possible."""
+    method = target.method.upper()
+    url, body, headers = target_request(
+        target,
+        active_param_name=active_param_name,
+        session_headers=session_headers,
+    )
+    if not _is_unstable_status(_quick_probe(method, url, body, headers)):
+        return url, body, headers
+
+    retry_params = [
+        p
+        for p in target.params
+        if p.name != active_param_name
+        and p.location.value in {"query", "path", "body", "header"}
+        and (is_generic_sample(p.sample_value) or p.name.lower() in {"type", "status", "role", "category"})
+    ]
+    if not retry_params:
+        return url, body, headers
+
+    overrides: dict[str, str] = {}
+    for param in retry_params:
+        param_type = _param_type_hint(param)
+        candidates = alternate_samples(
+            param.name,
+            param_type=param_type,
+            current=overrides.get(param.name, param.sample_value),
+        )
+        for candidate in candidates:
+            trial_overrides = {**overrides, param.name: candidate}
+            trial_url, trial_body, trial_headers = target_request(
+                target,
+                active_param_name=active_param_name,
+                session_headers=session_headers,
+                sample_overrides=trial_overrides,
+            )
+            if not _is_unstable_status(_quick_probe(method, trial_url, trial_body, trial_headers)):
+                overrides[param.name] = candidate
+                url, body, headers = trial_url, trial_body, trial_headers
+                break
+        else:
+            overrides[param.name] = candidates[0]
+
+    if overrides:
+        url, body, headers = target_request(
+            target,
+            active_param_name=active_param_name,
+            session_headers=session_headers,
+            sample_overrides=overrides,
+        )
+    return url, body, headers
+
+
 def _method_status(result: DetectionResult, name: str) -> str:
     return (result.verification_methods.get(name) or {}).get("status", "")
 
 
 def _matched_patterns(result: DetectionResult) -> list[str]:
     return (result.verification_methods.get("error_based") or {}).get("matched_patterns", []) or []
+
+
+EXCLUDED_FROM_INJECTION_REPORT = frozenset(
+    {
+        "SUSPECTED_SERVER_ERROR_SIGNAL",
+        "SUSPECTED_INJECTION",
+        "WEAK_SERVER_ERROR_CONFIRMED_LEGACY",
+    }
+)
+
+
+def should_report_injection_finding(result: DetectionResult) -> bool:
+    if (result.classification or "") in EXCLUDED_FROM_INJECTION_REPORT:
+        return False
+    return True
+
+
+HIGH_CONFIDENCE_CLASSIFICATIONS = frozenset(
+    {
+        "CONFIRMED_INJECTION_TIME_BASED",
+        "CONFIRMED_INJECTION_ERROR_PATTERN",
+    }
+)
+
+
+def is_high_confidence_result(result: DetectionResult) -> bool:
+    if result.verification_status != VerificationStatus.VERIFIED:
+        return False
+    return (result.classification or "") in HIGH_CONFIDENCE_CLASSIFICATIONS
 
 
 def annotate_result(result: DetectionResult) -> DetectionResult:
@@ -273,7 +400,7 @@ def run_direct_verification(
                 skipped_params += 1
                 continue
 
-            raw_url, raw_body, raw_headers = target_request(
+            raw_url, raw_body, raw_headers = stable_target_request(
                 target,
                 active_param_name=param.name,
                 session_headers=session_headers,

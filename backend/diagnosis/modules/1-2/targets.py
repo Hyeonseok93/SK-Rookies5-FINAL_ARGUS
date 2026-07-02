@@ -12,6 +12,7 @@ from inventory.load import load_api_tree
 from inventory.schema import Endpoint, InputParam
 
 from models import InputSource, ParamLocation, ScanParam, ScanTarget
+from sample_values import pick_sample_value
 
 _LOCATION_MAP = {
     "query": ParamLocation.QUERY,
@@ -28,16 +29,7 @@ def _param_location(param: InputParam) -> ParamLocation:
 
 
 def _sample_value(param: InputParam) -> str:
-    if param.sample is not None and str(param.sample).strip():
-        return str(param.sample)
-    name = param.name.lower()
-    if param.type in ("integer", "number"):
-        return "1"
-    if param.type == "boolean":
-        return "false"
-    if name.endswith("id"):
-        return "1"
-    return "argus-test"
+    return pick_sample_value(param.name, param_type=param.type, sample=param.sample)
 
 
 def _is_api_base(base_url: str) -> bool:

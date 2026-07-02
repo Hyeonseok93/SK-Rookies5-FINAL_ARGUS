@@ -18,7 +18,7 @@ from app.services.auth_probe_service import (
 from app.services.probe_report import endpoint_keeps_in_inventory, group_probe_results, summarize_probe_results
 from app.services.test_accounts_service import load_test_accounts
 from inventory.enrich_from_traffic import enrich_from_probe_response
-from inventory.merge import merge_endpoints
+from inventory.merge import merge_endpoints, restore_reference_samples
 from inventory.net import probe_base_url
 from inventory.probe_build import build_probe_request
 from inventory.schema import ApiTree, Endpoint, InventoryMeta
@@ -308,6 +308,7 @@ def persist_verification(data_dir: Path, payload: dict[str, Any], *, original_tr
 
     artifacts: dict[str, str] = {"verify_report": str(report_path)}
     verified_tree: ApiTree = payload["verified_tree"]
+    restored_samples = restore_reference_samples(verified_tree, original_tree)
     verified_count = len(verified_tree.endpoints)
 
     if verified_count > 0 or int(payload.get("params_enriched", 0)) > 0:
@@ -315,6 +316,8 @@ def persist_verification(data_dir: Path, payload: dict[str, Any], *, original_tr
         verified_tree.save(api_tree_path)
         artifacts["api_tree_verified"] = str(verified_path)
         artifacts["api_tree"] = str(api_tree_path)
+        if restored_samples:
+            artifacts["samples_restored"] = str(restored_samples)
     else:
         original_tree.save(api_tree_path)
         artifacts["api_tree"] = str(api_tree_path)

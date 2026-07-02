@@ -31,7 +31,7 @@ export const MINIMAL_G12_OPTIONS: G12DiagnosisOptions = {
   includeUnsafeMethods: false,
 };
 
-/** 전수 — api-tree 전체 + ZAP + requests direct. */
+/** 전수 — 단독 CLI와 동일: api-tree 전체 + ZAP + direct(SQL only) + aggressive. */
 export const FULL_G12_OPTIONS: G12DiagnosisOptions = {
   maxTargets: 200,
   scanAllInventory: true,
@@ -39,8 +39,8 @@ export const FULL_G12_OPTIONS: G12DiagnosisOptions = {
   useDirect: true,
   useZap: true,
   zapMaxMinutes: 30,
-  verificationMode: "balanced",
-  injectionTypes: ["SQL", "NOSQL", "SSTI", "COMMAND", "XPATH"],
+  verificationMode: "strict",
+  injectionTypes: ["SQL"],
   includeUnsafeMethods: false,
 };
 

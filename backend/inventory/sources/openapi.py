@@ -90,6 +90,10 @@ def _example_value(schema: dict[str, Any]) -> str | None:
         if key in schema:
             val = schema[key]
             return str(val) if val is not None else None
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum:
+        first = enum[0]
+        return str(first) if first is not None else None
     return None
 
 
