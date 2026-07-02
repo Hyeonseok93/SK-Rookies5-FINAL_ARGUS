@@ -44,6 +44,18 @@ auth:
   delivery: cookie
   cookie_name: accessToken
 
+diagnosis_1_3:
+  min_score: 2
+  max_candidates: 80
+  max_mutations_per_param: 5
+  httpx_enabled: true
+  scan_all_inventory: false
+  # Phase 4 (llm_interpret.py) — RawFinding 해석에만 사용, 탐지 자체는 LLM 비의존.
+  # Claude를 쓰려면 ANTHROPIC_API_KEY 환경변수를 설정 (여기에 키를 직접 쓰지 않음).
+  llm_interpret_enabled: true
+  ollama_base_url: "http://localhost:11434"
+  ollama_model: "qwen2.5:7b"
+
 diagnosis_1_5:
   redirect_sink_base: "http://127.0.0.1:8001/argus-redirect-sink"
   probe_mode: sample
