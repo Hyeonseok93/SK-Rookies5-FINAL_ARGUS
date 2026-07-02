@@ -52,7 +52,7 @@ def _load_json(path: Path, default: Any) -> Any:
 
 def run_g16_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     cfg = _cfg(ctx)
-    engine_target = resolve_engine_target(cfg, ctx.raw_config, module_dir)
+    engine_target = resolve_engine_target(cfg, ctx.raw_config, module_dir, data_dir=ctx.data_dir)
     if not engine_target.main_py.is_file():
         return ScanResult(
             status="skipped",
@@ -84,7 +84,21 @@ def run_g16_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     output_dir = evidence_dir / "w16"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    probe = run_engine(cfg, engine_target, output_dir, roles, progress_callback=_progress_update)
+    _progress_update(
+        {
+            "phase": "running",
+            "message": "1-6 embedded W16 engine starting",
+            "percent": 3,
+        }
+    )
+    probe = run_engine(
+        cfg,
+        engine_target,
+        output_dir,
+        roles,
+        data_dir=ctx.data_dir,
+        progress_callback=_progress_update,
+    )
     run_dir = latest_w16_run(output_dir)
     stats: dict[str, Any] = {
         "engine": "argus-w16-embedded",

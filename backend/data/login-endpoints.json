@@ -1,0 +1,9 @@
+{
+  "endpoints": [
+    {
+      "id": "f6ce8e66-c377-44b0-97ba-e68ccce9325f",
+      "url": "http://localhost:8080/api/v1/auth/login",
+      "kind": "api"
+    }
+  ]
+}

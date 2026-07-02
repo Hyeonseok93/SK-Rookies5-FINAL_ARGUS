@@ -51,16 +51,11 @@ diagnosis_1_5:
   zap_enabled: false
 
 diagnosis_1_6:
-  target: "http://localhost:8080"
-  api_spec: "swagger_api.json"
   ui_target: "http://localhost:5174"
-  login_spec: "swagger_api.json"
-  login_target: "http://localhost:8080"
-  login_path: "/api/v1/auth/login"
   zap_host: "127.0.0.1"
-  skip_zap: false
-  skip_spider: false
-  skip_selenium: false
+  skip_zap: true
+  skip_spider: true
+  skip_selenium: true
   max_report_findings: 50
 
 diagnosis_4_1:
