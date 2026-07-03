@@ -1,4 +1,4 @@
-"""Orchestrate guideline diagnosis modules (1-1 … 8-1)."""
+﻿"""Orchestrate guideline diagnosis modules (1-1 ??8-1)."""
 
 from __future__ import annotations
 
@@ -79,6 +79,10 @@ def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
             base_g15 = dict(raw.get("diagnosis_1_5") or {})
             base_g15.update(raw_overrides["diagnosis_1_5"])
             raw = {**raw, "diagnosis_1_5": base_g15}
+        elif "diagnosis_1_6" in raw_overrides:
+            base_g16 = dict(raw.get("diagnosis_1_6") or {})
+            base_g16.update(raw_overrides["diagnosis_1_6"])
+            raw = {**raw, "diagnosis_1_6": base_g16}
         elif "diagnosis_1_2" in raw_overrides:
             base_g12 = dict(raw.get("diagnosis_1_2") or {})
             base_g12.update(raw_overrides["diagnosis_1_2"])
@@ -146,6 +150,7 @@ def run_section(
     g34_options: dict | None = None,
     g12_options: dict | None = None,
     g15_options: dict | None = None,
+    g16_options: dict | None = None,
     g41_options: dict | None = None,
     g42_options: dict | None = None,
 ) -> SectionReport:
@@ -184,6 +189,8 @@ def run_section(
         overrides = {"diagnosis_3_4": {k: v for k, v in g34_options.items() if v is not None}}
     elif g15_options and section_id == "1-5":
         overrides = {"diagnosis_1_5": {k: v for k, v in g15_options.items() if v is not None}}
+    elif g16_options and section_id == "1-6":
+        overrides = {"diagnosis_1_6": {k: v for k, v in g16_options.items() if v is not None}}
     elif g12_options and section_id == "1-2":
         overrides = {"diagnosis_1_2": {k: v for k, v in g12_options.items() if v is not None}}
     elif g41_options and section_id == "4-1":
@@ -194,7 +201,7 @@ def run_section(
     ctx = _context(overrides)
     from app.services import diagnosis_progress as dp
 
-    dp.reset(section_id=section_id, message=f"Running {section_id}…")
+    dp.reset(section_id=section_id, message=f"Running {section_id}...")
     try:
         report = mod.run(ctx)
     except Exception as exc:
@@ -245,3 +252,5 @@ def run_replay(section_id: str, *, finding_id: str | None = None, use_playwright
         raw_config=raw,
         use_playwright=use_playwright,
     )
+
+

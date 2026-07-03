@@ -50,6 +50,14 @@ diagnosis_1_5:
   sample_size: 60
   zap_enabled: false
 
+diagnosis_1_6:
+  ui_target: "http://localhost:5174"
+  zap_host: "127.0.0.1"
+  skip_zap: true
+  skip_spider: true
+  skip_selenium: true
+  max_report_findings: 50
+
 diagnosis_4_1:
   probe_mode: sample
   sample_size: 40

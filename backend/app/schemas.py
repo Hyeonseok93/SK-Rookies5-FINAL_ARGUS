@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any, Literal
 
@@ -350,6 +350,30 @@ class DiagnosisG15RunOptions(BaseModel):
     max_phase_b_jobs: int | None = Field(default=None, ge=20, le=10000)
 
 
+class DiagnosisG16RunOptions(BaseModel):
+    """Per-run overrides for guideline 1-6 input size/integrity scan."""
+
+    w16_root: str | None = None
+    python: str | None = None
+    target: str | None = None
+    api_spec: str | None = None
+    roles: list[str] | None = None
+    ui_target: str | None = None
+    login_spec: str | None = None
+    login_target: str | None = None
+    login_path: str | None = None
+    zap_host: str | None = None
+    zap_key: str | None = None
+    skip_zap: bool | None = None
+    skip_spider: bool | None = None
+    skip_selenium: bool | None = None
+    max_requests: int | None = Field(default=None, ge=0, le=500000)
+    max_requests_per_endpoint: int | None = Field(default=None, ge=0, le=50000)
+    max_workers: int | None = Field(default=None, ge=1, le=32)
+    timeout_sec: int | None = Field(default=None, ge=60, le=86400)
+    max_report_findings: int | None = Field(default=None, ge=0, le=5000)
+
+
 class DiagnosisG12RunOptions(BaseModel):
     """Per-run overrides for guideline 1-2 injection scan (api-tree + ZAP + requests)."""
 
@@ -530,6 +554,7 @@ class DiagnosisG42RunOptions(BaseModel):
 class DiagnosisRunSectionRequest(BaseModel):
     g12: DiagnosisG12RunOptions | None = None
     g15: DiagnosisG15RunOptions | None = None
+    g16: DiagnosisG16RunOptions | None = None
     g41: DiagnosisG41RunOptions | None = None
     g22: DiagnosisG22RunOptions | None = None
     g32: DiagnosisG32RunOptions | None = None
@@ -584,3 +609,5 @@ class ReplayRunSectionResponse(BaseModel):
     ok: bool
     section_id: str
     results: list[ReplayRunResultResponse] = Field(default_factory=list)
+
+
