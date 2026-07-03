@@ -12,3 +12,4 @@ uploads/
 # User data — only created after explicit save
 test-accounts.json
 base-urls.json
+login-endpoints.json
