@@ -1,11 +1,9 @@
 """
 ARGUS - SSRF / File Inclusion 진단 모듈
 
-search_engine.py가 식별한 의심 파라미터(SearchHit)에 실제 페이로드를 주입하여
-"진짜로 취약점이 존재하는지"를 검증하는 모듈입니다.
+search_engine.py가 식별한 의심 파라미터(SearchHit)에 실제 페이로드를 주입하여 "진짜로 취약점이 존재하는지"를 검증하는 모듈
 
-  1) WAF/필터 우회를 위한 인코딩 변형 페이로드 자동 생성 (URL 인코딩, 더블 인코딩,
-     슬래시/점 개별 인코딩, null byte, 대소문자 혼용)
+  1) WAF/필터 우회를 위한 인코딩 변형 페이로드 자동 생성 (URL 인코딩, 더블 인코딩, 슬래시/점 개별 인코딩, null byte, 대소문자 혼용)
   2) Baseline 응답과의 diff 비교로 오탐(False Positive) 감소
      (페이로드 없는 정상 요청 vs 페이로드 요청의 길이/상태코드 차이 분석)
   3) OOB(Out-of-Band) 콜백 검증 지원 - webhook.site / 자체 리스너 연동 인터페이스
@@ -30,6 +28,7 @@ from requests.exceptions import RequestException, Timeout, ConnectionError
 
 from models import ScanTarget, ScanParam, VulnType, RiskLevel, ParamLocation, DetectionSource
 from search_engine import SearchHit, _is_constrained_param
+from input_parser import _schema_sample_value
 
 
 # ==========================================================================
@@ -38,8 +37,8 @@ from search_engine import SearchHit, _is_constrained_param
 
 def _generate_encoding_variants(base_payload: str) -> List[str]:
     """
-    하나의 base 페이로드로부터 WAF/필터 우회 가능성이 있는 인코딩 변형을 생성합니다.
-    단순 문자열 매칭 기반 필터를 우회하기 위한 변형들입니다.
+    하나의 base 페이로드로부터 WAF/필터 우회 가능성이 있는 인코딩 변형을 생성
+    단순 문자열 매칭 기반 필터를 우회하기 위한 변형들
     """
     variants = [base_payload]
 
@@ -110,7 +109,7 @@ _SSRF_BASE_PAYLOADS = [
 
 SSRF_PAYLOADS = list(_SSRF_BASE_PAYLOADS) + list(CLOUD_METADATA_PAYLOADS.values())
 
-# --- SSRF: 도메인 검증 우회 (가이드라인 예시 그대로 반영) ---
+# --- SSRF: 도메인 검증 우회 ---
 #   "http://skshieldus.com@http://192.168.x.x/security : 도메인 검증 우회"
 #   "http://skshieldus.com/?url=https://bit.ly/kalskj3Ed : 단축 URL을 통한 우회"
 SSRF_BYPASS_TEMPLATES = [
@@ -120,11 +119,6 @@ SSRF_BYPASS_TEMPLATES = [
     "http://127.0.0.1?{whitelisted_domain}",           # query를 이용한 검증 우회
     "https://{whitelisted_domain}.127.0.0.1.nip.io/",   # DNS 와일드카드 서비스 악용
 ]
-
-# 단축 URL 우회는 사전에 bit.ly 등에 내부 IP로 리다이렉트되는 단축 링크를 직접
-# 등록해야 검증 가능합니다. 자동화하려면 OOB 콜백 서버와 결합해 런타임에
-# 단축 URL을 발급받는 방식을 권장합니다 (OobCallbackProvider 참고).
-
 
 # --------------------------------------------------------------------------
 # 응답 누출 시그니처
@@ -198,6 +192,7 @@ class InjectionResult:
     request_headers: Optional[dict] = None
     request_content_type: str = ""
     stored_ssrf_probe: Optional[dict] = None
+    control_probe: Optional[dict] = None
     _response_body_preview: Optional[str] = field(default=None, repr=False)
 
     def to_dict(self) -> dict:
@@ -222,6 +217,7 @@ class InjectionResult:
             "request_headers": self.request_headers,
             "request_content_type": self.request_content_type,
             "stored_ssrf_probe": self.stored_ssrf_probe,
+            "control_probe": self.control_probe,
         }
 
 
@@ -245,10 +241,7 @@ class BaselineProbe:
 
 class OobCallbackProvider:
     """
-    Out-of-Band 콜백 검증을 위한 인터페이스.
-    webhook.site, interactsh, 또는 자체 호스팅 리스너 API와 연동할 수 있도록
-    추상화했습니다. 기본 구현은 비활성(no-op)이며, 실제 사용 시
-    register_unique_callback / check_callback_received를 구현체로 교체하세요.
+    Out-of-Band 콜백 검증을 위한 인터페이스
     """
 
     def __init__(self, enabled: bool = False, base_callback_domain: str = ""):
@@ -257,9 +250,8 @@ class OobCallbackProvider:
 
     def register_unique_callback(self, hit_id: str) -> Optional[str]:
         """
-        이 요청 전용 고유 콜백 URL을 발급합니다.
-        예: https://<random>.oast.fun  형태.
-        실제 서비스 연동 시 이 메서드에서 API를 호출해 고유 서브도메인을 받아오세요.
+        이 요청 전용 고유 콜백 URL을 발급
+        예: https://<random>.oast.fun  형태
         """
         if not self.enabled or not self.base_callback_domain:
             return None
@@ -268,9 +260,7 @@ class OobCallbackProvider:
 
     def check_callback_received(self, callback_url: str, wait_seconds: int = 3) -> bool:
         """
-        발급한 콜백 URL로 실제 요청이 들어왔는지 확인합니다.
-        실제 연동 시 콜백 서비스의 polling API를 호출하도록 구현하세요.
-        기본 구현은 항상 False (미확인)을 반환합니다.
+        발급한 콜백 URL로 실제 요청이 들어왔는지 확인
         """
         if not self.enabled:
             return False
@@ -281,13 +271,10 @@ class OobCallbackProvider:
 
 class PayloadInjector:
     """
-    SearchHit 목록을 받아 실제 HTTP 요청으로 페이로드를 주입하고,
-    응답을 분석해 취약점 존재 여부를 판정합니다.
-
-    고도화 포인트:
+    SearchHit 목록을 받아 실제 HTTP 요청으로 페이로드를 주입하고, 응답을 분석해 취약점 존재 여부를 판정
       - baseline 요청(안전한 더미 값)과 페이로드 요청을 비교해 오탐을 줄임
       - 인코딩 변형 페이로드까지 자동으로 시도
-      - OOB 콜백 검증 지원 (옵션)
+      - OOB 콜백 검증 지원
     """
 
     def __init__(self, timeout: int = 6, delay_between_requests: float = 0.3,
@@ -324,6 +311,7 @@ class PayloadInjector:
         self.skipped_unauthorized_details: List[dict] = []
         self.skipped_failed_baseline_hits: List[SearchHit] = []
         self.skipped_failed_baseline_details: List[dict] = []
+        self.skipped_soft_constrained_details: List[dict] = []
 
     # ----------------------------------------------------------------
     def inject_all(
@@ -351,23 +339,55 @@ class PayloadInjector:
                 })
                 continue
             if baseline is not None and baseline.status_code in (400, 409, 422, 500):
-                baseline_polluted = baseline.status_code in (409, 422)
-                if baseline_polluted:
+                body = baseline.text or ""
+                validation_error = bool(re.search(
+                    r"failed\s+to\s+convert|validation\s+failed|type\s+mismatch|"
+                    r"invalid\s+(?:value|format)|cannot\s+(?:deserialize|convert)",
+                    body,
+                    re.IGNORECASE,
+                ))
+                mentioned_fields = [
+                    param.name for param in getattr(hit.target, "params", [hit.param])
+                    if re.search(rf"(?<![A-Za-z0-9_]){re.escape(param.name)}(?![A-Za-z0-9_])", body, re.IGNORECASE)
+                ]
+                sibling_fields = [
+                    name for name in mentioned_fields
+                    if name.casefold() != hit.param.name.casefold()
+                ]
+                baseline_polluted = baseline.status_code in (400, 409, 422)
+                if baseline.status_code == 400 and validation_error and sibling_fields:
+                    reason = (
+                        f"형제 파라미터({', '.join(sibling_fields)})의 기본값 문제로 baseline 실패 - "
+                        "해당 파라미터 자체의 취약 여부는 판단 불가"
+                    )
+                    failure_cause = "SIBLING_PARAMETER_VALIDATION"
+                elif baseline.status_code == 400 and validation_error and mentioned_fields:
+                    reason = (
+                        f"대상 파라미터({hit.param.name})의 baseline 값이 필드 검증에서 거부되어 "
+                        "페이로드 주입을 스킵"
+                    )
+                    failure_cause = "TARGET_PARAMETER_VALIDATION"
+                elif baseline_polluted:
                     reason = (
                         f"baseline 요청 자체가 {baseline.status_code}로 응답함 - 이전 스캔에서 "
                         "생성된 잔여 테스트 데이터로 인해 오탐/미탐 판정이 부정확할 수 있음. "
                         "테스트 계정/리소스를 정리한 후 재스캔 권장"
                     )
+                    failure_cause = "POLLUTED_OR_INVALID_BASELINE"
                 else:
                     reason = (
                         f"baseline 응답이 {baseline.status_code}이므로 필수 필드 누락 또는 "
                         "서버 오류로 판단하여 페이로드 주입을 스킵"
                     )
+                    failure_cause = "SERVER_OR_REQUIRED_FIELD_ERROR"
                 self.skipped_failed_baseline_hits.append(hit)
                 self.skipped_failed_baseline_details.append({
                     **hit.to_dict(),
                     "baseline_status": baseline.status_code,
                     "baseline_polluted": baseline_polluted,
+                    "baseline_failure_cause": failure_cause,
+                    "validation_error_detected": validation_error,
+                    "validation_fields": mentioned_fields,
                     "content_type": hit.target.content_type,
                     "baseline_response_body_snippet": (baseline.text or "")[:1000] or None,
                     "skip_reason": reason,
@@ -379,11 +399,27 @@ class PayloadInjector:
                 )
                 continue
 
+            control_probe = None
+            if getattr(hit, "is_soft_constrained", False):
+                control_probe = self._probe_soft_constraint(hit, baseline)
+                if not control_probe["passed"]:
+                    self.skipped_soft_constrained_details.append({
+                        **hit.to_dict(),
+                        "control_probe": control_probe,
+                    })
+                    print(
+                        f"[컨트롤 스킵] {hit.target.method} {hit.target.full_url} "
+                        f"(param={hit.param.name}) -> {control_probe['reason']}"
+                    )
+                    continue
+
             hit_result_start = len(results)
             payloads = self._select_payloads(hit.vuln_type)[: self.max_payloads_per_param]
 
             for payload in payloads:
-                result = self._inject_single(hit, payload, baseline=baseline)
+                result = self._inject_single(
+                    hit, payload, baseline=baseline, control_probe=control_probe
+                )
                 if result:
                     self._verify_stored_ssrf(result, payload)
                     results.append(result)
@@ -394,7 +430,8 @@ class PayloadInjector:
                 for template in SSRF_BYPASS_TEMPLATES:
                     bypass_payload = template.format(whitelisted_domain=self.whitelisted_domain)
                     result = self._inject_single(hit, bypass_payload, baseline=baseline,
-                                                  label="DOMAIN_BYPASS")
+                                                  label="DOMAIN_BYPASS",
+                                                  control_probe=control_probe)
                     if result:
                         self._verify_stored_ssrf(result, bypass_payload)
                         results.append(result)
@@ -424,6 +461,66 @@ class PayloadInjector:
             return SSRF_PAYLOADS
         return []
 
+    def _probe_soft_constraint(
+        self,
+        hit: SearchHit,
+        baseline: Optional[requests.Response],
+    ) -> dict:
+        """Check whether a nominally structured field actually rejects free text."""
+        control_value = "not-a-date-xyz"
+        url = self._build_url(hit, control_value)
+        kwargs = self._build_request_kwargs(hit, control_value)
+        started = time.time()
+        try:
+            response = self.session.request(hit.target.method, url, **kwargs)
+            elapsed_ms = round((time.time() - started) * 1000, 1)
+        except RequestException as exc:
+            return {
+                "value": control_value,
+                "status_code": None,
+                "elapsed_ms": round((time.time() - started) * 1000, 1),
+                "passed": False,
+                "reason": f"control probe failed: {str(exc)[:200]}",
+            }
+
+        baseline_status = baseline.status_code if baseline is not None else None
+        baseline_length = len(baseline.text or "") if baseline is not None else None
+        response_length = len(response.text or "")
+        length_diff_ratio = None
+        if baseline_length is not None:
+            length_diff_ratio = abs(response_length - baseline_length) / max(baseline_length, 1)
+
+        # The baseline has already established that this endpoint is reachable.
+        # Any client-error response to only the malformed value is therefore a
+        # useful signal that the declared constraint is enforced (not just
+        # 400/422; frameworks also commonly use 404, 406, or 415 here).
+        rejected = 400 <= response.status_code < 500
+        normal_response = 200 <= response.status_code < 400
+        baseline_similar = (
+            baseline is not None
+            and response.status_code == baseline.status_code
+            and length_diff_ratio is not None
+            and length_diff_ratio <= 0.30
+        )
+        passed = not rejected and (normal_response or baseline_similar)
+        reason = (
+            "server accepted malformed structured value"
+            if passed
+            else f"server enforced structured format (HTTP {response.status_code})"
+        )
+        return {
+            "value": control_value,
+            "status_code": response.status_code,
+            "baseline_status": baseline_status,
+            "baseline_length": baseline_length,
+            "response_length": response_length,
+            "length_diff_ratio": round(length_diff_ratio, 4)
+            if length_diff_ratio is not None else None,
+            "elapsed_ms": elapsed_ms,
+            "passed": passed,
+            "reason": reason,
+        }
+
     # ----------------------------------------------------------------
     def _sample_for_param(self, param: ScanParam) -> Any:
         schema = param.schema or {}
@@ -439,24 +536,7 @@ class PayloadInjector:
         elif schema.get("enum"):
             value = schema["enum"][0]
         else:
-            name = param.name.lower()
-            schema_type = schema.get("type", "string")
-            fmt = schema.get("format", "")
-
-            if schema_type in ("integer", "number") or fmt in ("int32", "int64", "double", "float"):
-                value = "0" if name == "page" else "1"
-            elif schema_type == "boolean":
-                value = "false"
-            elif fmt == "date-time":
-                value = "2026-06-30T00:00:00"
-            elif fmt == "date":
-                value = "2026-06-30"
-            elif "email" in name:
-                value = "argus@example.com"
-            elif "phone" in name:
-                value = "010-1234-5678"
-            else:
-                value = "argus-test"
+            value = _schema_sample_value(param.name, schema)
 
         return self._coerce_value(value, schema)
 
@@ -475,7 +555,7 @@ class PayloadInjector:
             return "https://example.com/argus-baseline.png"
         if schema.get("enum"):
             return schema["enum"][0]
-        return self._coerce_value("argus-test", schema)
+        return self._coerce_value(_schema_sample_value(name, schema), schema)
 
     # ----------------------------------------------------------------
     @staticmethod
@@ -487,7 +567,7 @@ class PayloadInjector:
     def _apply_response_size_anomalies(
         hit_results: List[InjectionResult], baseline: Optional[requests.Response]
     ) -> None:
-        """Confirm port-specific internal URL size outliers across one hit's attempts."""
+        """한 탐지 항목의 시도 중 특정 포트의 내부 URL 응답 크기가 유독 다른지 확인"""
         if baseline is None or len(hit_results) < 5:
             return
 
@@ -549,7 +629,7 @@ class PayloadInjector:
     def _apply_uniform_response_check(
         hit_results: List[InjectionResult], baseline: Optional[requests.Response]
     ) -> None:
-        """Downgrade baseline-only SSRF evidence when payload responses are uniform."""
+        """페이로드 응답이 거의 같으면 baseline 차이에만 근거한 SSRF 증거의 신뢰도를 낮춤"""
         if baseline is None:
             return
 
@@ -562,8 +642,7 @@ class PayloadInjector:
         if len(comparable) < 3:
             return
 
-        # JSON error bodies often vary by one or two characters (for example an ID),
-        # while still representing the same business-logic response.
+        # JSON 오류 본문은 동일한 비즈니스 로직 응답이어도 ID 등의 문자 한두 개가 달라지는 경우가 많음
         groups: List[List[InjectionResult]] = []
         for result in comparable:
             group = next((
@@ -598,7 +677,7 @@ class PayloadInjector:
             )
 
     def _verify_stored_ssrf(self, result: InjectionResult, payload: str) -> None:
-        """Read back a successfully stored URL without platform-specific names."""
+        """플랫폼별 명칭에 의존하지 않고 저장에 성공한 URL을 다시 조회합니다."""
         if result.hit.target.method.upper() not in {"POST", "PUT", "PATCH"}:
             return
         if result.response_status not in {200, 201, 202, 204}:
@@ -613,9 +692,9 @@ class PayloadInjector:
             return
 
         try:
-            # Build the request from the Swagger GET operation.  Calling
-            # write_target.full_url with GET produced method-not-supported
-            # noise and detail paths may still contain unresolved {id}s.
+            # Swagger의 GET 작업을 바탕으로 요청을 구성
+            # write_target.full_url을 GET으로 호출하면 지원하지 않는 메서드 오류가 잡음으로 섞이고,
+            # 상세 경로에는 치환되지 않은 {id}가 남아 있을 수 있음
             read_probe = self.probe_target_access(read_target, force=True)
             response = read_probe.response
         except RequestException:
@@ -648,7 +727,7 @@ class PayloadInjector:
         }
 
     def _find_stored_read_target(self, write_target: ScanTarget) -> Optional[ScanTarget]:
-        """Select a Swagger-declared GET endpoint for the written resource."""
+        """저장된 리소스를 조회할 Swagger 선언 GET 엔드포인트를 선택"""
         write_parts = [part for part in write_target.path.strip("/").split("/") if part]
         generic_parts = {"api", "v1", "v2", "v3", "admin", "seller", "user", "users"}
         write_resource_parts = {
@@ -664,8 +743,8 @@ class PayloadInjector:
                 part.casefold() for part in read_parts
                 if not part.startswith("{") and part.casefold() not in generic_parts
             }
-            # A shared /api/v1 prefix does not make this the same resource.
-            # Without a meaningful resource segment, skip the probe entirely.
+            # /api/v1 접두사가 같다는 이유만으로 동일한 리소스는 아님
+            # 의미 있는 리소스 경로 구간이 없으면 탐색을 완전히 건너뜀
             if not write_resource_parts.intersection(read_resource_parts):
                 continue
             common = 0
@@ -676,9 +755,9 @@ class PayloadInjector:
                     break
             if common < 2:
                 continue
-            # Prefer collection/list GETs because they need no guessed resource
-            # identifier.  A detail GET remains a fallback when Swagger exposes
-            # no collection reader; probe_target_access resolves its path IDs.
+            # 리소스 식별자를 추측할 필요가 없는 컬렉션/목록 GET을 우선
+            # Swagger에 컬렉션 조회가 없으면 상세 GET을 대안으로 사용하며,
+            # probe_target_access가 해당 경로의 ID를 결정
             path_param_count = sum(part.startswith("{") for part in read_parts)
             length_penalty = abs(len(read_parts) - len(write_parts))
             candidates.append((-path_param_count, common, -length_penalty, target))
@@ -688,7 +767,7 @@ class PayloadInjector:
 
     @staticmethod
     def _sanitize_snippet(body: str, max_len: int = 200) -> str:
-        """Mask common secret values before retaining a short response preview."""
+        """짧은 응답 미리보기를 보관하기 전에 일반적인 비밀 값을 마스킹"""
         sensitive = "password|token|secret|key|credential|auth"
         sanitized = re.sub(
             rf'("[^"]*(?:{sensitive})[^"]*"\s*:\s*)"[^"]*"',
@@ -787,7 +866,7 @@ class PayloadInjector:
 
     # ----------------------------------------------------------------
     def probe_target_access(self, target: ScanTarget, force: bool = False) -> BaselineProbe:
-        """Probe auth, then retry denied path targets with caller/JWT resource IDs."""
+        """인증을 탐색한 뒤 거부된 경로 대상을 호출자/JWT의 리소스 ID로 다시 시도"""
         cache_key = self._target_cache_key(target)
         if not force and cache_key in self._baseline_probes:
             return self._baseline_probes[cache_key]
@@ -948,8 +1027,7 @@ class PayloadInjector:
     # ----------------------------------------------------------------
     def _get_baseline(self, hit: SearchHit) -> Optional[requests.Response]:
         """
-        페이로드 없이(안전한 더미 값으로) 보낸 baseline 응답을 캐싱하여
-        이후 모든 페이로드 응답과 비교할 기준점으로 사용합니다.
+        페이로드 없이(안전한 더미 값으로) 보낸 baseline 응답을 캐싱하여 이후 모든 페이로드 응답과 비교할 기준점으로 사용
         """
         cache_key = self._target_cache_key(hit.target)
         if cache_key in self._baseline_cache:
@@ -982,7 +1060,8 @@ class PayloadInjector:
     # ----------------------------------------------------------------
     def _inject_single(self, hit: SearchHit, payload: str,
                         baseline: Optional[requests.Response],
-                        label: str = "") -> Optional[InjectionResult]:
+                        label: str = "",
+                        control_probe: Optional[dict] = None) -> Optional[InjectionResult]:
         target = hit.target
         param = hit.param
         url = self._build_url(hit, payload)
@@ -1021,7 +1100,8 @@ class PayloadInjector:
                 elapsed_ms = (time.time() - start) * 1000
 
                 confirmed, evidence, detection_method = self._analyze_response(
-                    hit, payload, resp, elapsed_ms, baseline
+                    hit, payload, resp, elapsed_ms, baseline,
+                    allow_soft_constrained=bool(control_probe and control_probe.get("passed")),
                 )
 
                 return InjectionResult(
@@ -1046,6 +1126,7 @@ class PayloadInjector:
                     request_body=request_body,
                     request_headers=request_headers,
                     request_content_type=request_content_type,
+                    control_probe=control_probe,
                     _response_body_preview=(resp.text or "")[:500]
                     if not _is_binary_response(resp) else None,
                 )
@@ -1079,6 +1160,7 @@ class PayloadInjector:
                 request_body=request_body,
                 request_headers=request_headers,
                 request_content_type=request_content_type,
+                control_probe=control_probe,
             )
 
         if last_exception:
@@ -1089,7 +1171,7 @@ class PayloadInjector:
     def _response_body_snippet(hit: SearchHit, confirmed: bool,
                                resp: requests.Response,
                                baseline: Optional[requests.Response]) -> Optional[str]:
-        """Keep evidence for meaningful growth and unconfirmed LFI responses."""
+        """응답이 유의미하게 커졌거나 LFI가 미확정된 경우의 증거를 보존"""
         body = resp.text or ""
         if not body:
             return None
@@ -1109,9 +1191,10 @@ class PayloadInjector:
     # ----------------------------------------------------------------
     def _analyze_response(self, hit: SearchHit, payload: str,
                            resp: requests.Response, elapsed_ms: float,
-                           baseline: Optional[requests.Response]):
+                           baseline: Optional[requests.Response],
+                           allow_soft_constrained: bool = False):
         """
-        응답 본문/상태/시간 + baseline 비교를 종합하여 취약점 확정 여부를 판정합니다.
+        응답 본문/상태/시간 + baseline 비교를 종합하여 취약점 확정 여부를 판정
         반환: (confirmed: bool, evidence: str, detection_method: str)
         """
         body = resp.text[:200000] if resp.text else ""
@@ -1140,7 +1223,7 @@ class PayloadInjector:
                 return True, "클라우드 메타데이터 엔드포인트 응답 탐지 (자격증명 노출 위험)", "IN_BAND"
 
         # enum/구조화 포맷은 자유 문자열 입력이 아니므로 응답 차이만으로 확정하지 않습니다.
-        if _is_constrained_param(hit.param):
+        if _is_constrained_param(hit.param) and not allow_soft_constrained:
             return False, "", ""
 
         # 3) Baseline Diff 비교: 내부 주소 페이로드인데 baseline과 응답이 의미 있게 다른 경우

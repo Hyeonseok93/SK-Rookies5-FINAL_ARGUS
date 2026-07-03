@@ -116,6 +116,30 @@ def test_filter_endpoints_by_probe_bases_dashboard_only(monkeypatch):
     assert filtered[0].base_url == "https://onde.click"
 
 
+def test_filter_endpoints_treats_local_host_aliases_as_same_origin(monkeypatch):
+    from diagnosis.replay import normalize as norm
+    from inventory.schema import Endpoint
+
+    monkeypatch.setattr(
+        norm,
+        "load_dashboard_base_urls",
+        lambda: ["http://localhost:8080"],
+    )
+    eps = [
+        Endpoint(method="POST", path="/report", base_url="http://127.0.0.1:8080"),
+        Endpoint(
+            method="POST",
+            path="/callback",
+            base_url="http://host.docker.internal:8080",
+        ),
+        Endpoint(method="GET", path="/admin", base_url="http://127.0.0.1:8081"),
+    ]
+
+    filtered = norm.filter_endpoints_by_probe_bases(eps, {})
+
+    assert [ep.path for ep in filtered] == ["/report", "/callback"]
+
+
 def test_pick_public_base_for_url_port_aware():
     url = "http://host.docker.internal:8081/api/v1/admin/foo"
     base = pick_public_base_for_url(

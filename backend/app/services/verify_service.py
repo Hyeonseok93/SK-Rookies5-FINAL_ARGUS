@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,9 @@ from inventory.traffic_params import (
     observation_to_request_params,
     observation_to_response_params,
 )
+
+logger = logging.getLogger("uvicorn.error")
+logger.setLevel(logging.INFO)
 
 def _build_request(
     ep: Endpoint,
@@ -188,13 +193,27 @@ async def verify_inventory_async(
     concurrency: int = 12,
     auth_cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    started = time.monotonic()
     probe_endpoints = list(tree.endpoints)
+    logger.info(
+        "verify httpx started: endpoints=%d concurrency=%d auth_configured=%s",
+        len(probe_endpoints),
+        concurrency,
+        bool(auth_cfg),
+    )
 
     account_auths: list[dict[str, Any]] = []
     accounts: list[dict[str, str]] = []
     if auth_cfg:
+        login_started = time.monotonic()
         accounts = load_test_accounts()["accounts"]
         account_auths = login_all_accounts(auth_cfg, accounts)
+        logger.info(
+            "verify login finished: accounts=%d authenticated=%d elapsed=%.2fs",
+            len(accounts),
+            len(account_auths),
+            time.monotonic() - login_started,
+        )
 
     passes = auth_passes(account_auths, include_anonymous=True)
 
@@ -228,6 +247,12 @@ async def verify_inventory_async(
         ]
         results = list(await asyncio.gather(*tasks))
 
+    logger.info(
+        "verify endpoint probes finished: probe_runs=%d elapsed=%.2fs",
+        len(results),
+        time.monotonic() - started,
+    )
+
     grouped = group_probe_results(results)
 
     verified_endpoints: list[Endpoint] = []
@@ -239,6 +264,18 @@ async def verify_inventory_async(
     params_enriched = sum(int(r.get("params_enriched") or 0) for r in results)
     endpoint_summary = summarize_probe_results(results)
     endpoint_summary["verified_count"] = len(verified_endpoints)
+    logger.info(
+        "verify summary: probe_runs=%d endpoints_probed=%d confirmed=%d "
+        "params_issues=%d rejected=%d verified=%d params_enriched=%d elapsed=%.2fs",
+        endpoint_summary["probe_runs"],
+        endpoint_summary["endpoints_probed"],
+        endpoint_summary["confirmed"],
+        endpoint_summary["params_issues"],
+        endpoint_summary["rejected"],
+        len(verified_endpoints),
+        params_enriched,
+        time.monotonic() - started,
+    )
 
     verified_tree = ApiTree(
         meta=InventoryMeta(
@@ -283,6 +320,21 @@ def persist_verification(data_dir: Path, payload: dict[str, Any], *, original_tr
     verified_path = data_dir / "api-tree-verified.json"
     api_tree_path = data_dir / "api-tree.json"
 
+    verified_tree: ApiTree = payload["verified_tree"]
+    restored_samples = restore_reference_samples(verified_tree, original_tree)
+    verified_count = len(verified_tree.endpoints)
+    should_persist_tree = verified_count > 0 or int(payload.get("params_enriched", 0)) > 0
+    if not should_persist_tree:
+        warning = (
+            "Verify produced 0 verified endpoints; api-tree-verified.json was not "
+            "updated and the previous verified inventory was retained."
+        )
+        payload["warning"] = warning
+        payload["error"] = "verify_empty_result"
+        logger.warning(
+            "verify produced 0 verified endpoints, api-tree-verified.json was not updated"
+        )
+
     report = {
         "checked_at": payload["checked_at"],
         "summary": {
@@ -297,9 +349,14 @@ def persist_verification(data_dir: Path, payload: dict[str, Any], *, original_tr
             "probe_runs": payload.get("probe_runs", payload.get("total_checked", 0)),
             "endpoints_probed": payload.get("endpoints_probed", payload.get("verified_count", 0)),
             "accounts_logged_in": payload.get("accounts_logged_in", 0),
+            "persisted": should_persist_tree,
         },
         "results": payload["results"],
     }
+    if payload.get("warning"):
+        report["warning"] = payload["warning"]
+    if payload.get("error"):
+        report["error"] = payload["error"]
     if payload.get("login_entry_report") is not None:
         report["login_entry_report"] = payload["login_entry_report"]
     if payload.get("account_auths"):
@@ -307,11 +364,7 @@ def persist_verification(data_dir: Path, payload: dict[str, Any], *, original_tr
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     artifacts: dict[str, str] = {"verify_report": str(report_path)}
-    verified_tree: ApiTree = payload["verified_tree"]
-    restored_samples = restore_reference_samples(verified_tree, original_tree)
-    verified_count = len(verified_tree.endpoints)
-
-    if verified_count > 0 or int(payload.get("params_enriched", 0)) > 0:
+    if should_persist_tree:
         verified_tree.save(verified_path)
         verified_tree.save(api_tree_path)
         artifacts["api_tree_verified"] = str(verified_path)

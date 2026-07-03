@@ -103,7 +103,17 @@ def collect_probe_base_urls(raw_config: dict[str, Any] | None) -> list[str]:
 
 
 def probe_base_key(url: str) -> str:
-    return url.rstrip("/").lower()
+    raw = str(url or "").strip().rstrip("/")
+    parsed = urlparse(raw)
+    if not parsed.scheme or not parsed.hostname:
+        return raw.lower()
+
+    scheme = parsed.scheme.lower()
+    host = parsed.hostname.lower()
+    if host in {"localhost", "127.0.0.1", "host.docker.internal"}:
+        host = "localhost"
+    port = parsed.port or (443 if scheme == "https" else 80)
+    return f"{scheme}://{host}:{port}"
 
 
 def probe_base_keys(bases: list[str]) -> frozenset[str]:

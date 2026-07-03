@@ -13,12 +13,27 @@ class SearchRegressionTests(unittest.TestCase):
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0].vuln_type, VulnType.SSRF)
 
-    def test_report_template_special_case_remains_detected(self):
-        target = self.target("template", "/api/reports")
-        target.params[0].schema["x-argus-sibling-names"] = ["logoUrl"]
-        hits = search_targets([target])
+    def test_template_is_detected_as_file_inclusion_candidate(self):
+        hits = search_targets([self.target("template", "/api/reports")])
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].vuln_type, VulnType.LFI)
+
+    def test_logo_url_is_detected_independently_as_ssrf_candidate(self):
+        hits = search_targets([self.target("logoUrl", "/api/reports")])
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0].vuln_type, VulnType.SSRF)
+
+    def test_temporal_return_field_is_a_soft_constrained_ssrf_candidate(self):
+        hits = search_targets([self.target("returnTime", "/api/cars/search")])
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].vuln_type, VulnType.SSRF)
+        self.assertTrue(hits[0].is_soft_constrained)
+
+    def test_return_url_remains_an_ssrf_candidate(self):
+        hits = search_targets([self.target("returnUrl", "/api/auth")])
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].vuln_type, VulnType.SSRF)
+        self.assertFalse(hits[0].is_soft_constrained)
 
 if __name__ == "__main__":
     unittest.main()
