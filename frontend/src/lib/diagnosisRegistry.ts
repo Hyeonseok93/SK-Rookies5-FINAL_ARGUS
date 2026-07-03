@@ -1,5 +1,6 @@
 /** Guideline sections that open an options dialog before run. */
 export const DIAGNOSIS_SECTIONS_WITH_DIALOG = new Set([
+  "1-2",
   "1-5",
   "2-2",
   "3-2",

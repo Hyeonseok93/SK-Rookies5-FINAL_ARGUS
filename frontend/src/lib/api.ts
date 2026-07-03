@@ -61,8 +61,10 @@ export function buildInventory(payload: BuildInventoryPayload): Promise<BuildRes
   if (selection.api_list_enabled && files.api_list) {
     fd.append("api_list_file", files.api_list);
   }
-  if (selection.openapi_enabled && files.openapi) {
-    fd.append("openapi_file", files.openapi);
+  if (selection.openapi_enabled && files.openapi.length > 0) {
+    for (const file of files.openapi) {
+      fd.append("openapi_files", file);
+    }
   }
   return request("/inventory/build", { method: "POST", body: fd });
 }

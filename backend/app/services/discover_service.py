@@ -35,7 +35,7 @@ from app.services.zap_util import (
 )
 from inventory.enrich_from_traffic import enrich_tree_from_built_probes, enrich_tree_from_observations
 from inventory.merge import merge_trees
-from inventory.load import find_openapi_spec
+from inventory.load import find_openapi_specs
 from inventory.schema import ApiTree, Endpoint, InventoryMeta, build_full_url
 
 
@@ -180,17 +180,18 @@ def discover_inventory_sync(
     # Step 2 — OpenAPI import per API base
     discover_progress.update(phase="openapi", message="Importing Swagger into ZAP…", step=2)
     discover_progress.persist(data_dir)
-    openapi_path = find_openapi_spec(data_dir)
-    if discover_cfg.get("openapi_import", True) and openapi_path:
-        for base in api_bases:
-            target = probe_url(base)
-            try:
-                zap.openapi.import_file(str(openapi_path), target)
-            except Exception:
+    openapi_paths = find_openapi_specs(data_dir)
+    if discover_cfg.get("openapi_import", True) and openapi_paths:
+        for openapi_path in openapi_paths:
+            for base in api_bases:
+                target = probe_url(base)
                 try:
-                    zap.openapi.import_url(f"{target}/v3/api-docs", target)
+                    zap.openapi.import_file(str(openapi_path), target)
                 except Exception:
-                    pass
+                    try:
+                        zap.openapi.import_url(f"{target}/v3/api-docs", target)
+                    except Exception:
+                        pass
 
     # Step 3 — replay every endpoint (GET/POST/PUT/PATCH/DELETE) through ZAP
     discover_progress.update(

@@ -128,5 +128,4 @@ diagnosis_4_2:
   logout_enabled: true
   logout_urls: []
   client_logout_enabled: true
-  refresh_path: "/api/v1/auth/refresh"
   no_server_logout_finding: true

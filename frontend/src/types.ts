@@ -1,6 +1,10 @@
 export type SourceId = "url_list" | "api_list" | "openapi";
 
-export type SourceFiles = Record<SourceId, File | null>;
+export type SourceFiles = {
+  url_list: File | null;
+  api_list: File | null;
+  openapi: File[];
+};
 
 export interface SourceOption {
   id: SourceId;
@@ -124,7 +128,7 @@ export interface EndpointDetail {
 export interface BuildResponse {
   ok: boolean;
   stats: InventoryStats;
-  artifacts: Record<string, string>;
+  artifacts: Record<string, string | string[]>;
   message: string;
 }
 
@@ -304,6 +308,19 @@ export interface DiagnosisG15RunOptionsPayload {
   max_phase_b_jobs?: number;
 }
 
+export interface DiagnosisG12RunOptionsPayload {
+  max_targets?: number;
+  scan_all_inventory?: boolean;
+  injector_enabled?: boolean;
+  direct_enabled?: boolean;
+  zap_enabled?: boolean;
+  zap_max_minutes?: number;
+  verification_mode?: "strict" | "balanced" | "aggressive";
+  injection_types?: string[];
+  include_unsafe_methods?: boolean;
+  keep_all_results?: boolean;
+}
+
 export interface DiagnosisG22RunOptionsPayload {
   httpx_enabled?: boolean;
   zap_enabled?: boolean;
@@ -441,6 +458,7 @@ export interface DiagnosisG41RunOptionsPayload {
 }
 
 export interface DiagnosisRunSectionRequest {
+  g12?: DiagnosisG12RunOptionsPayload;
   g15?: DiagnosisG15RunOptionsPayload;
   g41?: DiagnosisG41RunOptionsPayload;
   g22?: DiagnosisG22RunOptionsPayload;
