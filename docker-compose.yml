@@ -18,6 +18,9 @@ services:
       - api.disablekey=true
     ports:
       - "8090:8090"
+    volumes:
+      # backend가 저장한 Swagger 업로드 파일을 같은 절대 경로에서 읽습니다.
+      - ./backend/data:/app/data:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

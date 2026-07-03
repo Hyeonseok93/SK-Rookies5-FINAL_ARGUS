@@ -1,7 +1,7 @@
 """
 ARGUS - SSRF / File Inclusion 진단 모듈
 
-OWASP ZAP REST API를 직접 호출하여 다음을 수행합니다:
+OWASP ZAP REST API를 직접 호출하여 다음을 수행:
   1) Context 생성 및 대상 등록
   2) URL List / Swagger 기반 Import (Spider)
   3) SSRF / Path Traversal / Remote File Inclusion에 특화된 Scan Policy 구성
@@ -9,7 +9,7 @@ OWASP ZAP REST API를 직접 호출하여 다음을 수행합니다:
   5) Alert 조회 및 SearchHit 호환 포맷으로 변환
 
 자체 페이로드 인젝터(payload_injector.py)와 결과를 병합할 수 있도록
-동일한 출력 스키마(InjectionResult.to_dict()와 호환되는 dict)를 반환합니다.
+동일한 출력 스키마(InjectionResult.to_dict()와 호환되는 dict)를 반환
 """
 
 import time
@@ -43,7 +43,7 @@ ZAP_RISK_MAP = {
 }
 
 # ZAP Active Scanner ID (SSRF/File Inclusion 관련)
-# ZAP 2.14+ 기준. 버전에 따라 ID가 다를 수 있으므로 zap_engine 초기화 시 검증 권장.
+# ZAP 2.14+ 기준. 버전에 따라 ID가 다를 수 있음
 ZAP_SCANNER_IDS = {
     "PATH_TRAVERSAL": "6",
     "REMOTE_FILE_INCLUSION": "7",
@@ -84,7 +84,7 @@ class ZapAlertResult:
 
 class ZapEngine:
     """
-    ZAP REST API 래퍼. daemon 모드로 실행 중인 ZAP 인스턴스에 연결합니다.
+    ZAP REST API 래퍼. daemon 모드로 실행 중인 ZAP 인스턴스에 연결
 
     실행 예시 (Docker):
         docker run -d -p 8090:8090 --network host \\
@@ -162,7 +162,7 @@ class ZapEngine:
 
     # ----------------------------------------------------------------
     def configure_auth_headers(self) -> None:
-        """Install ZAP Replacer rules that add auth headers to scan traffic."""
+        """스캔 트래픽에 인증 헤더를 추가하는 ZAP Replacer 규칙을 설치"""
         if not self.auth_headers:
             return
 
@@ -186,7 +186,7 @@ class ZapEngine:
 
     # ----------------------------------------------------------------
     def setup_context(self, base_url: str, scoped_urls: Optional[List[str]] = None) -> str:
-        """Create or reuse a Context, then add this scan's target URLs."""
+        """Context를 생성하거나 재사용한 뒤 이번 스캔의 대상 URL을 추가"""
         reused = False
         try:
             existing = self._get("/JSON/context/view/context/", {
@@ -230,7 +230,7 @@ class ZapEngine:
 
     # ----------------------------------------------------------------
     def import_swagger(self, swagger_url: str, host_override: str = "") -> None:
-        """Swagger/OpenAPI 스펙을 ZAP에 Import하여 Site Tree에 등록합니다."""
+        """Swagger/OpenAPI 스펙을 ZAP에 Import하여 Site Tree에 등록"""
         if swagger_url.lower().startswith(("http://", "https://")):
             params = {"url": swagger_url}
             if host_override:
@@ -238,8 +238,6 @@ class ZapEngine:
             resp = self._get("/JSON/openapi/action/importUrl/", params)
         else:
             absolute_path = str(Path(swagger_url).resolve())
-            # ZAP이 Docker에서 실행되면 호스트 경로를 직접 읽을 수 없습니다.
-            # 이 파일 경로가 컨테이너에도 보이도록 docker run -v 볼륨 마운트가 필요합니다.
             resp = self._get("/JSON/openapi/action/importFile/", {
                 "file": absolute_path,
                 "target": host_override or "",
@@ -249,7 +247,7 @@ class ZapEngine:
 
     # ----------------------------------------------------------------
     def import_urls(self, urls: List[str]) -> None:
-        """URL List를 ZAP Site Tree에 직접 등록합니다 (AccessUrl 방식)."""
+        """URL List를 ZAP Site Tree에 직접 등록 (AccessUrl 방식)"""
         for url in urls:
             try:
                 self._get("/JSON/core/action/accessUrl/",
@@ -261,7 +259,7 @@ class ZapEngine:
 
     # ----------------------------------------------------------------
     def spider_scan(self, base_url: str) -> None:
-        """전통적인 Spider로 추가 엔드포인트를 탐색합니다 (SPA가 아닌 경우)."""
+        """전통적인 Spider로 추가 엔드포인트를 탐색 (SPA가 아닌 경우)"""
         resp = self._get("/JSON/spider/action/scan/", {
             "url": base_url,
             "contextId": self.context_id or "",
@@ -280,9 +278,9 @@ class ZapEngine:
     # ----------------------------------------------------------------
     def configure_ssrf_lfi_policy(self, policy_name: str = "ssrf-lfi-policy") -> None:
         """
-        SSRF / File Inclusion에 특화된 Scan Policy를 구성합니다.
+        SSRF / File Inclusion에 특화된 Scan Policy를 구성
         가이드라인 1-4 항목과 직접 관련된 스캐너만 LOW threshold로 활성화하고,
-        나머지 스캐너는 비활성화하여 스캔 시간을 단축합니다.
+        나머지 스캐너는 비활성화하여 스캔 시간을 단축
         """
         try:
             self._get("/JSON/ascan/action/addScanPolicy/",
@@ -290,7 +288,7 @@ class ZapEngine:
         except requests.RequestException:
             pass  # 이미 존재하는 정책이면 무시
 
-        # 1) 전체 스캐너 비활성화 (집중도 향상)
+        # 1) 전체 스캐너 비활성화 
         self._get("/JSON/ascan/action/disableAllScanners/",
                   {"scanPolicyName": policy_name})
 
@@ -340,7 +338,7 @@ class ZapEngine:
     def active_scan(self, base_url: str, scoped_urls: Optional[List[str]] = None,
                      policy_name: str = "ssrf-lfi-policy",
                      poll_interval: int = 5) -> str:
-        """Active Scan을 실행하고 완료까지 대기합니다."""
+        """Active Scan을 실행하고 완료까지 대기"""
         scan_start_url = scoped_urls[0] if scoped_urls else base_url
         resp = self._get("/JSON/ascan/action/scan/", {
             "url": scan_start_url,
@@ -365,8 +363,7 @@ class ZapEngine:
     # ----------------------------------------------------------------
     def get_alerts(self, base_url: str) -> List[ZapAlertResult]:
         """
-        Active Scan 완료 후 Alert를 조회하고, SSRF/File Inclusion 관련 항목만
-        ARGUS 표준 포맷(ZapAlertResult)으로 변환합니다.
+        Active Scan 완료 후 Alert를 조회하고, SSRF/File Inclusion 관련 항목만 ARGUS 표준 포맷(ZapAlertResult)으로 변환
         """
         resp = self._get("/JSON/alert/view/alerts/", {"baseurl": base_url})
         raw_alerts = resp.get("alerts", [])
@@ -407,8 +404,7 @@ class ZapEngine:
                        host_override: str = "",
                        scoped_urls: Optional[List[str]] = None) -> List[ZapAlertResult]:
         """
-        Context 생성 -> Import -> Spider -> Active Scan -> Alert 조회까지
-        한 번에 실행하는 편의 메서드입니다.
+        Context 생성 -> Import -> Spider -> Active Scan -> Alert 조회까지 한 번에 실행하는 편의 메서드
         """
         if not self.health_check():
             raise ConnectionError(

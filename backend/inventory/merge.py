@@ -83,6 +83,7 @@ def merge_inputs(existing: list[InputParam], new: list[InputParam]) -> list[Inpu
                 in_=inp.in_,
                 name=inp.name,
                 type=inp.type,
+                format=inp.format,
                 required=inp.required,
                 sample=inp.sample,
                 role=inp.role,
@@ -100,6 +101,8 @@ def merge_inputs(existing: list[InputParam], new: list[InputParam]) -> list[Inpu
             cur.required = True
         if inp.type and cur.type == "string" and inp.type != "string":
             cur.type = inp.type
+        if inp.format and not cur.format:
+            cur.format = inp.format
     return sorted(by_key.values(), key=lambda x: (x.in_, x.name))
 
 

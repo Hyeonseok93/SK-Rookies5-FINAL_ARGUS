@@ -31,7 +31,7 @@ def test_login_urls_for_account_uses_successful_only():
     assert urls == ["http://x/api/v1/auth/login"]
 
 
-def test_login_urls_skips_all_failed():
+def test_login_urls_retries_all_when_report_contains_only_failures():
     entries = [
         {"url": "http://x/api/v1/auth/login"},
         {"url": "http://x/api/v1/auth/admin/login"},
@@ -49,7 +49,7 @@ def test_login_urls_skips_all_failed():
         ]
     }
     urls = login_urls_for_account({"email": "bad@ex.com", "password": "p"}, entries, report)
-    assert urls == []
+    assert urls == [entry["url"] for entry in entries]
 
 
 def test_build_login_entry_report_canonicalizes_docker_probe_urls(monkeypatch):

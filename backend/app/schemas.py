@@ -128,6 +128,8 @@ class VerifyInventoryResponse(BaseModel):
     summary: dict[str, int | str] = Field(default_factory=dict)
     artifacts: dict[str, str] = Field(default_factory=dict)
     message: str = ""
+    warning: str | None = None
+    error: str | None = None
 
 
 class VerifyResultSummary(BaseModel):
