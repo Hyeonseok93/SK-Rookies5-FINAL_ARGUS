@@ -58,7 +58,7 @@ def reset(*, section_id: str, endpoints_total: int = 0, message: str = "Starting
                 "endpoints_total": max(0, int(endpoints_total)),
                 "requests_sent": 0,
                 "requests_cap": None,
-                "percent": 2,
+                "percent": 0,
                 "updated_at": datetime.now(UTC).isoformat(),
             }
         )

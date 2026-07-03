@@ -216,12 +216,6 @@ function moduleBadgeLabel(mod: {
 }
 
 
-function progressPercent(progress: DiagnosisProgressResponse | null): number {
-  if (!progress) return 2;
-  return Math.min(100, Math.max(progress.running ? 2 : 0, progress.percent || 0));
-}
-
-
 export function DiagnosisPage() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<Record<string, DiagnosisCatalogModule>>({});
@@ -664,8 +658,6 @@ export function DiagnosisPage() {
                       engine: mod.engine,
                     })
                   : null;
-                const visibleProgress = running ? progressPercent(runProgress) : 0;
-
                 return (
                   <div key={section.id} className="border-b border-cyber-border/40 last:border-b-0">
                     <div className="flex items-center gap-2 px-4 py-3 transition hover:bg-cyber-accent/5">
@@ -748,11 +740,13 @@ export function DiagnosisPage() {
                             <div className="h-1.5 overflow-hidden rounded-full bg-cyber-border/40">
                               <div
                                 className="h-full rounded-full bg-cyan-400/80 transition-all duration-500"
-                                style={{ width: `${visibleProgress}%` }}
+                                style={{ width: `${runProgress.percent}%` }}
                               />
                             </div>
                             <p className="font-mono text-[10px] text-cyber-muted">
-                              {`${visibleProgress}%`}
+                              {runProgress.percent > 0
+                                ? `${runProgress.percent}%`
+                                : "0%"}
                               {runProgress.endpoints_total > 0
                                 ? ` · API ${runProgress.endpoints_done}/${runProgress.endpoints_total}`
                                 : null}
