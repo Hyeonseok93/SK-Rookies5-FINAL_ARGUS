@@ -17,6 +17,9 @@ from inventory.net import probe_base_url
 ProbeMode = Literal["sample", "full"]
 
 _API_PORTS = frozenset({8080, 8081, 8443, 8000, 3000})
+# Demote probe bases that have no origin-scoped auth session (e.g. 8081 admin API
+# when admin JWT was issued only via the 8080 gateway).
+_AUTH_UNREACHABLE_PENALTY = 50
 
 
 
@@ -61,13 +64,43 @@ def _api_probe_base_rank(ep: Endpoint) -> int:
     return 7
 
 
-def dedupe_api_probe_endpoints(endpoints: list[Endpoint]) -> list[Endpoint]:
-    """One probe row per method+path — pick direct API base (8080/8081) over SPA gateway."""
+def _dedupe_rank(
+    ep: Endpoint,
+    *,
+    sessions: list[dict[str, Any]] | None = None,
+    login_report: dict[str, Any] | None = None,
+) -> int:
+    rank = _api_probe_base_rank(ep)
+    if not sessions:
+        return rank
+    from diagnosis.endpoint_auth_passes import filter_sessions_for_probe
+
+    matched = filter_sessions_for_probe(
+        base_url=str(ep.base_url or ""),
+        path=str(ep.path or ""),
+        sessions=sessions,
+        login_report=login_report,
+    )
+    if matched:
+        return rank
+    return rank + _AUTH_UNREACHABLE_PENALTY
+
+
+def dedupe_api_probe_endpoints(
+    endpoints: list[Endpoint],
+    *,
+    sessions: list[dict[str, Any]] | None = None,
+    login_report: dict[str, Any] | None = None,
+) -> list[Endpoint]:
+    """One probe row per method+path — pick API base with working origin-scoped auth."""
     best: dict[str, Endpoint] = {}
     for ep in endpoints:
         key = f"{ep.method.upper()}:{ep.path}"
         current = best.get(key)
-        if current is None or _api_probe_base_rank(ep) < _api_probe_base_rank(current):
+        ep_rank = _dedupe_rank(ep, sessions=sessions, login_report=login_report)
+        if current is None or ep_rank < _dedupe_rank(
+            current, sessions=sessions, login_report=login_report
+        ):
             best[key] = ep
     return list(best.values())
 
@@ -112,6 +145,8 @@ def build_endpoint_targets(
     probe_mode: ProbeMode,
     sample_size: int,
     max_endpoints: int,
+    sessions: list[dict[str, Any]] | None = None,
+    login_report: dict[str, Any] | None = None,
 ) -> tuple[list[Endpoint], dict[str, Any]]:
     tree = load_api_tree(data_dir)
     bases = collect_probe_base_urls(raw_config)
@@ -127,7 +162,11 @@ def build_endpoint_targets(
         return [], meta
 
     filtered = filter_endpoints_by_probe_bases(tree.endpoints, raw_config)
-    deduped = dedupe_api_probe_endpoints(filtered)
+    deduped = dedupe_api_probe_endpoints(
+        filtered,
+        sessions=sessions,
+        login_report=login_report,
+    )
     chosen, sel_meta = select_endpoints(
         deduped,
         probe_mode=probe_mode,

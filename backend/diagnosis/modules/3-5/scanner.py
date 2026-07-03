@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from diagnosis.context import DiagnosisContext
+from diagnosis.endpoint_auth_passes import filter_sessions_for_probe_target, load_login_report
 from diagnosis.probe_auth import (
     all_account_auths_with_meta,
     probe_request_headers,
@@ -65,6 +66,28 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
     )
 
 
+def _g35_needs_review(
+    robots_stats: dict[str, Any],
+    anon_stats: dict[str, Any],
+    auth_pages: dict[str, Any] | None,
+) -> tuple[bool, list[str]]:
+    """Mirror UI issue summary — inventory findings that need human review."""
+    parts: list[str] = []
+    robots_missing = int(robots_stats.get("robots_missing") or 0)
+    robots_unreachable = int(robots_stats.get("robots_unreachable") or 0)
+    if robots_missing:
+        parts.append(f"robots.txt missing {robots_missing}")
+    if robots_unreachable:
+        parts.append(f"robots.txt unreachable {robots_unreachable}")
+    anon_no_directive = int(anon_stats.get("without_robots_directive") or 0)
+    if anon_no_directive:
+        parts.append(f"anon pages without noindex/nofollow {anon_no_directive}")
+    auth_no_directive = int((auth_pages or {}).get("without_robots_directive") or 0)
+    if auth_no_directive:
+        parts.append(f"auth pages without noindex/nofollow {auth_no_directive}")
+    return bool(parts), parts
+
+
 def run_g35_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     _ = module_dir
     opts = _scan_options(ctx.raw_config)
@@ -90,7 +113,10 @@ def run_g35_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         extra_paths=opts.extra_paths,
     )
 
-    auth_sessions, _auth_meta = all_account_auths_with_meta(ctx.raw_config, data_dir=ctx.data_dir)
+    auth_sessions, _auth_meta = all_account_auths_with_meta(
+        ctx.raw_config, data_dir=ctx.data_dir, refresh=True
+    )
+    login_report = load_login_report(ctx.data_dir, ctx.raw_config)
     auth_configured = len(auth_sessions) > 0
 
     from diagnosis.progress_reporter import phase, prepare
@@ -157,8 +183,15 @@ def run_g35_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     auth_sessions_stats: list[dict[str, Any]] = []
     auth_noindex_total = 0
     for session in auth_sessions:
+        matched_targets = [
+            target
+            for target in probe_targets
+            if filter_sessions_for_probe_target(target, [session], login_report)
+        ]
+        if not matched_targets:
+            continue
         auth_findings, auth_stats = probes_mod.run_page_inventory(
-            probe_targets,
+            matched_targets,
             extract_signals_fn=rules_mod.extract_page_robots_signals,
             auth_mode=session_auth_mode(session),
             request_headers=probe_request_headers(session),
@@ -169,7 +202,7 @@ def run_g35_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             on_progress=_page_progress(session_auth_mode(session)),
         )
         findings.extend(auth_findings)
-        progress_offset += len(probe_targets)
+        progress_offset += len(matched_targets)
         auth_sessions_stats.append(
             {
                 "email": session.get("email"),
@@ -197,6 +230,13 @@ def run_g35_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     pages_n = anon_stats.get("pages_probed", 0)
     noindex_anon = anon_stats.get("with_noindex", 0)
+    auth_pages = stats.get("pages_authenticated")
+    auth_pages_dict = auth_pages if isinstance(auth_pages, dict) else None
+    needs_review, review_parts = _g35_needs_review(
+        robots_stats, anon_stats, auth_pages_dict
+    )
+    stats["review_items"] = len(review_parts)
+    stats["needs_review"] = needs_review
     stats["httpx"] = {
         "robots_probed": robots_stats.get("robots_probed", 0),
         "pages_probed": pages_n,
@@ -209,6 +249,9 @@ def run_g35_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     elif anon_stats.get("unreachable", 0) == pages_n and pages_n > 0:
         status = "error"
         message = "All page probes unreachable"
+    elif needs_review:
+        status = "warn"
+        message = f"3-5 search-engine review: {'; '.join(review_parts)} ({opts.probe_mode})"
     else:
         status = "pass"
         message = (

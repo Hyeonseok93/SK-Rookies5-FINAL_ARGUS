@@ -198,6 +198,8 @@ def run_endpoints_probes(
     passes: list[tuple[str, dict[str, str]]],
     enable: dict[str, bool],
     on_progress: Callable[..., None] | None = None,
+    auth_pool: Any | None = None,
+    build_passes: Callable[[Endpoint, list[dict[str, Any]]], list[tuple[str, dict[str, str]]]] | None = None,
 ) -> tuple[list[DiagnosisFinding], int, int]:
     """Run all endpoints × auth passes until request budget is exhausted."""
     findings: list[DiagnosisFinding] = []
@@ -209,7 +211,11 @@ def run_endpoints_probes(
         _raise_if_cancelled()
         if budget.exhausted():
             break
-        for auth_mode, auth_headers in passes:
+        current_passes = passes
+        if auth_pool is not None and build_passes is not None:
+            auth_pool.ensure_valid()
+            current_passes = build_passes(ep, auth_pool.sessions())
+        for auth_mode, auth_headers in current_passes:
             if budget.exhausted():
                 break
             batch, batch_errors = run_endpoint_probes(

@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from app.services.auth_probe_service import login_all_accounts
+from diagnosis.endpoint_auth_passes import load_login_report, primary_session_for_probe
+from diagnosis.probe_auth import all_account_auths_with_meta
 from app.services.zap_util import ZapNotAvailableError
 from diagnosis.context import DiagnosisContext
 from diagnosis.result import DiagnosisFinding
@@ -69,13 +70,18 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
     )
 
 
-def _primary_auth(raw: dict[str, Any]) -> dict[str, Any] | None:
-    auth_cfg = raw.get("auth") or {}
-    accounts = auth_cfg.get("accounts") or []
-    if not accounts:
-        return None
-    logins = login_all_accounts(auth_cfg, accounts)
-    return logins[0] if logins else None
+def _primary_auth(
+    raw: dict[str, Any],
+    *,
+    data_dir: Path | None = None,
+    base_url: str = "",
+    path: str = "/",
+) -> dict[str, Any] | None:
+    sessions, _meta = all_account_auths_with_meta(raw, data_dir=data_dir, refresh=True)
+    login_report = load_login_report(data_dir, raw)
+    if base_url:
+        return primary_session_for_probe(base_url, path, sessions, login_report)
+    return sessions[0] if sessions else None
 
 
 def _collapse_listing_findings(
@@ -204,11 +210,17 @@ def run_g72_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         try:
             zap_phase("ZAP 7-2 listing scan…")
             zap_mod = _load_local("zap_scan")
+            zap_primary = _primary_auth(
+                ctx.raw_config,
+                data_dir=ctx.data_dir,
+                base_url=str(probe_targets[0].get("base_url") or ""),
+                path=str(probe_targets[0].get("path") or "/"),
+            ) if probe_targets else _primary_auth(ctx.raw_config, data_dir=ctx.data_dir)
             zap_findings, zap_stats = zap_mod.run_zap_phase(
                 ctx.raw_config,
                 probe_targets,
                 base_urls,
-                _primary_auth(ctx.raw_config),
+                zap_primary,
                 max_minutes=opts.zap_max_minutes,
                 seed_cap=opts.zap_seed_cap,
                 priority_seed_urls=priority_seed_urls,

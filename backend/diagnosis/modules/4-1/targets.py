@@ -48,7 +48,7 @@ def load_login_report(data_dir: Path, raw_config: dict[str, Any] | None) -> dict
 def load_sessions(
     raw_config: dict[str, Any] | None, data_dir: Path | None = None
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    return all_account_auths_with_meta(raw_config, data_dir=data_dir)
+    return all_account_auths_with_meta(raw_config, data_dir=data_dir, refresh=True)
 
 
 def collect_probe_endpoints(

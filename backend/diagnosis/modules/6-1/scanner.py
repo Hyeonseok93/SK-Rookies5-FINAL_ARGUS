@@ -8,11 +8,17 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.services.zap_util import ZapNotAvailableError
+from diagnosis.auth_session_pool import DiagnosisAuthPool
 from diagnosis.context import DiagnosisContext
+from diagnosis.endpoint_auth_passes import (
+    build_probe_passes_headers_only,
+    load_login_report,
+    primary_session_for_endpoint,
+)
 from diagnosis.exceptions import DiagnosisCancelled
-from diagnosis.probe_auth import all_account_auths_with_meta, primary_account_auth, session_auth_mode
 from diagnosis.probe_transport import HttpxTransport
 from diagnosis.result import DiagnosisFinding
+from inventory.schema import Endpoint
 
 _MODULE_DIR = Path(__file__).resolve().parent
 
@@ -129,20 +135,6 @@ def _overall_status(findings: list[DiagnosisFinding]) -> str:
     return "pass"
 
 
-def _build_passes(
-    auth_sessions: list[dict[str, Any]],
-    *,
-    enable_auth_modes: bool,
-) -> list[tuple[str, dict[str, str]]]:
-    from diagnosis.probe_auth import probe_request_headers
-
-    passes: list[tuple[str, dict[str, str]]] = [("anonymous", {})]
-    if enable_auth_modes:
-        for session in auth_sessions:
-            passes.append((session_auth_mode(session), probe_request_headers(session)))
-    return passes
-
-
 def _build_scan_result(
     *,
     all_findings: list[DiagnosisFinding],
@@ -173,7 +165,10 @@ def _build_scan_result(
         "payloads": len(payloads),
         "endpoints_probed": endpoints_done,
         "auth_passes": len(passes),
+        "auth_passes_scoped": True,
         "sessions": auth_meta.get("sessions", 0),
+        "auth_source": auth_meta.get("source"),
+        "auth_refresh_count": auth_meta.get("refresh_count", 0),
         "httpx_enabled": opts.httpx_enabled,
         "requests_sent": budget.sent,
         "requests_cap": budget.max_requests if budget.max_requests > 0 else None,
@@ -255,8 +250,22 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         "header": opts.enable_header,
     }
 
-    auth_sessions, auth_meta = all_account_auths_with_meta(ctx.raw_config, data_dir=ctx.data_dir)
-    passes = _build_passes(auth_sessions, enable_auth_modes=opts.enable_auth_modes)
+    auth_pool = DiagnosisAuthPool(ctx.raw_config, data_dir=ctx.data_dir)
+    auth_meta = auth_pool.meta
+    login_report = load_login_report(ctx.data_dir, ctx.raw_config)
+
+    def _snapshot_auth_meta() -> dict[str, Any]:
+        return {**auth_pool.meta, "refresh_count": auth_pool.refresh_count}
+
+    def _passes_for_ep(ep: Endpoint, sessions: list[dict[str, Any]]) -> list[tuple[str, dict[str, str]]]:
+        return build_probe_passes_headers_only(
+            ep,
+            sessions,
+            login_report=login_report,
+            enable_auth_modes=opts.enable_auth_modes,
+        )
+
+    sample_passes = _passes_for_ep(endpoints[0], auth_pool.sessions()) if endpoints else []
 
     raw_findings: list[DiagnosisFinding] = []
     total_errors = 0
@@ -305,9 +314,11 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                     timeout=opts.timeout,
                     interval_sec=opts.interval_sec,
                     budget=budget,
-                    passes=passes,
+                    passes=sample_passes,
                     enable=enable,
                     on_progress=_probe_progress,
+                    auth_pool=auth_pool,
+                    build_passes=_passes_for_ep,
                 )
 
         collapsed, collapse_stats = probes_mod.collapse_auth_findings(raw_findings)
@@ -321,6 +332,15 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         if opts.zap_enabled:
             from diagnosis.replay.normalize import collect_probe_base_urls
 
+            auth_pool.ensure_valid()
+            zap_primary = (
+                primary_session_for_endpoint(
+                    endpoints[0], auth_pool.sessions(), login_report
+                )
+                if endpoints
+                else auth_pool.primary()
+            )
+            passes = sample_passes
             base_urls = collect_probe_base_urls(ctx.raw_config)
             try:
                 dp.update(
@@ -334,19 +354,21 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                     ctx.raw_config,
                     endpoints,
                     base_urls,
-                    primary_account_auth(ctx.raw_config, data_dir=ctx.data_dir),
+                    auth_pool.primary() if zap_primary is None else zap_primary,
                     probes_mod,
                     payloads=payloads,
-                    passes=passes,
-                    timeout=opts.timeout,
-                    interval_sec=opts.interval_sec,
-                    max_requests=opts.zap_max_requests,
-                    enable=enable,
-                    max_minutes=opts.zap_max_minutes,
-                    seed_cap=opts.zap_seed_cap,
-                    priority_seed_urls=priority_seed_urls,
-                    zap_unified_enabled=opts.zap_unified_enabled,
-                    zap_supplemental_enabled=opts.zap_supplemental_enabled,
+                passes=sample_passes,
+                timeout=opts.timeout,
+                interval_sec=opts.interval_sec,
+                max_requests=opts.zap_max_requests,
+                enable=enable,
+                max_minutes=opts.zap_max_minutes,
+                seed_cap=opts.zap_seed_cap,
+                priority_seed_urls=priority_seed_urls,
+                zap_unified_enabled=opts.zap_unified_enabled,
+                zap_supplemental_enabled=opts.zap_supplemental_enabled,
+                auth_pool=auth_pool,
+                build_passes=_passes_for_ep,
                     on_progress=_probe_progress,
                 )
                 zap_unified_count = int(zap_stats.get("unified_findings") or 0)
@@ -368,8 +390,8 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                         zap_unified_count=zap_unified_count,
                         zap_native_count=zap_native_count,
                         zap_stats=zap_stats,
-                        passes=passes,
-                        auth_meta=auth_meta,
+                        passes=sample_passes,
+                        auth_meta=_snapshot_auth_meta(),
                         payloads=payloads,
                         cancelled=True,
                     )
@@ -397,8 +419,8 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             zap_unified_count=zap_unified_count,
             zap_native_count=zap_native_count,
             zap_stats=zap_stats,
-            passes=passes,
-            auth_meta=auth_meta,
+            passes=sample_passes,
+            auth_meta=_snapshot_auth_meta(),
             payloads=payloads,
             cancelled=True,
         )
@@ -417,8 +439,8 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         zap_unified_count=zap_unified_count,
         zap_native_count=zap_native_count,
         zap_stats=zap_stats,
-        passes=passes,
-        auth_meta=auth_meta,
+        passes=sample_passes,
+        auth_meta=_snapshot_auth_meta(),
         payloads=payloads,
         cancelled=False,
     )

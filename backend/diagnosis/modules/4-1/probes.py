@@ -58,7 +58,10 @@ def run_cross_cookie_probes(
     timeout: float = 8.0,
     max_pairs_per_endpoint: int = 12,
     on_progress: Callable[..., None] | None = None,
+    login_report: dict[str, Any] | None = None,
 ) -> tuple[list[Any], dict[str, Any]]:
+    from diagnosis.endpoint_auth_passes import filter_sessions_for_endpoint
+
     findings: list[Any] = []
     stats: dict[str, Any] = {
         "endpoints": len(endpoints),
@@ -78,10 +81,12 @@ def run_cross_cookie_probes(
         stats["skipped"] = "need_at_least_two_sessions"
         return findings, stats
 
-    pairs = cross_session_pairs_fn(sessions)
-
     with httpx.Client() as client:
         for ep_idx, ep in enumerate(endpoints, 1):
+            ep_sessions = filter_sessions_for_endpoint(ep, sessions, login_report)
+            if len(ep_sessions) < 2:
+                continue
+            pairs = cross_session_pairs_fn(ep_sessions)
             if on_progress:
                 on_progress(
                     endpoints_done=ep_idx,
@@ -181,7 +186,10 @@ def run_tamper_probes(
     max_variants_per_session: int = 24,
     partial_cross_tamper: bool = True,
     on_progress: Callable[..., None] | None = None,
+    login_report: dict[str, Any] | None = None,
 ) -> tuple[list[Any], dict[str, Any]]:
+    from diagnosis.endpoint_auth_passes import filter_sessions_for_endpoint
+
     findings: list[Any] = []
     stats: dict[str, Any] = {
         "endpoints": min(len(endpoints), max_endpoints),
@@ -208,8 +216,11 @@ def run_tamper_probes(
                     endpoints_total=len(tamper_eps),
                     endpoint_id=(ep.path or ep.id or "")[:80],
                 )
+            ep_sessions = filter_sessions_for_endpoint(ep, sessions, login_report)
+            if not ep_sessions:
+                continue
             for profile in auth_profiles:
-                for session in sessions[:6]:
+                for session in ep_sessions[:6]:
                     owner_auth = {**session, "_auth_profile": profile}
                     owner_status, url, _, owner_err = _probe(client, ep, owner_auth, timeout=timeout)
                     stats["probed"] += 1

@@ -55,6 +55,7 @@ def run_robots_inventory(
         "robots_probed": 0,
         "robots_present": 0,
         "robots_missing": 0,
+        "robots_unreachable": 0,
         "disallow_rules_total": 0,
     }
 
@@ -72,6 +73,7 @@ def run_robots_inventory(
             status, body, _ct, _xr, err = _fetch(client, url, timeout=timeout)
 
             if err:
+                stats["robots_unreachable"] += 1
                 findings.append(
                     DiagnosisFinding(
                         severity="info",

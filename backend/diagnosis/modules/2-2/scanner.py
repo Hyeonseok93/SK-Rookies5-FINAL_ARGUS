@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from app.services.zap_util import ZapNotAvailableError
+from diagnosis.auth_session_pool import DiagnosisAuthPool
+from diagnosis.endpoint_auth_passes import load_login_report
 from diagnosis.context import DiagnosisContext
 from diagnosis.paths import section_evidence_dir
 from diagnosis.replay.normalize import collect_probe_base_urls, filter_endpoints_by_probe_bases
-from diagnosis.probe_auth import all_account_auths
 from diagnosis.replay.recorder import ReplaySession
 from diagnosis.result import DiagnosisFinding
 from inventory.schema import ApiTree, Endpoint
@@ -146,11 +147,14 @@ def run_g22_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     prepare(len(candidates), f"2-2: {len(candidates)} candidate(s)")
 
+    auth_pool: DiagnosisAuthPool | None = None
     auth = None
     account_auths: list[dict[str, Any]] = []
     if opts.httpx_enabled or opts.zap_enabled or opts.unauth_probe_enabled or opts.idor_probe_enabled:
-        account_auths = all_account_auths(raw, data_dir=ctx.data_dir)
-        auth = account_auths[0] if account_auths else None
+        auth_pool = DiagnosisAuthPool(raw, data_dir=ctx.data_dir)
+        account_auths = auth_pool.sessions()
+        auth = auth_pool.primary()
+    login_report = load_login_report(ctx.data_dir, raw)
     base_urls = collect_probe_base_urls(raw)
     if not base_urls:
         base_urls = sorted({ep.base_url.rstrip("/") for ep in candidates if ep.base_url})
@@ -184,6 +188,8 @@ def run_g22_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                 idor_probe_enabled=opts.idor_probe_enabled,
                 idor_seeds=(raw.get("diagnosis_2_2") or raw.get("scan_2_2") or {}).get("idor_seeds"),
                 replay_session=replay_session,
+                auth_pool=auth_pool,
+                login_report=login_report,
                 on_progress=endpoint_progress(
                     total=len(candidates), phase_name="httpx", prefix="httpx "
                 ),
@@ -195,6 +201,10 @@ def run_g22_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     zap_ran = False
     if opts.zap_enabled and candidates:
         try:
+            if auth_pool:
+                auth_pool.ensure_valid()
+                auth = auth_pool.primary()
+                account_auths = auth_pool.sessions()
             zap_phase("ZAP 2-2 traversal scan…")
             zf, zap_stats = _zap.run_zap_phase(
                 raw,
@@ -221,6 +231,9 @@ def run_g22_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     findings = design_findings + httpx_findings + zap_findings
     stats["httpx_findings"] = len(httpx_findings)
     stats["zap_findings"] = len(zap_findings)
+    if auth_pool:
+        stats["auth_refresh_count"] = auth_pool.refresh_count
+        stats["auth_source"] = auth_pool.meta.get("source")
 
     high = sum(1 for f in findings if f.severity == "high")
     medium = sum(1 for f in findings if f.severity == "medium")

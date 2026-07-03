@@ -198,6 +198,9 @@ def run_zap_phase(
     zap_unified_enabled: bool = True,
     zap_supplemental_enabled: bool = True,
     on_progress: Callable[..., None] | None = None,
+    auth_pool: Any | None = None,
+    build_passes: Callable[[Endpoint, list[dict[str, Any]]], list[tuple[str, dict[str, str]]]]
+    | None = None,
 ) -> tuple[list[DiagnosisFinding], dict[str, Any]]:
     """
     ZAP phase — unified ARGUS param/body/path fuzz via ZapTransport (2-2 pattern),
@@ -239,6 +242,8 @@ def run_zap_phase(
                 passes=passes,
                 enable=enable,
                 on_progress=on_progress,
+                auth_pool=auth_pool,
+                build_passes=build_passes,
             )
             unified_collapsed, unified_collapse_stats = probes_mod.collapse_auth_findings(raw_unified)
             unified_findings = unified_collapsed

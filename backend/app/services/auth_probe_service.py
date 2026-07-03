@@ -325,10 +325,17 @@ def probe_passes_for_endpoint(
     ep: Any,
     account_auths: list[dict[str, Any]],
     *,
+    login_report: dict[str, Any] | None = None,
     include_anonymous: bool = True,
 ) -> list[tuple[dict[str, Any] | None, str]]:
-    """All auth sessions for every endpoint — no path-based filtering."""
-    return auth_passes(account_auths, include_anonymous=include_anonymous)
+    from diagnosis.endpoint_auth_passes import probe_passes_for_endpoint as _scoped
+
+    return _scoped(
+        ep,
+        account_auths,
+        login_report=login_report,
+        include_anonymous=include_anonymous,
+    )
 
 
 def account_access_allowed(http_status: int | None) -> bool:

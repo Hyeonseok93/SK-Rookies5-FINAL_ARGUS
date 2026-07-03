@@ -1,6 +1,14 @@
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { DiagnosisSectionReport } from "../../types";
+import { G15FindingsPanel } from "./G15FindingsPanel";
+import { G22FindingsPanel } from "./G22FindingsPanel";
+import { G32FindingsPanel } from "./G32FindingsPanel";
+import { G34FindingsPanel } from "./G34FindingsPanel";
+import { G35FindingsPanel } from "./G35FindingsPanel";
+import { G36FindingsPanel } from "./G36FindingsPanel";
+import { G42FindingsPanel } from "./G42FindingsPanel";
+import { G52FindingsPanel } from "./G52FindingsPanel";
 import { G62FindingsPanel } from "./G62FindingsPanel";
 import { G71FindingsPanel } from "./G71FindingsPanel";
 import { G72FindingsPanel } from "./G72FindingsPanel";
@@ -376,6 +384,14 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const isG35Stats = statsFinding?.message === "3-5 scan statistics";
   const isG36Stats = statsFinding?.message === "3-6 scan statistics";
   const hideProbeSummary =
+    report.section_id === "1-5" ||
+    report.section_id === "2-2" ||
+    report.section_id === "3-2" ||
+    report.section_id === "3-4" ||
+    report.section_id === "3-5" ||
+    report.section_id === "3-6" ||
+    report.section_id === "4-2" ||
+    report.section_id === "5-2" ||
     report.section_id === "6-1" ||
     report.section_id === "6-2" ||
     report.section_id === "7-1" ||
@@ -952,8 +968,30 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
         </div>
       ) : null}
 
-      {findings.length === 0 ? (
+      {findings.length === 0 &&
+      report.section_id !== "1-5" &&
+      report.section_id !== "2-2" &&
+      report.section_id !== "3-2" &&
+      report.section_id !== "3-4" &&
+      report.section_id !== "3-5" &&
+      report.section_id !== "3-6" ? (
         <p className="text-xs text-cyber-muted">finding 없음</p>
+      ) : report.section_id === "1-5" ? (
+        <G15FindingsPanel findings={findings} />
+      ) : report.section_id === "2-2" ? (
+        <G22FindingsPanel findings={findings} />
+      ) : report.section_id === "3-2" ? (
+        <G32FindingsPanel findings={findings} stats={stats} />
+      ) : report.section_id === "3-4" ? (
+        <G34FindingsPanel findings={findings} stats={stats} status={report.status} />
+      ) : report.section_id === "3-5" ? (
+        <G35FindingsPanel findings={findings} stats={stats} />
+      ) : report.section_id === "3-6" ? (
+        <G36FindingsPanel findings={findings} stats={stats} status={report.status} />
+      ) : report.section_id === "4-2" ? (
+        <G42FindingsPanel findings={findings} />
+      ) : report.section_id === "5-2" ? (
+        <G52FindingsPanel findings={findings} stats={stats} />
       ) : report.section_id === "6-2" ? (
         <G62FindingsPanel findings={findings} />
       ) : report.section_id === "7-1" ? (

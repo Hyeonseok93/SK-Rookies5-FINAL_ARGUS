@@ -149,6 +149,7 @@ def run_g41_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             data_dir=ctx.data_dir,
             strict=opts.cookie_attr_strict,
             timeout=opts.timeout,
+            refresh=True,
             make_finding_fn=rules.make_cookie_attr_finding,
         )
         findings.extend(caf)
@@ -243,6 +244,7 @@ def run_g41_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             timeout=opts.timeout,
             max_pairs_per_endpoint=opts.max_pairs_per_endpoint,
             on_progress=endpoint_progress(total=len(endpoints), phase_name="httpx", prefix="cross "),
+            login_report=login_report,
         )
         findings.extend(cf)
         stats["cross_cookie"] = cstats
@@ -274,6 +276,7 @@ def run_g41_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                 phase_name="httpx",
                 prefix="tamper ",
             ),
+            login_report=login_report,
         )
         findings.extend(tf)
         stats["tamper"] = tstats

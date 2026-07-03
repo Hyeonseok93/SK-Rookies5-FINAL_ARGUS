@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from diagnosis.context import DiagnosisContext
+from diagnosis.endpoint_auth_passes import filter_sessions_for_probe_target, load_login_report
 from diagnosis.probe_auth import (
     all_account_auths_with_meta,
     probe_request_headers,
@@ -147,7 +148,10 @@ def run_g36_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             stats={"targets": 0, "probe_mode": opts.probe_mode},
         )
 
-    auth_sessions, _auth_meta = all_account_auths_with_meta(ctx.raw_config, data_dir=ctx.data_dir)
+    auth_sessions, _auth_meta = all_account_auths_with_meta(
+        ctx.raw_config, data_dir=ctx.data_dir, refresh=True
+    )
+    login_report = load_login_report(ctx.data_dir, ctx.raw_config)
     auth_configured = len(auth_sessions) > 0
 
     from diagnosis.progress_reporter import phase, prepare
@@ -189,8 +193,15 @@ def run_g36_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     auth_sessions_stats: list[dict[str, Any]] = []
     for session in auth_sessions:
+        matched_targets = [
+            target
+            for target in probe_targets
+            if filter_sessions_for_probe_target(target, [session], login_report)
+        ]
+        if not matched_targets:
+            continue
         auth_findings, auth_stats = probes_mod.run_file_probes(
-            probe_targets,
+            matched_targets,
             classify_fn=rules_mod.classify_file_response,
             remediation_fn=rules_mod.remediation_hint,
             fingerprint_fn=rules_mod._body_fingerprint,
@@ -204,7 +215,7 @@ def run_g36_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             on_progress=_file_progress(session_auth_mode(session)),
         )
         findings.extend(auth_findings)
-        progress_offset += len(probe_targets)
+        progress_offset += len(matched_targets)
         auth_sessions_stats.append(
             {
                 "email": session.get("email"),

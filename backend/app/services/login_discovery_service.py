@@ -151,7 +151,8 @@ def discover_login_entries(
         if not is_login_candidate(ep, auth_cfg):
             continue
         path_key = ep.path.split("?")[0].lower()
-        key = (ep.method.upper(), path_key)
+        origin_key = probe_base_key(ep.base_url)
+        key = (ep.method.upper(), path_key, origin_key)
         score = _base_score(ep.base_url, ep, preferred)
         prev = best_by_path.get(key)
         if prev is None or score > prev[1]:
