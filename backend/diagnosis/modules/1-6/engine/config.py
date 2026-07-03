@@ -73,6 +73,7 @@ class Config:
 
     # 출력
     OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "./output")
+    REQUEST_TEMPLATES: str = os.getenv("ARGUS_REQUEST_TEMPLATES", "")
 
     # 민감 키워드
     SENSITIVE_KEYWORDS: list = [

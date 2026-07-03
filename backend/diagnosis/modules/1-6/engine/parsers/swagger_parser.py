@@ -384,6 +384,8 @@ class SwaggerParser:
                 "path":         ep["path"],
                 "method":       ep["method"],
                 "body_schema":  body,
+                "params":       ep["params"],
+                "path_params":  list(ep["params"].get("path", {}).keys()),
                 "requires_auth": ep["requires_auth"],
                 "summary":      ep["summary"],
             })

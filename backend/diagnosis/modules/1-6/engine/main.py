@@ -135,6 +135,7 @@ def main():
     os.makedirs(run_output_dir, exist_ok=True)
     cfg.OUTPUT_BASE_DIR = output_base_dir
     cfg.OUTPUT_DIR = run_output_dir
+    cfg.REQUEST_TEMPLATES = os.path.join(run_output_dir, "request_templates.json")
     logger.info(f"[MAIN] ARGUS W-1-6 v3 started - run_id: {run_id}")
     logger.info(f"[MAIN] output dir: {cfg.OUTPUT_DIR}")
     logger.info(f"[MAIN] target: {cfg.TARGET_URL}")
@@ -256,6 +257,9 @@ def main():
                     spider_urls = zap.run_spider(cfg.TARGET_URL)
                     logger.info(f"[MAIN] Spider discovered URLs: {len(spider_urls)}")
 
+                logger.info("[MAIN] === Collect ZAP request templates ===")
+                zap.collect_request_templates(cfg.TARGET_URL, cfg.REQUEST_TEMPLATES)
+
                 logger.info("[MAIN] === Run ZAP Active Scan ===")
                 zap.run_active_scan(cfg.TARGET_URL)
             except Exception as e:
@@ -344,6 +348,7 @@ def main():
         "raw_findings": os.path.basename(raw_path),
         "summary": os.path.basename(summary_path),
         "cdp_network_log": os.path.basename(cdp_path),
+        "request_templates": os.path.basename(cfg.REQUEST_TEMPLATES),
         "screenshots": "screenshots.json",
         "screenshot_dir": "screenshots",
         "temp_progress": "temp_progress.txt",
@@ -512,7 +517,9 @@ def _annotate_findings(findings, roles):
             "potential_vulnerable",
         })
         finding.setdefault("payload_source", source)
-        finding.update(_review_finding(finding))
+        review = _review_finding(finding)
+        finding.update(review)
+        finding["report_candidate"] = bool(review.get("review_include_in_report"))
 
 
 def _extract_system_message(finding):
@@ -552,6 +559,8 @@ def _classify_finding(finding, exception_type, system_message):
     final_status = "potential_vulnerable"
     confidence = finding.get("confidence", "medium")
     vuln_type = "input_validation_exception_handling"
+    request_context = finding.get("request_context", {})
+    baseline_valid = bool(request_context.get("baseline_valid")) if isinstance(request_context, dict) else False
 
     if status_code.startswith("5"):
         evidence_flags.append("http_500")
@@ -567,7 +576,7 @@ def _classify_finding(finding, exception_type, system_message):
         final_status = "not_vulnerable"
         confidence = "low"
         noise_flags.append("frontend_static_asset")
-    elif exception_type == "HttpRequestMethodNotSupported":
+    elif exception_type in {"HttpRequestMethodNotSupported", "HttpRequestMethodNotSupportedException"}:
         final_status = "not_vulnerable"
         confidence = "medium"
         noise_flags.append("http_method_mismatch")
@@ -583,11 +592,22 @@ def _classify_finding(finding, exception_type, system_message):
         "HttpMessageNotReadableException",
         "HttpMediaTypeNotSupportedException",
     }:
-        final_status = "vulnerable"
-        confidence = "high" if status_code.startswith("5") else "medium"
+        if baseline_valid:
+            final_status = "vulnerable"
+            confidence = "high" if status_code.startswith("5") else "medium"
+        else:
+            # Baseline (normal) request for this endpoint/content-type was never
+            # confirmed to succeed, so a 4xx/5xx here is likely the scanner
+            # sending a request shape (e.g. multipart to a JSON-only endpoint)
+            # the target never supports, not a real input-handling defect.
+            final_status = "potential_vulnerable"
+            confidence = "low"
+            noise_flags.append("baseline_not_validated")
+            vuln_type = "scanner_noise_candidate"
     elif exception_type in {"NoStaticResource", "NoResourceFoundException"}:
-        final_status = "potential_vulnerable"
+        final_status = "not_vulnerable"
         confidence = "medium" if status_code.startswith("5") else "low"
+        noise_flags.append("no_static_resource")
     elif status_code.startswith("5"):
         final_status = "potential_vulnerable"
     elif status_code.startswith("4"):
@@ -615,6 +635,8 @@ def _review_finding(finding):
     source = finding.get("source", "")
     evidence_reason = finding.get("evidence_reason", "")
     classification = finding.get("classification", {})
+    request_context = finding.get("request_context", {}) if isinstance(finding.get("request_context"), dict) else {}
+    baseline_valid = bool(request_context.get("baseline_valid"))
 
     tags = []
     bucket = "manual_review"
@@ -622,6 +644,17 @@ def _review_finding(finding):
     priority = "C"
     reason = "Needs manual validation before it is used as report evidence."
     report_group = "manual_review"
+
+    if classification.get("final_status") == "not_vulnerable":
+        return {
+            "review_bucket": "noise",
+            "review_action": "exclude_from_report",
+            "review_priority": "EXCLUDE",
+            "review_reason": f"Automatic classifier marked this as not vulnerable: {', '.join(classification.get('noise_flags', []))}",
+            "review_tags": classification.get("noise_flags", []) + ["not_vulnerable"],
+            "review_group": "not_vulnerable_noise",
+            "review_include_in_report": False,
+        }
 
     has_unresolved_placeholder = "{" in url or "}" in url or "%7B" in url.upper() or "%7D" in url.upper()
     exploratory_paths = (
@@ -681,15 +714,23 @@ def _review_finding(finding):
         report_group = "timeout_dos_candidate"
     elif status_code.startswith("5"):
         tags.append("server_error")
-        bucket = "report_candidate"
-        action = "reproduce_then_report"
-        priority = "B"
-        reason = "Server returned 5xx for malformed input; validate reproducibility before reporting."
         report_group = "input_validation_exception_handling"
-        if "/api/projects" in url:
+        if baseline_valid:
+            tags.append("baseline_validated")
+            bucket = "report_candidate"
+            action = "reproduce_then_report"
+            priority = "A"
+            reason = "Normalized baseline request completed below 5xx, then the same request shape returned 5xx after one injected payload."
+        else:
+            tags.append("baseline_not_validated")
+            bucket = "manual_review"
+            action = "review_before_report"
+            priority = "C"
+            reason = "Server returned 5xx, but this finding was not backed by a successful normalized baseline request."
+        if "/api/projects" in url and baseline_valid:
             priority = "A"
             report_group = "project_api_5xx_dos_candidate"
-        elif "/api/auth/" in url:
+        elif "/api/auth/" in url and baseline_valid:
             priority = "A"
             report_group = "auth_api_5xx_candidate"
         elif "/api/users/me" in url:

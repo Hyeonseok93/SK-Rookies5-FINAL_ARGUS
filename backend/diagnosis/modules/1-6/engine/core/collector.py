@@ -334,6 +334,15 @@ def _root_cause_signature(finding: dict) -> str:
     for pattern in patterns:
         if pattern in snippet or pattern in status.lower():
             return pattern
+
+    # 알려진 예외 패턴이 응답에 없는 5xx는 payload 이름으로 원인을 나누지 않는다.
+    # 같은 endpoint에 서로 다른 payload(null/NaN/SQL 문자열/undefined 등)를 보내도
+    # 전부 "그 endpoint가 잘못된 입력을 처리하지 못한다"는 동일한 코드 버그이므로,
+    # endpoint(정규화된 URL) 단위로 하나의 근본원인으로 묶는다.
+    if status.startswith("5"):
+        endpoint = _normalize_url_for_grouping(finding.get("url", ""))
+        return f"unhandled_5xx_no_input_validation::{endpoint}"
+
     payload = finding.get("payload_name", "")
     return re.sub(r"(_\d+k|_\d+kb|_\d+|_[a-f0-9]{8,})$", "", payload.lower())
 

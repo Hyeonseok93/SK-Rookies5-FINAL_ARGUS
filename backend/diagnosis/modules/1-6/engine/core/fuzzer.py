@@ -19,8 +19,10 @@ import json
 import logging
 import threading
 import time
+import copy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
+from urllib.parse import urlparse
 import requests
 import uuid
 
@@ -63,7 +65,10 @@ class MassiveDataFuzzer:
         self._request_lock = threading.Lock()
         self._endpoint_failures: dict = {}
         self._endpoint_blocked_until: dict = {}
+        self._baseline_cache: dict = {}
+        self._baseline_lock = threading.Lock()
         self._stop_event = threading.Event()
+        self._request_templates = self._load_request_templates()
         # 초기 토큰 로드
         if role_manager:
             try:
@@ -73,6 +78,66 @@ class MassiveDataFuzzer:
                         self._current_tokens[r] = base.headers["Authorization"]
             except Exception:
                 pass
+
+    def _load_request_templates(self) -> dict:
+        path = getattr(self.cfg, "REQUEST_TEMPLATES", "") or ""
+        if not path or not os.path.exists(path):
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception as e:
+            logger.warning(f"[Fuzzer] request template load failed: {e}")
+            return {}
+        templates = raw.get("templates", raw if isinstance(raw, list) else [])
+        indexed = {}
+        for item in templates:
+            if not isinstance(item, dict):
+                continue
+            method = str(item.get("method") or "GET").lower()
+            path_key = self._path_key(item.get("path") or item.get("url") or "")
+            if path_key:
+                indexed[(method, path_key)] = item
+        logger.info(f"[Fuzzer] request templates loaded: {len(indexed)}")
+        return indexed
+
+    def _path_key(self, url_or_path: str) -> str:
+        text = str(url_or_path or "")
+        if not text:
+            return ""
+        if text.startswith("http://") or text.startswith("https://"):
+            return urlparse(text).path or "/"
+        return text.split("?", 1)[0] or "/"
+
+    def _template_for(self, url: str, method: str) -> dict:
+        return self._request_templates.get((str(method or "get").lower(), self._path_key(url)), {})
+
+    def _template_query(self, url: str, method: str) -> dict:
+        template = self._template_for(url, method)
+        query = template.get("query")
+        return dict(query) if isinstance(query, dict) else {}
+
+    def _template_body(self, url: str, method: str):
+        template = self._template_for(url, method)
+        body = template.get("body")
+        if isinstance(body, (dict, list)):
+            return copy.deepcopy(body)
+        return None
+
+    def _request_snapshot(self, url: str, method: str, headers: dict = None,
+                          query_params: dict = None, json_body=None, raw_data: bytes = None) -> dict:
+        snapshot = {
+            "method": str(method or "get").upper(),
+            "url": url,
+            "headers": dict(headers or {}),
+        }
+        if query_params:
+            snapshot["query"] = copy.deepcopy(query_params)
+        if json_body is not None:
+            snapshot["json"] = copy.deepcopy(json_body)
+        elif raw_data is not None:
+            snapshot["body_text"] = raw_data[:4000].decode("utf-8", errors="replace")
+        return snapshot
 
     # -------------------------------------------------------------------------
     # 메인 실행
@@ -219,7 +284,8 @@ class MassiveDataFuzzer:
                 if not target_info.get("requires_auth", True) and role != roles[0]:
                     continue
 
-                base_url = f"{target.rstrip('/')}{path}"
+                normal_path = self._normal_path(path, params_schema) if ("{" in path or "}" in path) else path
+                base_url = f"{target.rstrip('/')}{normal_path}"
 
                 for chunk in chunks:
                     if scheduling_limit_hit:
@@ -316,10 +382,10 @@ class MassiveDataFuzzer:
             ptype = payload.get("type", "")
 
             if vector == "query":
-                self._fuzz_query_params(url, method, payload, session, role, params_schema)
+                self._fuzz_query_params(url, method, payload, session, role, params_schema, body_schema)
 
             elif vector == "path":
-                self._fuzz_path_params(path, payload, session, role, base_target)
+                self._fuzz_path_params(path, method, payload, session, role, base_target, params_schema, body_schema)
 
             elif vector == "header":
                 self._fuzz_headers(url, method, payload, session, role)
@@ -346,10 +412,91 @@ class MassiveDataFuzzer:
             logger.debug(f"[Fuzzer] 예외: {payload.get('name')} ─ {e}")
 
     # =========================================================================
-    # GET 쿼리 파라미터 퍼징
+    # Swagger-aware request normalization
+    # =========================================================================
+    def _method_supports_body(self, method: str) -> bool:
+        return str(method or "get").lower() not in ("get", "delete", "head", "options")
+
+    def _sample_value(self, field_name: str = "", field_type: str = "string"):
+        name = str(field_name or "").lower()
+        ftype = str(field_type or "string").lower()
+
+        if "email" in name:
+            return "test@example.com"
+        if "date" in name and "time" not in name:
+            return "2026-07-03"
+        if "time" in name:
+            return "2026-07-03T00:00:00"
+        if "phone" in name or "tel" in name:
+            return "01012345678"
+        if "url" in name or "uri" in name:
+            return "http://localhost"
+        if "id" in name or ftype in ("integer", "int", "long"):
+            return 1
+        if ftype in ("number", "float", "double"):
+            return 1.0
+        if ftype == "boolean":
+            return True
+        if ftype == "array":
+            return ["test"]
+        if ftype == "object":
+            return {}
+        return "test"
+
+    def _normal_query(self, params_schema: dict) -> dict:
+        query_params = params_schema.get("query", {}) if params_schema else {}
+        return {name: self._sample_value(name, ftype) for name, ftype in query_params.items()}
+
+    def _normal_body(self, body_schema: dict):
+        if not body_schema:
+            return None
+        return {name: self._sample_value(name, ftype) for name, ftype in body_schema.items()}
+
+    def _normal_path(self, path: str, params_schema: dict) -> str:
+        import re
+        path_params = params_schema.get("path", {}) if params_schema else {}
+        normalized = path
+        for name in re.findall(r'\{(\w+)\}', path):
+            normalized = normalized.replace(f"{{{name}}}", str(self._sample_value(name, path_params.get(name, "string"))))
+        return normalized
+
+    def _baseline_ok(self, url: str, method: str, session: requests.Session, role: str,
+                     params_schema: dict = None, body_schema: dict = None) -> bool:
+        method_name = str(method or "get").lower()
+        key = (role, method_name, self._endpoint_key_from_url(url))
+        with self._baseline_lock:
+            if key in self._baseline_cache:
+                return self._baseline_cache[key]
+
+        template_query = self._template_query(url, method_name)
+        kwargs = {
+            "query_params": template_query or self._normal_query(params_schema or {}),
+            "payload_name": "__baseline__",
+            "session": session,
+            "role": role,
+            "source": "baseline",
+            "record_finding": False,
+            "write_progress": False,
+            "return_response": True,
+        }
+        normal_body = self._template_body(url, method_name)
+        if normal_body is None:
+            normal_body = self._normal_body(body_schema or {})
+        if normal_body is not None and self._method_supports_body(method_name):
+            kwargs["json_body"] = normal_body
+
+        resp = self._do_request(url, method_name, **kwargs)
+        ok = bool(resp is not None and int(getattr(resp, "status_code", 0)) < 500)
+        with self._baseline_lock:
+            self._baseline_cache[key] = ok
+        return ok
+
+    # =========================================================================
+    # Query parameter fuzzing
     # =========================================================================
     def _fuzz_query_params(self, url: str, method: str, payload: dict,
-                           session: requests.Session, role: str, params_schema: dict):
+                           session: requests.Session, role: str, params_schema: dict,
+                           body_schema: dict = None):
         value = payload.get("value", payload.get("body", ""))
         param_name_hint = payload.get("param_name")
 
@@ -366,38 +513,66 @@ class MassiveDataFuzzer:
                 "username", "password", "email", "phone",
             ]
 
+        if not self._baseline_ok(url, method, session, role, params_schema, body_schema):
+            return
+
         for param_name in param_names[:1]:
-            params = {param_name: str(value)}
-            self._do_request(url, "get", query_params=params,
+            params = self._template_query(url, method) or self._normal_query(params_schema or {})
+            params[param_name] = str(value)
+            kwargs = {"query_params": params}
+            normal_body = self._template_body(url, method)
+            if normal_body is None:
+                normal_body = self._normal_body(body_schema or {})
+            if normal_body is not None and self._method_supports_body(method):
+                kwargs["json_body"] = normal_body
+            self._do_request(url, method or "get",
                              payload_name=payload.get("name", ""),
                              session=session, role=role,
                              source=payload.get("source", ""),
                              kisa_code=payload.get("kisa_code", ""),
-                             attack_vector=payload.get("attack_vector", ""))
+                             attack_vector=payload.get("attack_vector", ""),
+                             baseline_valid=True,
+                             **kwargs)
 
     # =========================================================================
-    # URL 경로 파라미터 퍼징
+    # Path parameter fuzzing
     # =========================================================================
-    def _fuzz_path_params(self, path: str, payload: dict,
-                          session: requests.Session, role: str, base_target: str):
+    def _fuzz_path_params(self, path: str, method: str, payload: dict,
+                          session: requests.Session, role: str, base_target: str,
+                          params_schema: dict = None, body_schema: dict = None):
         import re
         value = payload.get("value", payload.get("body", ""))
+
+        normal_path = self._normal_path(path, params_schema or {})
+        baseline_url = f"{base_target.rstrip('/')}{normal_path}"
+        if not self._baseline_ok(baseline_url, method, session, role, params_schema, body_schema):
+            return
 
         placeholders = re.findall(r'\{(\w+)\}', path)
         if not placeholders:
             test_url = f"{base_target.rstrip('/')}{path}/{value}"
         else:
             test_path = path
-            for ph in placeholders:
-                test_path = test_path.replace(f"{{{ph}}}", str(value))
+            path_params = params_schema.get("path", {}) if params_schema else {}
+            for idx, ph in enumerate(placeholders):
+                replacement = value if idx == 0 else self._sample_value(ph, path_params.get(ph, "string"))
+                test_path = test_path.replace(f"{{{ph}}}", str(replacement))
             test_url = f"{base_target.rstrip('/')}{test_path}"
 
-        self._do_request(test_url, "get",
+        kwargs = {"query_params": self._template_query(baseline_url, method) or self._normal_query(params_schema or {})}
+        normal_body = self._template_body(baseline_url, method)
+        if normal_body is None:
+            normal_body = self._normal_body(body_schema or {})
+        if normal_body is not None and self._method_supports_body(method):
+            kwargs["json_body"] = normal_body
+        self._do_request(test_url, method or "get",
                          payload_name=payload.get("name", ""),
                          session=session, role=role,
                          source=payload.get("source", ""),
                          kisa_code=payload.get("kisa_code", ""),
-                         attack_vector=payload.get("attack_vector", ""))
+                         attack_vector=payload.get("attack_vector", ""),
+                         baseline_valid=True,
+                         **kwargs)
 
     # =========================================================================
     # HTTP 헤더 퍼징
@@ -487,18 +662,21 @@ class MassiveDataFuzzer:
         p_body = payload.get("body", payload.get("value", ""))
         p_name = payload.get("name", "")
 
+        if not self._baseline_ok(url, method, session, role, {}, body_schema or {}):
+            return
+
         if body_schema:
-            dynamic_body = {}
-            for field, ftype in body_schema.items():
-                if ftype == "integer" and isinstance(p_body, (int, float)):
-                    dynamic_body[field] = p_body
-                elif ftype == "string":
-                    dynamic_body[field] = str(p_body) if not isinstance(p_body, str) else p_body
-                elif ftype in ("object", "array"):
-                    dynamic_body[field] = p_body
-                else:
-                    dynamic_body[field] = p_body
-            send_body = dynamic_body
+            send_body = self._template_body(url, method) or self._normal_body(body_schema) or {}
+            target_field = payload.get("field_name") or next(iter(body_schema.keys()), "data")
+            ftype = body_schema.get(target_field, "string")
+            if ftype == "integer" and isinstance(p_body, (int, float)):
+                send_body[target_field] = p_body
+            elif ftype == "string":
+                send_body[target_field] = str(p_body) if not isinstance(p_body, str) else p_body
+            elif ftype in ("object", "array"):
+                send_body[target_field] = p_body
+            else:
+                send_body[target_field] = p_body
         else:
             if isinstance(p_body, (dict, list)):
                 send_body = p_body
@@ -508,7 +686,9 @@ class MassiveDataFuzzer:
         self._do_request(url, method, json_body=send_body,
                          payload_name=p_name, session=session, role=role,
                          source=payload.get("source", ""),
-                         kisa_code=payload.get("kisa_code", ""))
+                         kisa_code=payload.get("kisa_code", ""),
+                         attack_vector=payload.get("attack_vector", "body"),
+                         baseline_valid=True)
 
     def _send_raw(self, url: str, method: str, payload: dict,
                   session: requests.Session, role: str):
@@ -604,7 +784,10 @@ class MassiveDataFuzzer:
                     source: str = "",
                     kisa_code: str = "",
                     attack_vector: str = "",
-                    return_response: bool = False):
+                    return_response: bool = False,
+                    record_finding: bool = True,
+                    write_progress: bool = True,
+                    baseline_valid: bool = False):
         if not self._reserve_request(url):
             return None
 
@@ -644,11 +827,32 @@ class MassiveDataFuzzer:
                 with self._auth_lock:
                     self._auth_error_counts[role] = 0
 
-            if self._judge_vulnerable(resp, elapsed, kisa_code, url):
-                self._record(url, payload_name, resp, elapsed, role, source, kisa_code, attack_vector)
+            request_snapshot = self._request_snapshot(
+                url,
+                method,
+                headers=headers,
+                query_params=query_params,
+                json_body=json_body,
+                raw_data=raw_data,
+            )
+            if record_finding and self._judge_vulnerable(resp, elapsed, kisa_code, url):
+                self._record(
+                    url,
+                    payload_name,
+                    resp,
+                    elapsed,
+                    role,
+                    source,
+                    kisa_code,
+                    attack_vector,
+                    baseline_valid,
+                    method=method,
+                    request_snapshot=request_snapshot,
+                )
 
             # 진행도 기록 (Task Resume용)
-            self._write_progress_key()
+            if write_progress:
+                self._write_progress_key()
 
             if return_response:
                 return resp
@@ -656,15 +860,19 @@ class MassiveDataFuzzer:
         except requests.exceptions.Timeout:
             elapsed = time.time() - start
             self._note_request_result(url, "TIMEOUT", failed=True)
-            self._record_timeout(url, payload_name, elapsed, role, source, kisa_code, attack_vector)
-            self._write_progress_key()
+            if record_finding:
+                self._record_timeout(url, payload_name, elapsed, role, source, kisa_code, attack_vector, baseline_valid)
+            if write_progress:
+                self._write_progress_key()
         except requests.exceptions.RequestException as e:
             logger.debug(f"[Fuzzer] request failed: {e}")
             self._note_request_result(url, None, failed=True)
-            self._write_progress_key()
+            if write_progress:
+                self._write_progress_key()
         except Exception as e:
             logger.debug(f"[Fuzzer] request handling failed: {e}")
-            self._write_progress_key()
+            if write_progress:
+                self._write_progress_key()
 
         return None
 
@@ -823,7 +1031,8 @@ class MassiveDataFuzzer:
     # =========================================================================
     def _record(self, url: str, payload_name: str, resp,
                 elapsed: float, role: str, source: str = "", kisa_code: str = "",
-                attack_vector: str = ""):
+                attack_vector: str = "", baseline_valid: bool = False,
+                method: str = "", request_snapshot: dict = None):
         body_lower = resp.text.lower()
         has_sensitive = self._has_real_sensitive_leak(body_lower)
 
@@ -845,7 +1054,9 @@ class MassiveDataFuzzer:
             "kisa_code": kisa_code,
             "attack_vector": attack_vector,
             "role": role,
+            "method": str(method or "").upper(),
             "url": url,
+            "request": request_snapshot or {},
             "payload_name": payload_name,
             "status_code": resp.status_code,
             "elapsed_sec": round(elapsed, 3),
@@ -853,6 +1064,12 @@ class MassiveDataFuzzer:
             "response_size_bytes": len(resp.content),
             "response_text_snippet": resp.text[:500],
             "response_json": response_json,
+            "request_context": {
+                "baseline_valid": bool(baseline_valid),
+                "method_preserved": True,
+                "normal_values_filled": bool(baseline_valid),
+                "zap_template_used": bool(self._template_for(url, method)),
+            },
         }
 
         with self._findings_lock:
@@ -894,7 +1111,7 @@ class MassiveDataFuzzer:
 
     def _record_timeout(self, url: str, payload_name: str, elapsed: float,
                         role: str, source: str = "", kisa_code: str = "",
-                        attack_vector: str = ""):
+                        attack_vector: str = "", baseline_valid: bool = False):
         finding = {
             "id": str(uuid.uuid4()),
             "source": source,
@@ -910,6 +1127,11 @@ class MassiveDataFuzzer:
             "response_size_bytes": 0,
             "response_text_snippet": "",
             "response_json": None,
+            "request_context": {
+                "baseline_valid": bool(baseline_valid),
+                "method_preserved": True,
+                "normal_values_filled": bool(baseline_valid),
+            },
         }
 
         with self._findings_lock:
@@ -922,3 +1144,12 @@ class MassiveDataFuzzer:
                     f.write(json.dumps(finding, ensure_ascii=False) + "\n")
             except Exception as e:
                 logger.error(f"[Fuzzer] 임시 결과 저장 실패: {e}")
+
+
+
+
+
+
+
+
+
