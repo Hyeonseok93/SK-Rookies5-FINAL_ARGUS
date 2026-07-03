@@ -238,6 +238,7 @@ def run_g72_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             f"Directory listing: {collapsed} unique issue(s) from {probed} probe(s) "
             f"({opts.probe_mode})"
         )
+    stats.pop("unreachable", None)
     if stats.get("inventory_fallback"):
         message += " — api-tree missing, wordlist only"
     if not zap_ran and opts.zap_enabled:

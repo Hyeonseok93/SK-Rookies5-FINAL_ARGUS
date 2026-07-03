@@ -89,6 +89,46 @@ export function fetchDiagnosisProgress(): Promise<DiagnosisProgressResponse> {
   return request("/diagnosis/progress");
 }
 
+export function cancelDiagnosisRun(): Promise<{ ok: boolean; section_id: string }> {
+  return request("/diagnosis/cancel", { method: "POST" });
+}
+
+const DEFAULT_DIAGNOSIS_WAIT_MS = 5 * 60 * 60 * 1000;
+
+export async function waitForDiagnosisComplete(
+  sectionId: string,
+  options?: {
+    onProgress?: (progress: DiagnosisProgressResponse) => void;
+    pollMs?: number;
+    timeoutMs?: number;
+  },
+): Promise<void> {
+  const pollMs = options?.pollMs ?? 1200;
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_DIAGNOSIS_WAIT_MS;
+  const started = Date.now();
+
+  while (Date.now() - started < timeoutMs) {
+    const progress = await fetchDiagnosisProgress();
+    options?.onProgress?.(progress);
+
+    if (progress.section_id === sectionId || progress.running) {
+      if (!progress.running && progress.phase === "done" && progress.section_id === sectionId) {
+        return;
+      }
+      if (!progress.running && progress.phase === "cancelled" && progress.section_id === sectionId) {
+        return;
+      }
+      if (!progress.running && progress.phase === "error") {
+        throw new Error(progress.message || `${sectionId} diagnosis failed`);
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+
+  throw new Error(`${sectionId} diagnosis timed out waiting for completion`);
+}
+
 export function fetchVerifyReport(params: {
   outcome?: "final" | "discovered" | "rejected";
   q?: string;

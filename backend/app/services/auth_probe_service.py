@@ -261,12 +261,18 @@ def build_login_entry_report(
     sessions: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Summarize which accounts succeed on which login entry points."""
+    from diagnosis.replay.normalize import canonical_login_url
+
     entries = configured_login_entries(auth_cfg)
-    entry_urls = [e["url"] for e in entries]
+    entry_urls: list[str] = []
+    for e in entries:
+        canon = canonical_login_url(str(e.get("url") or ""))
+        if canon and canon not in entry_urls:
+            entry_urls.append(canon)
     ok_by_email: dict[str, list[str]] = {}
     for session in sessions:
         email = str(session.get("email") or "")
-        url = str(session.get("login_url") or "")
+        url = canonical_login_url(str(session.get("login_url") or ""))
         if email and url:
             ok_by_email.setdefault(email, [])
             if url not in ok_by_email[email]:

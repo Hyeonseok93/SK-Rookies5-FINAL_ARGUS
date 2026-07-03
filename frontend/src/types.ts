@@ -292,7 +292,9 @@ export interface DiagnosisSectionReport {
 
 export interface DiagnosisRunSectionResponse {
   ok: boolean;
-  report: DiagnosisSectionReport;
+  accepted?: boolean;
+  async_run?: boolean;
+  report?: DiagnosisSectionReport | null;
 }
 
 export interface DiagnosisG15RunOptionsPayload {

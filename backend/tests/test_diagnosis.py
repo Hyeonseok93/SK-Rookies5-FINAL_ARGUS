@@ -8,7 +8,7 @@ from app.services import diagnosis_service
 from diagnosis.catalog import SECTIONS
 from diagnosis.registry import list_registered_ids, module_dir
 
-SHELL_ONLY_SECTIONS = frozenset({"1-1", "1-4", "1-6", "2-1"})
+SHELL_ONLY_SECTIONS = frozenset({"1-6", "2-1"})
 
 
 def test_all_modules_registered():
@@ -143,6 +143,14 @@ def test_g34_module_implemented():
     assert row["implemented"] is True
     assert row["diagnosable"] is True
     assert row["engine"] == "httpx"
+
+
+def test_g11_module_implemented():
+    mod = diagnosis_service.catalog()
+    row = next(r for r in mod if r["id"] == "1-1")
+    assert row["implemented"] is True
+    assert row["registered"] is True
+    assert row["engine"] == "httpx+zap"
 
 
 def test_g15_module_implemented():

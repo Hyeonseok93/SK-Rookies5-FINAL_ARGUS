@@ -310,7 +310,9 @@ class DiagnosisArtifactsResponse(BaseModel):
 
 class DiagnosisRunSectionResponse(BaseModel):
     ok: bool
-    report: DiagnosisSectionReportResponse
+    accepted: bool = False
+    async_run: bool = False
+    report: DiagnosisSectionReportResponse | None = None
 
 
 class DiagnosisRunAllResponse(BaseModel):

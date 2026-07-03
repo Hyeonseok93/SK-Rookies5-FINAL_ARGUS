@@ -74,18 +74,6 @@ def run_listing_probes(
 
             if err:
                 stats["unreachable"] += 1
-                findings.append(
-                    DiagnosisFinding(
-                        severity="info",
-                        message=f"[7-2] Unreachable probe target: {label}",
-                        evidence={
-                            "rule_id": "7-2-directory-listing",
-                            "url": url,
-                            "base_url": base_url,
-                            "error": err,
-                        },
-                    )
-                )
                 continue
 
             mapped_base = probe_base_fn(base_url) if probe_base_fn else base_url.rstrip("/")

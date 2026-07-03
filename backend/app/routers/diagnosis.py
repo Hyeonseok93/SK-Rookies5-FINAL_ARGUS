@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 
 from app.schemas import (
     DiagnosisCatalogModule,
@@ -50,6 +51,14 @@ def _report_to_response(report) -> DiagnosisSectionReportResponse:
             for f in report.findings
         ],
     )
+
+
+@router.post("/cancel")
+def cancel_diagnosis_run() -> dict[str, object]:
+    section_id = diagnosis_service.request_cancel_run()
+    if not section_id:
+        raise HTTPException(status_code=409, detail="No diagnosis run in progress")
+    return {"ok": True, "section_id": section_id}
 
 
 @router.get("/progress", response_model=DiagnosisProgressResponse)
@@ -123,27 +132,46 @@ def run_module(
         g34_opts = body.g34.model_dump(exclude_none=True)
     if body and body.g42 is not None:
         g42_opts = body.g42.model_dump(exclude_none=True)
-    try:
-        report = diagnosis_service.run_section(
-            section_id,
-            g12_options=g12_opts,
-            g15_options=g15_opts,
-            g41_options=g41_opts,
-            g22_options=g22_opts,
-            g71_options=g71_opts,
-            g72_options=g72_opts,
-            g73_options=g73_opts,
-            g74_options=g74_opts,
-            g52_options=g52_opts,
-            g61_options=g61_opts,
-            g62_options=g62_opts,
-            g36_options=g36_opts,
-            g35_options=g35_opts,
-            g32_options=g32_opts,
-            g34_options=g34_opts,
-            g42_options=g42_opts,
-            g16_options=g16_opts,
+    run_kwargs = dict(
+        g12_options=g12_opts,
+        g15_options=g15_opts,
+        g41_options=g41_opts,
+        g22_options=g22_opts,
+        g71_options=g71_opts,
+        g72_options=g72_opts,
+        g73_options=g73_opts,
+        g74_options=g74_opts,
+        g52_options=g52_opts,
+        g61_options=g61_opts,
+        g62_options=g62_opts,
+        g36_options=g36_opts,
+        g35_options=g35_opts,
+        g32_options=g32_opts,
+        g34_options=g34_opts,
+        g42_options=g42_opts,
+        g16_options=g16_opts,
+    )
+    if section_id == "6-1":
+        try:
+            diagnosis_service.start_section_run_background(section_id, **run_kwargs)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        payload = DiagnosisRunSectionResponse(
+            ok=True,
+            accepted=True,
+            async_run=True,
+            report=None,
         )
+        return JSONResponse(
+            status_code=202,
+            content=payload.model_dump(),
+        )
+    try:
+        report = diagnosis_service.run_section(section_id, **run_kwargs)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:

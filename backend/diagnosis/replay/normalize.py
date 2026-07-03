@@ -139,6 +139,70 @@ def _login_entry_base_url(entry: dict[str, Any]) -> str:
     return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
 
 
+def login_url_identity_key(url: str) -> tuple[str, int, str]:
+    """Logical login endpoint key — host aliases (localhost vs Docker) share one key."""
+    parsed = urlparse(str(url or "").rstrip("/"))
+    port = parsed.port
+    if port is None:
+        port = 443 if (parsed.scheme or "http") == "https" else 80
+    path = (parsed.path or "/").rstrip("/") or "/"
+    return ((parsed.scheme or "http").lower(), port, path.lower())
+
+
+def canonical_login_url(url: str) -> str:
+    """Probe-ready URL for lists/reports; rewrites localhost when ARGUS_PROBE_HOST is set."""
+    from inventory.net import probe_url
+
+    cleaned = str(url or "").strip().rstrip("/")
+    if not cleaned:
+        return ""
+    return probe_url(cleaned)
+
+
+def _login_entry_label(url: str, *, multi: bool) -> str:
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/") or "/"
+    tail = path.split("/")[-1] or "login"
+    if not multi:
+        return tail
+    host = parsed.netloc or url
+    return f"{host}·{tail}"
+
+
+def dedupe_login_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse localhost / host.docker.internal duplicates to one probe-facing URL."""
+    source_rank = {"dashboard": 0, "config": 1, "inventory": 2}
+    by_key: dict[tuple[str, int, str], dict[str, Any]] = {}
+
+    for entry in entries:
+        raw_url = str(entry.get("url") or "").strip()
+        if not raw_url:
+            continue
+        canon = canonical_login_url(raw_url)
+        key = login_url_identity_key(canon)
+        normalized = dict(entry)
+        normalized["url"] = canon
+        parsed = urlparse(canon)
+        normalized["base_url"] = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+        prev = by_key.get(key)
+        if prev is None:
+            by_key[key] = normalized
+            continue
+        if source_rank.get(str(normalized.get("source") or ""), 3) < source_rank.get(
+            str(prev.get("source") or ""), 3
+        ):
+            by_key[key] = normalized
+
+    multi = len(by_key) > 1
+    out: list[dict[str, Any]] = []
+    for item in by_key.values():
+        row = dict(item)
+        row["label"] = _login_entry_label(str(row["url"]), multi=multi)
+        out.append(row)
+    return sorted(out, key=lambda e: (source_rank.get(e.get("source", ""), 3), e.get("url", "")))
+
+
 def filter_login_entries_by_probe_bases(
     entries: list[dict[str, Any]],
     raw_config: dict[str, Any] | None,
@@ -147,11 +211,11 @@ def filter_login_entries_by_probe_bases(
     bases = collect_probe_base_urls(raw_config)
     if not bases:
         return list(entries)
-    keys = probe_base_keys(bases)
+    base_keys = {_origin_dedupe_key(b) for b in bases}
     out: list[dict[str, Any]] = []
     for entry in entries:
         base = _login_entry_base_url(entry)
-        if base and probe_base_key(base) in keys:
+        if base and _origin_dedupe_key(base) in base_keys:
             out.append(entry)
     return out
 

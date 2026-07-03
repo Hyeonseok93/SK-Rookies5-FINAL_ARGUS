@@ -52,6 +52,34 @@ def test_login_urls_skips_all_failed():
     assert urls == []
 
 
+def test_build_login_entry_report_canonicalizes_docker_probe_urls(monkeypatch):
+    monkeypatch.setenv("ARGUS_PROBE_HOST", "host.docker.internal")
+    from app.services.auth_probe_service import build_login_entry_report
+
+    monkeypatch.setattr(
+        "app.services.auth_probe_service.configured_login_entries",
+        lambda _auth_cfg: [
+            {"url": "http://localhost:8080/api/v1/auth/login", "source": "config"},
+        ],
+    )
+    report = build_login_entry_report(
+        {"login_urls": ["http://localhost:8080/api/v1/auth/login"]},
+        [{"email": "a@ex.com", "password": "p"}],
+        [
+            {
+                "email": "a@ex.com",
+                "login_url": "http://host.docker.internal:8080/api/v1/auth/login",
+                "token": "tok",
+            }
+        ],
+    )
+    row = report["accounts"][0]
+    assert row["successful_login_urls"] == [
+        "http://host.docker.internal:8080/api/v1/auth/login"
+    ]
+    assert row["failed_login_urls"] == []
+
+
 def test_login_urls_does_not_apply_stale_failures_to_new_origins():
     entries = [
         {"url": "http://api:8080/api/v1/auth/login"},
