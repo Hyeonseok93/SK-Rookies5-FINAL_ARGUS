@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import re
 import time
-from typing import Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 from urllib.parse import urlparse
 
 from zapv2 import ZAPv2
@@ -75,6 +75,7 @@ class ZapEngine:
         swagger_url: str = "",
         jwt_token: str = "",
         session_headers: Dict[str, str] | None = None,
+        on_progress: Callable[[Dict[str, Any]], None] | None = None,
     ) -> None:
         self.log("Injection scan policy init (INSANE / LOW)...")
         try:
@@ -131,15 +132,68 @@ class ZapEngine:
 
         self.log(f"Running Spider: {target_url}")
         scan_id = self.zap.spider.scan(url=target_url, maxchildren=10)
-        while int(self.zap.spider.status(scan_id)) < 100:
+        while True:
+            progress = int(self.zap.spider.status(scan_id))
+            if on_progress:
+                on_progress(
+                    {
+                        "stage": "spider",
+                        "target_url": target_url,
+                        "percent": progress,
+                        "message": f"ZAP spider {progress}% — {target_url}",
+                    }
+                )
+            if progress >= 100:
+                break
             time.sleep(1)
         time.sleep(2)
 
-    def run_active_scan(self, target_url: str, *, max_minutes: int = 30) -> List[DetectionResult]:
+    def _active_scan_snapshot(self, scan_id: str) -> Dict[str, int]:
+        snapshot: Dict[str, int] = {"progress": int(self.zap.ascan.status(scan_id))}
+        try:
+            scans = getattr(self.zap.ascan, "scans", [])
+            scans = scans() if callable(scans) else scans
+            if isinstance(scans, dict):
+                scans = scans.get("scans", [])
+            for scan in scans or []:
+                if str(scan.get("id", "")) != str(scan_id):
+                    continue
+                for source, target in (("reqCount", "requests_sent"), ("alertCount", "alert_count")):
+                    raw = scan.get(source)
+                    if raw is not None:
+                        snapshot[target] = int(raw)
+                break
+        except Exception:
+            pass
+        return snapshot
+
+    def run_active_scan(
+        self,
+        target_url: str,
+        *,
+        max_minutes: int = 30,
+        on_progress: Callable[[Dict[str, Any]], None] | None = None,
+    ) -> List[DetectionResult]:
         self.log(f"Active Scan (Injection) start: {target_url}")
         scan_id = self.zap.ascan.scan(url=target_url, recurse=True, scanpolicyname=self.policy_name)
         deadline = time.time() + max(1, max_minutes) * 60
-        while int(self.zap.ascan.status(scan_id)) < 100:
+        while True:
+            snapshot = self._active_scan_snapshot(scan_id)
+            progress = snapshot["progress"]
+            if on_progress:
+                requests_sent = snapshot.get("requests_sent", 0)
+                on_progress(
+                    {
+                        "stage": "active",
+                        "target_url": target_url,
+                        "percent": progress,
+                        "requests_sent": requests_sent,
+                        "alert_count": snapshot.get("alert_count", 0),
+                        "message": f"ZAP active {progress}% · 요청 {requests_sent:,} — {target_url}",
+                    }
+                )
+            if progress >= 100:
+                break
             if time.time() >= deadline:
                 self.log(f"Active scan deadline ({max_minutes}m) reached.")
                 break

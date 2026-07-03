@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.services.zap_util import ZapNotAvailableError, ensure_zap_proxy, probe_url
+from diagnosis.progress_reporter import zap_phase
 from diagnosis.replay.normalize import FRONTEND_PORTS, collect_probe_base_urls
 from inventory.load import find_openapi_spec
 
@@ -65,22 +66,32 @@ def run_zap_injection_phase(
 
     spec_path = find_openapi_spec(data_dir)
     swagger_url = str(spec_path.resolve()) if spec_path is not None else ""
-    primary_target = probe_url(bases[0])
-
-    engine.configure_scan(
-        target_url=primary_target,
-        swagger_url=swagger_url,
-        jwt_token=jwt_token,
-        session_headers=session_headers,
-    )
-
     all_results: list[Any] = []
     scanned_targets: list[str] = []
     per_base_minutes = max(5, int(max_minutes / max(len(bases), 1)))
+
+    def _zap_progress(update: dict[str, Any]) -> None:
+        zap_phase(
+            str(update.get("message") or "ZAP scan…"),
+            percent=int(update.get("percent") or 0),
+            requests_sent=int(update.get("requests_sent") or 0),
+        )
+
     for base in bases:
         target_url = probe_url(base.rstrip("/"))
         scanned_targets.append(target_url)
-        zap_results = engine.run_active_scan(target_url=target_url, max_minutes=per_base_minutes)
+        engine.configure_scan(
+            target_url=target_url,
+            swagger_url=swagger_url,
+            jwt_token=jwt_token,
+            session_headers=session_headers,
+            on_progress=_zap_progress,
+        )
+        zap_results = engine.run_active_scan(
+            target_url=target_url,
+            max_minutes=per_base_minutes,
+            on_progress=_zap_progress,
+        )
         all_results.extend(zap_results)
 
     deduped: list[Any] = []
