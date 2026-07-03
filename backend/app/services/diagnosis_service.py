@@ -94,6 +94,10 @@ def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
             base_g41 = dict(raw.get("diagnosis_4_1") or {})
             base_g41.update(raw_overrides["diagnosis_4_1"])
             raw = {**raw, "diagnosis_4_1": base_g41}
+        elif "diagnosis_2_1" in raw_overrides:
+            base_g21 = dict(raw.get("diagnosis_2_1") or {})
+            base_g21.update(raw_overrides["diagnosis_2_1"])
+            raw = {**raw, "diagnosis_2_1": base_g21}
         else:
             raw = {**raw, **raw_overrides}
 
@@ -156,6 +160,7 @@ def _build_overrides(
     g16_options: dict | None = None,
     g41_options: dict | None = None,
     g42_options: dict | None = None,
+    g21_options: dict | None = None,
 ) -> dict | None:
     if g22_options and section_id == "2-2":
         return {"diagnosis_2_2": {k: v for k, v in g22_options.items() if v is not None}}
@@ -191,6 +196,8 @@ def _build_overrides(
         return {"diagnosis_4_1": {k: v for k, v in g41_options.items() if v is not None}}
     if g42_options and section_id == "4-2":
         return {"diagnosis_4_2": {k: v for k, v in g42_options.items() if v is not None}}
+    if g21_options and section_id == "2-1":
+        return {"diagnosis_2_1": {k: v for k, v in g21_options.items() if v is not None}}
     return None
 
 
@@ -224,6 +231,7 @@ def _run_options_kwargs(
     g16_options: dict | None = None,
     g41_options: dict | None = None,
     g42_options: dict | None = None,
+    g21_options: dict | None = None,
 ) -> dict[str, dict | None]:
     return {
         "g22_options": g22_options,
@@ -243,6 +251,7 @@ def _run_options_kwargs(
         "g16_options": g16_options,
         "g41_options": g41_options,
         "g42_options": g42_options,
+        "g21_options": g21_options,
     }
 
 
@@ -307,6 +316,7 @@ def start_section_run_background(
     g16_options: dict | None = None,
     g41_options: dict | None = None,
     g42_options: dict | None = None,
+    g21_options: dict | None = None,
 ) -> None:
     """Start a diagnosis run on a background thread (for long scans such as 6-1)."""
     from app.services import diagnosis_progress as dp
@@ -334,6 +344,7 @@ def start_section_run_background(
         g16_options=g16_options,
         g41_options=g41_options,
         g42_options=g42_options,
+        g21_options=g21_options,
     )
     overrides = _build_overrides(section_id, **option_kwargs)
     ctx = _context(overrides)
@@ -375,6 +386,7 @@ def run_section(
     g16_options: dict | None = None,
     g41_options: dict | None = None,
     g42_options: dict | None = None,
+    g21_options: dict | None = None,
 ) -> SectionReport:
     mod = _resolve_module(section_id)
     option_kwargs = _run_options_kwargs(
@@ -395,6 +407,7 @@ def run_section(
         g16_options=g16_options,
         g41_options=g41_options,
         g42_options=g42_options,
+        g21_options=g21_options,
     )
     overrides = _build_overrides(section_id, **option_kwargs)
     ctx = _context(overrides)

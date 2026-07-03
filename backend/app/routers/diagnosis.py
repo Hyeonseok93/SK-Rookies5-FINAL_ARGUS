@@ -98,6 +98,7 @@ def run_module(
     g16_opts = None
     g41_opts = None
     g42_opts = None
+    g21_opts = None
     if body and body.g12 is not None:
         g12_opts = body.g12.model_dump(exclude_none=True)
     if body and body.g15 is not None:
@@ -132,6 +133,8 @@ def run_module(
         g34_opts = body.g34.model_dump(exclude_none=True)
     if body and body.g42 is not None:
         g42_opts = body.g42.model_dump(exclude_none=True)
+    if body and body.g21 is not None:
+        g21_opts = body.g21.model_dump(exclude_none=True)
     run_kwargs = dict(
         g12_options=g12_opts,
         g15_options=g15_opts,
@@ -150,6 +153,7 @@ def run_module(
         g34_options=g34_opts,
         g42_options=g42_opts,
         g16_options=g16_opts,
+        g21_options=g21_opts,
     )
     if section_id == "6-1":
         try:

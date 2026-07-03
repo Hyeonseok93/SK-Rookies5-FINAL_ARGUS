@@ -555,10 +555,22 @@ class DiagnosisG42RunOptions(BaseModel):
     probe_account_email: str | None = None
 
 
+class DiagnosisG21RunOptions(BaseModel):
+    """Per-run credentials for guideline 2-1 malicious file upload scan."""
+
+    seller_email: str = ""
+    seller_password: str = ""
+    seller_id: int = Field(default=0, ge=0)
+    user_email: str = ""
+    user_password: str = ""
+    timeout: float | None = Field(default=None, ge=3.0, le=60.0)
+
+
 class DiagnosisRunSectionRequest(BaseModel):
     g12: DiagnosisG12RunOptions | None = None
     g15: DiagnosisG15RunOptions | None = None
     g16: DiagnosisG16RunOptions | None = None
+    g21: DiagnosisG21RunOptions | None = None
     g41: DiagnosisG41RunOptions | None = None
     g22: DiagnosisG22RunOptions | None = None
     g32: DiagnosisG32RunOptions | None = None

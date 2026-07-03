@@ -118,6 +118,22 @@ def test_request_budget_capped():
     assert budget.exhausted()
 
 
+def test_build_url_rewrites_localhost_for_docker_probe(monkeypatch):
+    triggers = _load("triggers")
+    from inventory.schema import Endpoint
+
+    monkeypatch.setenv("ARGUS_PROBE_HOST", "host.docker.internal")
+    ep = Endpoint(
+        method="GET",
+        path="/api/v1/cars",
+        base_url="http://localhost:8080",
+        kind="api",
+    )
+    url = triggers._build_url(ep, "/api/v1/cars", {"location": "../"})
+    assert url.startswith("http://host.docker.internal:8080/")
+    assert "location=" in url
+
+
 def test_g61_module_implemented():
     from app.services import diagnosis_service
 
