@@ -122,7 +122,7 @@ def login_urls_for_account(
     entries: list[dict[str, str]],
     login_report: dict[str, Any] | None,
 ) -> list[str]:
-    """Pick login URLs to try — skip known-failed pairs when verify report exists."""
+    """성공 이력이 있으면 해당 URL을 우선하고, 실패 이력만 있으면 모두 다시 시도합니다."""
     entry_urls = [str(e.get("url") or "") for e in entries if e.get("url")]
     if not login_report:
         return entry_urls
@@ -139,14 +139,9 @@ def login_urls_for_account(
     if ok_urls:
         return ok_urls
 
-    failed = {str(u) for u in row.get("failed_login_urls") or [] if u}
-    # A previous report may refer to different origins (for example an old
-    # frontend proxy). Only suppress live login when every *current* URL is
-    # explicitly known to have failed.
-    if entry_urls and set(entry_urls).issubset(failed):
-        return []
-
-    return [u for u in entry_urls if u not in failed]
+    # 이전 실패는 일시적인 네트워크 장애나 대상 서버의 준비 지연 때문일 수 있습니다.
+    # 성공 이력이 하나도 없다면 현재 진단에서는 모든 로그인 URL을 다시 확인합니다.
+    return entry_urls
 
 
 def dedupe_account_auths(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -1,4 +1,4 @@
-"""api-tree Endpoint를 ARGUS ScanTarget으로 변환한다."""
+"""api-tree Endpoint를 ARGUS ScanTarget으로 변환"""
 from __future__ import annotations
 
 from inventory.schema import Endpoint, InputParam
@@ -15,23 +15,21 @@ _LOCATION_MAP = {
     "cookie": ParamLocation.HEADER,
 }
 
-
 def _convert_param(p: InputParam) -> ScanParam:
+    schema: dict = {"type": p.type} if p.type else {}
+    if p.format:
+        schema["format"] = p.format
     return ScanParam(
         name=p.name,
         location=_LOCATION_MAP.get(p.in_, ParamLocation.QUERY),
         required=p.required,
-        schema={"type": p.type} if p.type else None,
+        schema=schema or None,
         sample_value=p.sample,
     )
-
 
 def endpoint_to_scan_target(ep: Endpoint) -> ScanTarget:
     return ScanTarget(
         method=ep.method.upper(),
-        # Inventory stores dashboard-facing localhost URLs. Inside the backend
-        # container localhost means the ARGUS container itself, so translate
-        # it to host.docker.internal before handing targets to requests/ZAP.
         base_url=probe_url(ep.base_url.rstrip("/")),
         path=ep.path if ep.path.startswith("/") else f"/{ep.path}",
         params=[_convert_param(p) for p in ep.request_params],
@@ -40,10 +38,19 @@ def endpoint_to_scan_target(ep: Endpoint) -> ScanTarget:
         content_type="application/json",
     )
 
-
 def endpoints_to_scan_targets(endpoints: list[Endpoint]) -> list[ScanTarget]:
     seen: dict[tuple[str, str, str], ScanTarget] = {}
     for ep in endpoints:
         target = endpoint_to_scan_target(ep)
-        seen[(target.method, target.base_url, target.path)] = target
+        key = (target.method, target.base_url, target.path)
+        if key not in seen:
+            seen[key] = target
+            continue
+        existing = seen[key]
+        existing_keys = {(p.location, p.name) for p in existing.params}
+        for param in target.params:
+            param_key = (param.location, param.name)
+            if param_key not in existing_keys:
+                existing.params.append(param)
+                existing_keys.add(param_key)
     return list(seen.values())
