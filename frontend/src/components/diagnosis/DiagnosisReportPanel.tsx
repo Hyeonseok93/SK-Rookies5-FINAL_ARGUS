@@ -30,7 +30,13 @@ export function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
-function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
+function FindingEvidence({
+  evidence,
+  sectionId,
+}: {
+  evidence: Record<string, unknown>;
+  sectionId: string;
+}) {
   const rows: { label: string; value: string }[] = [];
   const add = (label: string, key: string) => {
     const v = evidence[key];
@@ -75,6 +81,12 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
   }
 
   add("Classification", "classification");
+  if (sectionId === "1-2" && evidence.rule_id === "G12_INJECTION") {
+    add("Confidence", "confidence");
+    add("ARGUS risk", "argus_risk");
+    add("Verification", "verification_status");
+    add("Reproduction", "reproduction");
+  }
   add("Trigger", "trigger_label");
   add("Trigger code", "trigger");
   add("Rule", "rule_id");
@@ -168,10 +180,76 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
   );
 }
 
+function g12EvidenceValue(evidence: Record<string, unknown>, key: string) {
+  const direct = evidence[key];
+  if (direct !== undefined && direct !== null && direct !== "") return String(direct);
+  const detail = evidence.detail as Record<string, unknown> | undefined;
+  const nested = detail?.[key];
+  return nested !== undefined && nested !== null && nested !== "" ? String(nested) : "";
+}
+
+const G12_STRONG_CLASSIFICATIONS = new Set([
+  "CONFIRMED_INJECTION_TIME_BASED",
+  "CONFIRMED_INJECTION_ERROR_PATTERN",
+]);
+
+const G12_WEAK_CLASSIFICATIONS = new Set([
+  "CONFIRMED_INJECTION_BOOLEAN_BASED",
+  "CONFIRMED_INJECTION_LOW_REPRODUCIBILITY",
+]);
+
+function g12Classification(f: { evidence?: Record<string, unknown> }) {
+  return f.evidence ? g12EvidenceValue(f.evidence, "classification") : "";
+}
+
+function isG12StrongFinding(f: { evidence?: Record<string, unknown> }) {
+  return G12_STRONG_CLASSIFICATIONS.has(g12Classification(f));
+}
+
+function isG12WeakFinding(f: { evidence?: Record<string, unknown> }) {
+  return G12_WEAK_CLASSIFICATIONS.has(g12Classification(f));
+}
+
+function G12InjectionSignalBadge({ evidence }: { evidence?: Record<string, unknown> }) {
+  if (!evidence || g12EvidenceValue(evidence, "rule_id") !== "G12_INJECTION") return null;
+
+  const classification = g12EvidenceValue(evidence, "classification");
+  const confidence = g12EvidenceValue(evidence, "confidence");
+  const argusRisk = g12EvidenceValue(evidence, "argus_risk");
+
+  if (G12_STRONG_CLASSIFICATIONS.has(classification)) {
+    return (
+      <span className="shrink-0 rounded border border-rose-400/50 bg-rose-500/10 px-1.5 py-0.5 font-mono text-[9px] uppercase text-rose-300">
+        정탐 · {confidence || argusRisk || "HIGH"}
+      </span>
+    );
+  }
+
+  if (G12_WEAK_CLASSIFICATIONS.has(classification)) {
+    return (
+      <span className="shrink-0 rounded border border-amber-400/50 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] uppercase text-amber-300">
+        약한 정탐 · {confidence || argusRisk || "MEDIUM"}
+      </span>
+    );
+  }
+
+  if (classification.startsWith("SUSPECTED") || classification === "WEAK_SERVER_ERROR_CONFIRMED_LEGACY") {
+    return (
+      <span className="shrink-0 rounded border border-sky-400/40 bg-sky-500/10 px-1.5 py-0.5 font-mono text-[9px] uppercase text-sky-300">
+        의심 · {confidence || argusRisk || "LOW"}
+      </span>
+    );
+  }
+
+  return null;
+}
+
 function FindingListItem({
   f,
+  sectionId,
 }: {
   f: { severity: string; message: string; evidence?: Record<string, unknown> };
+  sectionId: string;
 }) {
   return (
     <li className="rounded border border-cyber-border/30 bg-cyber-panel/30 px-3 py-2">
@@ -181,10 +259,11 @@ function FindingListItem({
         >
           {f.severity}
         </span>
+        {sectionId === "1-2" ? <G12InjectionSignalBadge evidence={f.evidence} /> : null}
         <span className="text-xs text-white/90">{f.message}</span>
       </div>
       {f.evidence && Object.keys(f.evidence).length > 0 ? (
-        <FindingEvidence evidence={f.evidence} />
+        <FindingEvidence evidence={f.evidence} sectionId={sectionId} />
       ) : null}
     </li>
   );
@@ -210,12 +289,14 @@ function CollapsibleFindingsSection({
   count,
   defaultOpen,
   findings,
+  sectionId,
 }: {
   title: string;
   subtitle?: string;
   count: number;
   defaultOpen: boolean;
   findings: { severity: string; message: string; evidence?: Record<string, unknown> }[];
+  sectionId: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   if (count === 0) return null;
@@ -235,7 +316,7 @@ function CollapsibleFindingsSection({
       {open ? (
         <ul className="space-y-2 border-t border-cyber-border/30 px-3 py-2">
           {findings.map((f, i) => (
-            <FindingListItem key={`${title}-${f.severity}-${i}`} f={f} />
+            <FindingListItem key={`${title}-${f.severity}-${i}`} f={f} sectionId={sectionId} />
           ))}
         </ul>
       ) : null}
@@ -260,6 +341,50 @@ function GroupedFindingsPanel({
     return <p className="text-xs text-cyber-muted">finding 없음</p>;
   }
 
+  if (sectionId === "1-2") {
+    const info = findings.filter((f) => findingBucket(f) === "info");
+    const nonInfo = findings.filter((f) => findingBucket(f) !== "info");
+    const g12Strong = nonInfo.filter(isG12StrongFinding);
+    const g12Weak = nonInfo.filter(isG12WeakFinding);
+    const g12Other = nonInfo.filter((f) => !isG12StrongFinding(f) && !isG12WeakFinding(f));
+
+    return (
+      <>
+        <CollapsibleFindingsSection
+          title="info"
+          count={info.length}
+          defaultOpen={false}
+          findings={info}
+          sectionId={sectionId}
+        />
+        <CollapsibleFindingsSection
+          title="정탐"
+          subtitle="· time / error pattern"
+          count={g12Strong.length}
+          defaultOpen={g12Strong.length > 0}
+          findings={g12Strong}
+          sectionId={sectionId}
+        />
+        <CollapsibleFindingsSection
+          title="약한 정탐"
+          subtitle="· boolean response difference"
+          count={g12Weak.length}
+          defaultOpen={g12Strong.length === 0 && g12Weak.length > 0}
+          findings={g12Weak}
+          sectionId={sectionId}
+        />
+        <CollapsibleFindingsSection
+          title="ARGUS direct"
+          subtitle="· error / boolean / time 직접 검증"
+          count={g12Other.length}
+          defaultOpen={g12Strong.length === 0 && g12Weak.length === 0}
+          findings={g12Other}
+          sectionId={sectionId}
+        />
+      </>
+    );
+  }
+
   const httpxSubtitle =
     sectionId === "2-2" ? "· ARGUS 통합 로직 (본진)" : "· httpx probe";
   const zapSubtitle =
@@ -273,6 +398,7 @@ function GroupedFindingsPanel({
         count={httpx.length}
         defaultOpen={false}
         findings={httpx}
+        sectionId={sectionId}
       />
       <CollapsibleFindingsSection
         title="ZAP"
@@ -280,6 +406,7 @@ function GroupedFindingsPanel({
         count={zap.length}
         defaultOpen={false}
         findings={zap}
+        sectionId={sectionId}
       />
       <CollapsibleFindingsSection
         title="inventory"
@@ -287,12 +414,14 @@ function GroupedFindingsPanel({
         count={inventory.length}
         defaultOpen={sectionId === "3-4"}
         findings={inventory}
+        sectionId={sectionId}
       />
       <CollapsibleFindingsSection
         title="info"
         count={info.length}
         defaultOpen={sectionId === "3-4"}
         findings={info}
+        sectionId={sectionId}
       />
       {other.length > 0 ? (
         <CollapsibleFindingsSection
@@ -300,6 +429,7 @@ function GroupedFindingsPanel({
           count={other.length}
           defaultOpen={false}
           findings={other}
+          sectionId={sectionId}
         />
       ) : null}
     </>
@@ -331,6 +461,7 @@ function ZapStatsLine({ zap }: { zap: unknown }) {
 
 export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionReport }) {
   const statsMessages = new Set([
+    "1-2 scan statistics",
     "1-5 scan statistics",
     "4-1 scan statistics",
     "4-2 scan statistics",
@@ -350,6 +481,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const findings = report.findings.filter((f) => !statsMessages.has(f.message));
   const statsFinding = report.findings.find((f) => statsMessages.has(f.message));
   const stats = statsFinding?.evidence?.stats as Record<string, unknown> | undefined;
+  const isG12Stats = statsFinding?.message === "1-2 scan statistics";
   const isG15Stats = statsFinding?.message === "1-5 scan statistics";
   const isG41Stats = statsFinding?.message === "4-1 scan statistics";
   const isG42Stats = statsFinding?.message === "4-2 scan statistics";
@@ -380,6 +512,34 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
 
       {stats ? (
         <div className="mb-3 rounded border border-cyber-border/40 bg-cyber-panel/40 px-3 py-2 text-[11px] text-cyber-muted">
+          {isG12Stats ? (
+            <>
+              api-tree{" "}
+              <span className="font-mono text-cyan-300/90">{String(stats.scan_targets ?? "—")}</span>
+              {typeof stats.targets_with_params === "number" ? (
+                <span> · params {stats.targets_with_params}</span>
+              ) : null}
+              {typeof stats.verified_findings === "number" ? (
+                <span> · verified {stats.verified_findings}</span>
+              ) : null}
+              {typeof stats.confirmed_findings === "number" ? (
+                <span className={stats.confirmed_findings > 0 ? "text-rose-300/90" : "text-cyber-muted"}>
+                  {" "}
+                  · 정탐 {stats.confirmed_findings}
+                </span>
+              ) : null}
+              {typeof stats.verified_findings === "number" && typeof stats.confirmed_findings === "number" ? (
+                <span className="text-amber-300/90">
+                  {" "}
+                  · 약한 정탐 {Math.max(0, stats.verified_findings - stats.confirmed_findings)}
+                </span>
+              ) : null}
+              {typeof stats.excluded_server_error_signals === "number" && stats.excluded_server_error_signals > 0 ? (
+                <span> · excluded {stats.excluded_server_error_signals}</span>
+              ) : null}
+              <ZapStatsLine zap={stats.zap} />
+            </>
+          ) : null}
           {isG15Stats ? (
             <>
               sink{" "}

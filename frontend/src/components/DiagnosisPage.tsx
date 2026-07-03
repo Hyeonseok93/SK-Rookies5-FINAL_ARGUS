@@ -745,10 +745,12 @@ export function DiagnosisPage() {
                               />
                             </div>
                             <p className="font-mono text-[10px] text-cyber-muted">
-                              {runProgress.percent > 0
-                                ? `${runProgress.percent}%`
-                                : "0%"}
-                              {runProgress.endpoints_total > 0
+                              {runProgress.phase === "zap"
+                                ? `ZAP ${runProgress.percent > 0 ? runProgress.percent : 0}%`
+                                : runProgress.percent > 0
+                                  ? `${runProgress.percent}%`
+                                  : "0%"}
+                              {runProgress.phase !== "zap" && runProgress.endpoints_total > 0
                                 ? ` · API ${runProgress.endpoints_done}/${runProgress.endpoints_total}`
                                 : null}
                               {runProgress.requests_sent > 0
@@ -756,7 +758,7 @@ export function DiagnosisPage() {
                                 : null}
                               {runProgress.requests_cap
                                 ? ` / ${runProgress.requests_cap.toLocaleString()}`
-                                : runProgress.requests_sent > 0
+                                : runProgress.phase !== "zap" && runProgress.requests_sent > 0
                                   ? " · 무제한"
                                   : null}
                             </p>

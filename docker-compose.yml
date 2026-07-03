@@ -18,6 +18,9 @@ services:
       - api.disablekey=true
     ports:
       - "8090:8090"
+    volumes:
+      # OpenAPI uploads are imported by the ZAP process, so the path must exist in this container too.
+      - ./backend/data:/app/data:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
