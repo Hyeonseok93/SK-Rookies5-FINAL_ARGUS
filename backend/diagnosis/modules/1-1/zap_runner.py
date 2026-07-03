@@ -29,6 +29,22 @@ def update_status(is_running=None, progress=None, message=None, result_file=None
     if result_file is not None: scan_status["result_file"] = result_file
     if log_file is not None: scan_status["log_file"] = log_file
     if total_alerts is not None: scan_status["total_alerts"] = total_alerts
+    try:
+        from app.services import diagnosis_progress as dp
+
+        if is_running is False:
+            if progress == 100:
+                dp.finish(message or "1-1 scan completed")
+            elif message:
+                dp.fail(message)
+        else:
+            dp.update(
+                phase="running",
+                message=message,
+                percent=progress,
+            )
+    except Exception:
+        pass
 
 def get_payload_reflection(payload, response_body):
     if not payload or not response_body:
@@ -701,6 +717,19 @@ def is_xss_injectable_schema(schema: dict, param_name: str = "", components: dic
         return False
     return True
 
+def looks_like_file_field(param_name: str = "", schema: dict | None = None, components: dict | None = None) -> bool:
+    schema = resolve_schema_ref(schema or {}, components)
+    prop_type = get_schema_type(schema, components)
+    prop_format = (schema.get("format") or "").lower() if isinstance(schema, dict) else ""
+    items_schema = resolve_schema_ref(schema.get("items", {}), components) if isinstance(schema, dict) else {}
+    item_format = (items_schema.get("format") or "").lower() if isinstance(items_schema, dict) else ""
+    if prop_type == "string" and prop_format == "binary":
+        return True
+    if prop_type == "array" and item_format == "binary":
+        return True
+    field = normalized_field_name(param_name)
+    return any(token in field for token in ["image", "images", "photo", "photos", "file", "files", "upload", "attachment"])
+
 def payloads_for_xss_field(param_name: str = "", schema: dict | None = None, components: dict | None = None) -> list:
     schema = resolve_schema_ref(schema or {}, components)
     if not schema and param_name and not is_sensitive_or_nontext_field(param_name):
@@ -1235,12 +1264,25 @@ def run_zap_scan(target_url: str, auth_tokens: list):
     try:
         # ── 다중 토큰 편의 변수 ───────────────────────────────────────────────
         # 권한 우선순위: admin > seller > user (ZAP 기본 인증에 사용할 대표 토큰)
+        def account_role_rank(account: dict | None) -> int:
+            role_text = str((account or {}).get("role", "")).lower()
+            claims_text = str((account or {}).get("claims", {}) or {}).lower()
+            joined = f"{role_text} {claims_text}"
+            if "admin" in joined:
+                return 0
+            if "seller" in joined:
+                return 1
+            if "user" in joined:
+                return 2
+            return 3
+
+        auth_tokens = sorted(auth_tokens or [], key=account_role_rank)
         primary_token = None
         primary_role = "anonymous"
         primary_account = None
         for priority_role in ["admin", "seller", "user"]:
             for t in auth_tokens:
-                if t["role"] == priority_role:
+                if priority_role in str(t.get("role", "")).lower() or priority_role in str(t.get("claims", {}) or {}).lower():
                     primary_token = t["token"]
                     primary_role = t.get("role", priority_role)
                     primary_account = t
@@ -2134,6 +2176,33 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 or "admin" in base_url_text
             )
 
+        def account_role_text(account: dict | None) -> str:
+            account = account or {}
+            return " ".join(
+                str(value or "").lower()
+                for value in [
+                    account.get("role"),
+                    account.get("base_url"),
+                    account.get("claims", {}),
+                    account.get("email"),
+                ]
+            )
+
+        def endpoint_role_priority(path_value: str, account: dict | None) -> tuple[int, str]:
+            lowered = str(path_value or "").lower()
+            role_text = account_role_text(account)
+            is_admin = "admin" in role_text
+            is_seller = "seller" in role_text
+            if is_admin and re.search(r"(^|/)admin(s)?(/|$)", lowered):
+                return (0, lowered)
+            if is_seller and re.search(r"(^|/)seller(s)?(/|$)", lowered):
+                return (0, lowered)
+            if not is_admin and re.search(r"(^|/)admin(s)?(/|$)", lowered):
+                return (3, lowered)
+            if not is_seller and re.search(r"(^|/)seller(s)?(/|$)", lowered):
+                return (3, lowered)
+            return (1, lowered)
+
         admin_accounts = [account for account in auth_tokens if is_admin_account(account)]
         if admin_accounts:
             print(
@@ -2307,7 +2376,11 @@ def run_zap_scan(target_url: str, auth_tokens: list):
 
         for scan_account in scan_accounts:
             account_endpoints = scan_account.get("validated_endpoints", validated_endpoints)
-            for path, methods in account_endpoints.items():
+            ordered_account_endpoints = sorted(
+                account_endpoints.items(),
+                key=lambda item: endpoint_role_priority(item[0], scan_account),
+            )
+            for path, methods in ordered_account_endpoints:
                 for method, details in methods.items():
                     # 기본 api_url은 primary target 기준으로 구성 (select_token 내 path 추출용)
                     blocked, block_reason = is_dangerous_endpoint(method, path, details)
@@ -2695,10 +2768,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 prop_type = get_schema_type(prop_meta, swagger_components)
                                 items_schema = resolve_schema_ref(prop_meta.get("items", {}), swagger_components)
                                 item_format = (items_schema.get("format") or "").lower() if isinstance(items_schema, dict) else ""
-                                if (
-                                    (prop_type == "string" and (prop_meta.get("format") or "").lower() == "binary")
-                                    or (prop_type == "array" and item_format == "binary")
-                                ):
+                                if looks_like_file_field(prop_name, prop_meta, swagger_components):
                                     base_multipart_file_keys.append(prop_name)
                                 if is_xss_injectable_schema(prop_meta, prop_name, swagger_components):
                                     base_test_multipart_keys.append(prop_name)

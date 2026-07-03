@@ -96,6 +96,22 @@ def update_status(is_running=None, progress=None, message=None, result_file=None
         scan_status["log_file"] = log_file
     if total_alerts is not None:
         scan_status["total_alerts"] = total_alerts
+    try:
+        from app.services import diagnosis_progress as dp
+
+        if is_running is False:
+            if progress == 100:
+                dp.finish(message or "1-1 scan completed")
+            elif message:
+                dp.fail(message)
+        else:
+            dp.update(
+                phase="running",
+                message=message,
+                percent=progress,
+            )
+    except Exception:
+        pass
 
 
 def _read_json(path: Path):
@@ -228,6 +244,20 @@ def _schema_from_api_tree_param(param: dict) -> dict:
     return schema
 
 
+def _looks_like_file_field(name: str, schema: dict | None = None) -> bool:
+    field = re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+    schema = schema or {}
+    schema_type = str(schema.get("type") or "").lower()
+    schema_format = str(schema.get("format") or "").lower()
+    items = schema.get("items") if isinstance(schema.get("items"), dict) else {}
+    item_format = str(items.get("format") or "").lower()
+    if schema_type == "string" and schema_format == "binary":
+        return True
+    if schema_type == "array" and item_format == "binary":
+        return True
+    return any(token in field for token in ["image", "images", "photo", "photos", "file", "files", "upload", "attachment"])
+
+
 def _api_tree_endpoint_to_openapi_detail(ep: dict) -> dict:
     detail = ep.get("openapi")
     if isinstance(detail, dict) and (detail.get("parameters") or detail.get("requestBody")):
@@ -239,6 +269,12 @@ def _api_tree_endpoint_to_openapi_detail(ep: dict) -> dict:
     json_required: list[str] = []
     form_properties: dict[str, dict] = {}
     form_required: list[str] = []
+    request_header_content_types = {
+        str(header.get("sample") or header.get("value") or "").lower()
+        for header in ep.get("request_headers", []) or []
+        if str(header.get("name") or "").lower() == "content-type"
+    }
+    prefers_multipart = any("multipart/form-data" in value for value in request_header_content_types)
 
     for param in ep.get("request_params", []) or []:
         if not isinstance(param, dict):
@@ -251,11 +287,13 @@ def _api_tree_endpoint_to_openapi_detail(ep: dict) -> dict:
         required = bool(param.get("required", False))
         if location in {"query", "path", "header", "cookie"}:
             parameters.append({"name": name, "in": location, "required": required, "schema": schema})
-        elif location in {"body", "json"}:
+        elif location in {"body", "json"} and not prefers_multipart:
             json_properties[name] = schema
             if required:
                 json_required.append(name)
-        elif location in {"form", "formdata", "multipart"}:
+        elif location in {"body", "form", "formdata", "multipart"}:
+            if prefers_multipart and _looks_like_file_field(name, schema):
+                schema = {"type": "array", "items": {"type": "string", "format": "binary"}}
             form_properties[name] = schema
             if required:
                 form_required.append(name)
@@ -462,6 +500,35 @@ def _detect_account_auth_mode(account: dict, target_url: str) -> str:
     return "disabled"
 
 
+def _account_role_text(account: dict | None) -> str:
+    account = account or {}
+    return " ".join(
+        str(value or "").lower()
+        for value in [
+            account.get("role"),
+            account.get("base_url"),
+            account.get("claims", {}),
+            account.get("email"),
+        ]
+    )
+
+
+def _endpoint_role_priority(path: str, account: dict | None) -> tuple[int, str]:
+    lowered = str(path or "").lower()
+    role_text = _account_role_text(account)
+    is_admin = "admin" in role_text
+    is_seller = "seller" in role_text
+    if is_admin and re.search(r"(^|/)admin(s)?(/|$)", lowered):
+        return (0, lowered)
+    if is_seller and re.search(r"(^|/)seller(s)?(/|$)", lowered):
+        return (0, lowered)
+    if not is_admin and re.search(r"(^|/)admin(s)?(/|$)", lowered):
+        return (3, lowered)
+    if not is_seller and re.search(r"(^|/)seller(s)?(/|$)", lowered):
+        return (3, lowered)
+    return (1, lowered)
+
+
 def _resolved_paths(path: str) -> list[str]:
     if "{" not in path:
         return [path]
@@ -513,7 +580,7 @@ def _request_defaults(details: dict, components: dict) -> tuple[dict, dict, dict
             prop_type = openapi_utils.get_schema_type(prop, components)
             item_schema = openapi_utils.resolve_schema_ref(prop.get("items", {}), components)
             item_format = (item_schema.get("format") or "").lower() if isinstance(item_schema, dict) else ""
-            if (prop_type == "string" and (prop.get("format") or "").lower() == "binary") or (prop_type == "array" and item_format == "binary"):
+            if _looks_like_file_field(name, prop):
                 multipart_file_keys.append(name)
     elif "application/json" in content:
         schema = openapi_utils.resolve_schema_ref(content["application/json"].get("schema") or {}, components)
@@ -780,7 +847,11 @@ def scan_target(target_url: str, auth_tokens: list[dict] | None = None, result_d
         if zap and account is accounts[0]:
             zap_adapter.apply_auth_to_zap(zap, account.get("token"), auth.build_cookie_header_from_account(account))
 
-        for path, methods in (account.get("validated_endpoints") or {}).items():
+        ordered_endpoints = sorted(
+            (account.get("validated_endpoints") or {}).items(),
+            key=lambda item: _endpoint_role_priority(item[0], account),
+        )
+        for path, methods in ordered_endpoints:
             done += 1
             update_status(progress=min(85, 10 + int(done / total * 75)), message=f"Scanning {role} {path}")
             for method, details in (methods or {}).items():
@@ -934,7 +1005,7 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
         try:
             from diagnosis.probe_auth import all_account_auths_with_meta
 
-            sessions, _meta = all_account_auths_with_meta(raw_config, data_dir=data_dir)
+            sessions, _meta = all_account_auths_with_meta(raw_config, data_dir=data_dir, refresh=True)
             auth_tokens = [
                 {
                     "role": session.get("role") or session.get("email") or "account",
@@ -945,6 +1016,9 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
                     "set_cookie_headers": session.get("set_cookie_lines") or [],
                     "login_url": session.get("login_url") or "",
                     "claims": session.get("claims") or {},
+                    "token_source": session.get("token_source") or session.get("delivery") or "",
+                    "token_field": session.get("token_field") or session.get("cookie_name") or "",
+                    "email": session.get("email") or "",
                 }
                 for session in sessions
                 if session.get("token") or session.get("access_token") or session.get("cookies")
