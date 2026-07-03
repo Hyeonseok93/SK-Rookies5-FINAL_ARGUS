@@ -17,7 +17,6 @@ UNSAFE_METHODS = {"DELETE", "PATCH"}
 DEFAULT_TYPES = (
     InjectionType.SQL,
     InjectionType.NOSQL,
-    InjectionType.SSTI,
     InjectionType.COMMAND,
     InjectionType.XPATH,
 )
@@ -32,7 +31,9 @@ def parse_injection_types(raw: Iterable[str] | None) -> list[InjectionType]:
         if not key:
             continue
         if key == "ALL":
-            return list(InjectionType)
+            return list(DEFAULT_TYPES)
+        if key == "SSTI":
+            continue
         try:
             selected.append(InjectionType[key])
         except KeyError:
@@ -207,6 +208,7 @@ EXCLUDED_FROM_INJECTION_REPORT = frozenset(
         "SUSPECTED_SERVER_ERROR_SIGNAL",
         "SUSPECTED_INJECTION",
         "WEAK_SERVER_ERROR_CONFIRMED_LEGACY",
+        "VERIFICATION_ERROR",
     }
 )
 

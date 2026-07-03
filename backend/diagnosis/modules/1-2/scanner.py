@@ -50,7 +50,7 @@ class ScanOptions:
     zap_enabled: bool = False
     zap_max_minutes: int = 20
     verification_mode: str = "balanced"
-    injection_types: list[str] = field(default_factory=lambda: ["SQL", "NOSQL", "SSTI", "COMMAND", "XPATH"])
+    injection_types: list[str] = field(default_factory=lambda: ["SQL", "NOSQL", "COMMAND", "XPATH"])
     include_unsafe_methods: bool = False
     keep_all_results: bool = False
 
@@ -80,7 +80,7 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
         zap_enabled=bool(cfg.get("zap_enabled", False)),
         zap_max_minutes=max(1, min(int(cfg.get("zap_max_minutes", 20)), 120)),
         verification_mode=str(cfg.get("verification_mode", "balanced")),
-        injection_types=types or ["SQL", "NOSQL", "SSTI", "COMMAND", "XPATH"],
+        injection_types=types or ["SQL", "NOSQL", "COMMAND", "XPATH"],
         include_unsafe_methods=bool(cfg.get("include_unsafe_methods", False)),
         keep_all_results=bool(cfg.get("keep_all_results", False)),
     )
