@@ -37,6 +37,23 @@ def get_payload_reflection(payload, response_body):
 import difflib
 import copy
 
+def normalize_reflection_text(value: str = "") -> str:
+    if not value:
+        return ""
+    text = str(value)
+    for _ in range(2):
+        text = html.unescape(urllib.parse.unquote_plus(text))
+        text = (
+            text.replace("\\/", "/")
+                .replace("\\u003c", "<")
+                .replace("\\u003C", "<")
+                .replace("\\u003e", ">")
+                .replace("\\u003E", ">")
+                .replace("\\u002f", "/")
+                .replace("\\u002F", "/")
+        )
+    return text
+
 def get_payload_reflection(payload, response_body, baseline_body=None):
     if not payload or not response_body:
         return None
@@ -57,24 +74,26 @@ def get_payload_reflection(payload, response_body, baseline_body=None):
 
     payload_variants = {
         payload,
+        normalize_reflection_text(payload),
         html.escape(payload),
         html.escape(payload, quote=False),
         urllib.parse.quote(payload),
         urllib.parse.quote_plus(payload),
+        payload.replace("/", "\\/"),
         payload.replace("<", "\\u003c").replace(">", "\\u003e"),
         payload.replace("<", "\\u003C").replace(">", "\\u003E"),
+        payload.replace("<", "\\u003c").replace(">", "\\u003e").replace("/", "\\/"),
+        payload.replace("<", "\\u003C").replace(">", "\\u003E").replace("/", "\\/"),
     }
     body_variants = {
         active_text,
-        html.unescape(active_text),
-        urllib.parse.unquote(active_text),
-        urllib.parse.unquote_plus(active_text),
+        normalize_reflection_text(active_text),
     }
 
     for body in body_variants:
-        body_lower = body.lower()
         for variant in payload_variants:
-            if variant and variant.lower() in body_lower:
+            normalized_variant = normalize_reflection_text(variant)
+            if normalized_variant and normalized_variant.lower() in body.lower():
                 return variant
     return None
 
@@ -139,6 +158,8 @@ def classify_xss_response(payload, response_body, content_type, method="GET", is
         return None
 
     response_lower = response_body.lower()
+    decoded_response_body = normalize_reflection_text(response_body)
+    decoded_response_lower = decoded_response_body.lower()
     content_type_lower = (content_type or "").lower()
     headers = response_headers or {}
     x_content_type = (headers.get("X-Content-Type-Options", "") or "").lower()
@@ -164,10 +185,10 @@ def classify_xss_response(payload, response_body, content_type, method="GET", is
 
     reflected_variant = get_payload_reflection(payload, response_body, baseline_body)
     has_payload_in_body = reflected_variant is not None
-    has_dom_sink = any(pattern in response_lower for pattern in dom_sink_patterns)
-    has_source_indicator = any(indicator in response_lower for indicator in source_indicators)
+    has_dom_sink = any(pattern in decoded_response_lower for pattern in dom_sink_patterns)
+    has_source_indicator = any(indicator in decoded_response_lower for indicator in source_indicators)
     has_user_input_reference = "userinput" in response_lower or "input" in response_lower
-    has_executable_marker = any(marker in response_lower for marker in executable_markers)
+    has_executable_marker = any(marker in decoded_response_lower for marker in executable_markers)
 
     # ── DOM XSS 의심 패턴 (정적 분석으로는 확정 불가 → Informational 강등) ──────────────
     # DOM XSS 실제 탐지는 Playwright 헤드리스 브라우저를 통한 동적 실행 검증만 가능.
@@ -666,6 +687,8 @@ def is_sensitive_or_nontext_field(param_name: str = "") -> bool:
 
 def is_xss_injectable_schema(schema: dict, param_name: str = "", components: dict | None = None) -> bool:
     schema = resolve_schema_ref(schema, components)
+    if not schema and param_name and not is_sensitive_or_nontext_field(param_name):
+        schema = {"type": "string"}
     if not isinstance(schema, dict):
         return False
     if is_sensitive_or_nontext_field(param_name):
@@ -680,6 +703,8 @@ def is_xss_injectable_schema(schema: dict, param_name: str = "", components: dic
 
 def payloads_for_xss_field(param_name: str = "", schema: dict | None = None, components: dict | None = None) -> list:
     schema = resolve_schema_ref(schema or {}, components)
+    if not schema and param_name and not is_sensitive_or_nontext_field(param_name):
+        schema = {"type": "string"}
     fmt = (schema.get("format") or "").lower() if isinstance(schema, dict) else ""
     pn = normalized_field_name(param_name)
 
@@ -697,6 +722,23 @@ def payloads_for_xss_field(param_name: str = "", schema: dict | None = None, com
             "https://example.com/\"><script>alert(1)</script>",
         ]
     return XSS_PAYLOADS
+
+def make_unique_xss_payload(base_payload: str, param_name: str = "") -> str:
+    marker_source = f"{param_name}:{time.time_ns()}:{base_payload}"
+    marker_hash = hashlib.sha1(marker_source.encode("utf-8", errors="ignore")).hexdigest()[:10]
+    safe_param = re.sub(r"[^A-Za-z0-9_]", "_", str(param_name or "field"))[:24] or "field"
+    marker = f"ARGUS_{safe_param}_{marker_hash}"
+
+    replacements = [
+        ("alert(1)", f"alert('{marker}')"),
+        ("alert(1);", f"alert('{marker}');"),
+    ]
+    for old, new in replacements:
+        if old in base_payload:
+            return base_payload.replace(old, new)
+    if "javascript:" in base_payload.lower():
+        return f"javascript:alert('{marker}')"
+    return f"<img src=x onerror=alert('{marker}')>"
 
 def looks_like_validation_rejection(response) -> bool:
     if response is None or response.status_code != 400:
@@ -735,8 +777,6 @@ def default_value_for_schema(schema: dict, components: dict | None = None, param
             value += 1
         if any(token in pn for token in ["recruitcount", "membercount", "capacity", "personnel", "peoplecount", "guest"]):
             value = max(value, 2)
-        if any(token in pn for token in ["page", "offset"]):
-            value = max(value, 0)
         return value
     if schema_type == "number":
         minimum = schema.get("minimum")
@@ -778,8 +818,6 @@ def default_value_for_schema(schema: dict, components: dict | None = None, param
         return (date.today() + timedelta(days=1)).isoformat()
     if "category" in pn:
         return "GENERAL"
-    if pn in {"type", "posttype", "boardtype"}:
-        return "GENERAL"
 
     min_len = schema.get("minLength") or schema.get("min_length") or 0
     try:
@@ -813,6 +851,38 @@ def build_default_payload_from_schema(schema: dict, components: dict | None = No
         if default_value is not None:
             payload[key] = default_value
     return payload
+
+def build_required_payload_from_schema(schema: dict, components: dict | None = None) -> dict:
+    schema = resolve_schema_ref(schema, components)
+    payload = {}
+    if not isinstance(schema, dict):
+        return payload
+    required = set(schema.get("required") or [])
+    for key, prop_schema in (schema.get("properties") or {}).items():
+        if key not in required:
+            continue
+        default_value = default_value_for_schema(prop_schema, components, key)
+        if default_value is not None:
+            payload[key] = default_value
+    return payload
+
+def build_query_defaults_from_details(details: dict | None, components: dict | None = None) -> dict:
+    params = {}
+    for param in (details or {}).get("parameters", []) or []:
+        if not isinstance(param, dict) or str(param.get("in") or "query").lower() != "query":
+            continue
+        name = param.get("name")
+        if not name:
+            continue
+        schema = dict(param.get("schema") or {})
+        for sample_key in ("example", "default", "sample"):
+            if param.get(sample_key) not in (None, "") and sample_key not in schema:
+                schema["example" if sample_key == "sample" else sample_key] = param.get(sample_key)
+                break
+        default_value = default_value_for_query_param(name, schema, components)
+        if default_value is not None:
+            params[name] = default_value
+    return params
 
 def find_get_endpoint_for_post(post_path: str, validated_endpoints: dict) -> str | None:
     """POST 엔드포인트 경로에 대응하는 GET 단건 조회 엔드포인트를 Swagger 목록에서 탐색합니다.
@@ -924,6 +994,81 @@ def build_auth_headers(token: str | None = None, account: dict | None = None, mo
             headers["Cookie"] = cookie_header
 
     return headers
+
+def authorization_headers_from_account(account: dict, token: str | None = None) -> dict:
+    current = dict(build_auth_headers(token or (account or {}).get("token"), account, (account or {}).get("auth_mode")))
+    current.pop("Cookie", None)
+    current.pop("cookie", None)
+    if current:
+        return current
+    for mode in ["header", "authorization_raw", "x_auth_token", "access_token_header", "access_token_camel_header"]:
+        headers = dict(build_auth_headers(token or (account or {}).get("token"), account, mode))
+        headers.pop("Cookie", None)
+        headers.pop("cookie", None)
+        if headers:
+            return headers
+    return {}
+
+def cookie_header_and_source(account: dict, token: str | None = None, fallback_cookie_name: str = "accessToken") -> tuple[str, str]:
+    cookie_header = build_cookie_header_from_account(account)
+    if cookie_header:
+        return cookie_header, "real"
+    clean_token = str(token or (account or {}).get("token") or "").replace("Bearer ", "").strip()
+    if clean_token:
+        cookie_name = str((account or {}).get("token_field") or fallback_cookie_name or "accessToken").split(".")[-1]
+        return f"{cookie_name}={clean_token}", "synthetic"
+    return "", "none"
+
+def is_successful_auth_acceptance_status(status_code) -> bool:
+    try:
+        return 200 <= int(status_code or 0) < 400
+    except Exception:
+        return False
+
+def classify_auth_acceptance(account: dict, protected_url: str, method: str, body=None, token: str | None = None, fallback_cookie_name: str = "accessToken") -> dict:
+    authz_headers = authorization_headers_from_account(account, token)
+    cookie_header, cookie_source = cookie_header_and_source(account, token, fallback_cookie_name)
+    probes = {
+        "no_auth": {},
+        "header_only": dict(authz_headers),
+        "cookie_only": {"Cookie": cookie_header} if cookie_header else {},
+        "both": {**authz_headers, **({"Cookie": cookie_header} if cookie_header else {})},
+    }
+    statuses = {}
+    errors = {}
+    for name, headers in probes.items():
+        try:
+            res = requests.request(
+                method=method.upper(),
+                url=protected_url,
+                json=body or {},
+                headers=headers or None,
+                timeout=4,
+            )
+            statuses[name] = res.status_code
+        except Exception as exc:
+            statuses[name] = None
+            errors[name] = str(exc)
+
+    def ok(name: str) -> bool:
+        return is_successful_auth_acceptance_status(statuses.get(name))
+
+    if ok("no_auth"):
+        mode = "PUBLIC_OR_BROKEN"
+    elif ok("header_only") and not ok("cookie_only"):
+        mode = "HEADER_ONLY"
+    elif ok("cookie_only") and not ok("header_only"):
+        mode = "COOKIE_ONLY"
+    elif ok("header_only") and ok("cookie_only"):
+        mode = "HEADER_OR_COOKIE"
+    elif ok("both") and not ok("header_only") and not ok("cookie_only"):
+        mode = "HEADER_AND_COOKIE"
+    else:
+        mode = "UNKNOWN"
+    result = {"mode": mode, "statuses": statuses, "cookie_source": cookie_source}
+    if errors:
+        result["errors"] = errors
+    return result
 
 def cookie_names_from_header(cookie_header: str) -> list:
     names = []
@@ -1401,6 +1546,69 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             fallback_url = best_unverified_url or f"{fallback_base}{re.sub(r'{[^}]+}', '1', path_only)}"
             return (primary_token, fallback_base, primary_role, fallback_url)
 
+        _identity_param_cache = {}
+
+        def extract_identity_value(data, param_name: str):
+            wanted = normalized_field_name(param_name)
+            generic_keys = {"id", "userid", "memberid", "adminid", "accountid"}
+            if isinstance(data, dict):
+                for key, value in data.items():
+                    normalized_key = normalized_field_name(key)
+                    if value is not None and normalized_key == wanted:
+                        return value
+                for key, value in data.items():
+                    normalized_key = normalized_field_name(key)
+                    if value is not None and normalized_key in generic_keys:
+                        return value
+                for value in data.values():
+                    found = extract_identity_value(value, param_name)
+                    if found is not None:
+                        return found
+            elif isinstance(data, list):
+                for item in data[:5]:
+                    found = extract_identity_value(item, param_name)
+                    if found is not None:
+                        return found
+            return None
+
+        def resolve_identity_query_param(param_name: str, account: dict, token: str | None, base_url: str):
+            normalized_param = normalized_field_name(param_name)
+            if not (normalized_param == "id" or normalized_param.endswith("id")):
+                return None
+            cache_key = f"{account.get('role', 'account')}:{base_url}:{normalized_param}"
+            if cache_key in _identity_param_cache:
+                return _identity_param_cache[cache_key]
+
+            claim_value = extract_identity_value(account.get("claims") or {}, param_name)
+            if claim_value is not None:
+                _identity_param_cache[cache_key] = claim_value
+                return claim_value
+
+            headers = build_auth_headers(token or account.get("token"), account)
+            probe_paths = []
+            for ep_path, ep_methods in (account.get("validated_endpoints") or {}).items():
+                if "get" not in ep_methods or "{" in ep_path:
+                    continue
+                lowered = ep_path.lower()
+                if "/me" in lowered or "profile" in lowered or "account" in lowered:
+                    probe_paths.append(ep_path)
+
+            for ep_path in list(dict.fromkeys(probe_paths))[:8]:
+                try:
+                    res = requests.get(f"{base_url.rstrip('/')}/{ep_path.lstrip('/')}", headers=headers, timeout=3)
+                    if not (200 <= res.status_code < 400):
+                        continue
+                    value = extract_identity_value(res.json(), param_name)
+                    if value is not None:
+                        _identity_param_cache[cache_key] = value
+                        print(f"[ParamResolve] {param_name}={value} from {ep_path} for {account.get('role', 'account')}")
+                        return value
+                except Exception:
+                    continue
+
+            _identity_param_cache[cache_key] = None
+            return None
+
         # 2. 하이브리드 인증 세팅 (ZAP 프록시용 대표 토큰 주입)
         if False and primary_token:
             update_status(progress=3, message="인증 주입 설정 중 (Authorization Header & accessToken Cookie)...")
@@ -1786,6 +1994,66 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             except Exception as e:
                 return f"Response formatting error: {e}"
 
+        def is_dangerous_endpoint(method: str, path: str, details: dict | None = None) -> tuple[bool, str]:
+            method_upper = (method or "").upper()
+            normalized_path = "/" + (path or "").lower().lstrip("/")
+            details = details or {}
+
+            # 1. DELETE 메소드는 데이터 파괴 및 세션 단절 위협이 극도로 높아 강제 스킵
+            if method_upper == "DELETE":
+                return True, "DELETE requests are skipped to protect active session and data integrity"
+
+            # 2. Swagger details 정보 내 한글/영문 메타데이터 정적 분석
+            summary = str(details.get("summary") or "").lower()
+            description = str(details.get("description") or "").lower()
+            
+            critical_keywords = [
+                "withdraw", "탈퇴", 
+                "password-change", "change-password", "비밀번호 변경", "비밀번호변경",
+                "logout", "로그아웃",
+                "delete-account", "계정삭제", "계정 삭제"
+            ]
+            
+            # 설명문이나 요약 정보에서 탈퇴, 비번변경, 로그아웃 등 위험 단어 매칭 시 차단
+            if any(k in summary or k in description for k in critical_keywords):
+                return True, f"API metadata (summary/description) matches safety block word"
+
+            # 3. Request Body 내부의 스키마 분석 (오직 패스워드 변경 관련 전용 파라미터들로만 바인딩이 구성된 전용 변경 API만 차단)
+            body_spec = details.get("requestBody", {}) or {}
+            content = body_spec.get("content", {}) or {}
+            json_schema = content.get("application/json", {}).get("schema", {}) or {}
+            # schema reference 해결
+            resolved_schema = resolve_schema_ref(json_schema, swagger_components)
+            properties = resolved_schema.get("properties", {}) or {}
+            
+            password_indicators = ["newpassword", "currentpassword", "confirmpassword", "oldpassword", "password"]
+            has_password_field = False
+            has_normal_field = False
+            for prop in properties.keys():
+                if any(ind in prop.lower() for ind in password_indicators):
+                    has_password_field = True
+                else:
+                    has_normal_field = True
+
+            # 패스워드 필드가 포함되어 있으며, 프로필명/닉네임 등 일반 필드가 '전혀 없는' 순수 패스워드 변경용 API만 차단
+            if has_password_field and not has_normal_field:
+                return True, "Request body is restricted to sensitive credential modification only"
+
+            # 4. 그 외 단순 상태 변경(승인/반려 등)이나 프로필 수정(/me/profile)은 스캔 진행 허용
+            state_markers = [
+                "/close",
+                "/reopen",
+                "/approve",
+                "/reject",
+                "/suspend",
+                "/ban",
+                "/unban",
+            ]
+            if method_upper == "PATCH" and any(marker in normalized_path for marker in state_markers):
+                return True, "State-transition endpoint is protected from active scanning"
+
+            return False, ""
+
         def extract_request_parts(req_obj, body_json=None, query_params=None):
             """Playwright / Selenium 자동화 재현을 위해 요청 구성 요소를 파싱된 딕셔너리로 반환합니다."""
             try:
@@ -1899,18 +2167,24 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 tokens.update({"user", "users", "member", "members", "account", "accounts"})
             return tokens
 
-        def admin_read_candidates_for_post(post_path: str, resource_id) -> list[tuple[dict, str, str]]:
+        def cross_account_read_candidates_for_post(post_path: str, resource_id, writer_account: dict | None = None) -> list[tuple[dict, str, str, dict]]:
             post_tokens = resource_tokens_from_path(post_path)
             candidates = []
-            for admin_account in admin_accounts:
-                admin_base = admin_account.get("base_url", target_url).rstrip("/")
-                admin_endpoints = admin_account.get("validated_endpoints", validated_endpoints)
-                for get_path, get_methods in admin_endpoints.items():
+            writer_role = (writer_account or {}).get("role")
+            writer_token = (writer_account or {}).get("token")
+            reader_accounts = auth_tokens if auth_tokens else []
+            for reader_account in reader_accounts:
+                if writer_account and (
+                    reader_account.get("token") == writer_token
+                    or reader_account.get("role") == writer_role
+                ):
+                    continue
+                reader_base = reader_account.get("base_url", target_url).rstrip("/")
+                reader_endpoints = reader_account.get("validated_endpoints", validated_endpoints)
+                for get_path, get_methods in reader_endpoints.items():
                     if "get" not in get_methods:
                         continue
                     lowered = get_path.lower()
-                    if "admin" not in lowered:
-                        continue
                     get_tokens = resource_tokens_from_path(get_path)
                     if post_tokens and not (post_tokens & get_tokens):
                         continue
@@ -1920,15 +2194,32 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                         resolved_path = re.sub(r"\{[^}]+\}", str(resource_id), get_path)
                     else:
                         resolved_path = get_path
-                    candidates.append((admin_account, get_path, f"{admin_base}/{resolved_path.lstrip('/')}"))
+                    reader_url = f"{reader_base}/{resolved_path.lstrip('/')}"
+                    reader_params = build_query_defaults_from_details(get_methods.get("get") or {}, swagger_components)
+                    for param_name in list(reader_params):
+                        resolved_identity = resolve_identity_query_param(param_name, reader_account, reader_account.get("token"), reader_base)
+                        if resolved_identity is not None:
+                            reader_params[param_name] = resolved_identity
+                    score = 0
+                    if is_admin_account(reader_account) or "admin" in lowered:
+                        score += 40
+                    if resource_id and str(resource_id) in reader_url:
+                        score += 20
+                    if get_tokens & post_tokens:
+                        score += 10
+                    if get_path.rstrip("/") == post_path.rstrip("/"):
+                        score += 12
+                    elif get_path.rstrip("/").endswith(post_path.rstrip("/").split("/")[-1]):
+                        score += 8
+                    candidates.append((score, reader_account, get_path, reader_url, reader_params))
 
             deduped = []
             seen = set()
-            for item in candidates:
-                key = (item[0].get("role"), item[2])
+            for _, reader_account, get_path, reader_url, reader_params in sorted(candidates, key=lambda item: item[0], reverse=True):
+                key = (reader_account.get("role"), reader_url, tuple(sorted(reader_params.items())))
                 if key not in seen:
                     seen.add(key)
-                    deduped.append(item)
+                    deduped.append((reader_account, get_path, reader_url, reader_params))
             return deduped[:20]
 
         def reflected_near_resource_id(response_text: str, payload: str, resource_id) -> bool:
@@ -1944,106 +2235,74 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             end_clip = min(len(response_text), idx + 750)
             return payload in response_text[start_clip:end_clip]
 
-        def verify_cross_role_stored_xss(post_path: str, post_url: str, resource_id, payload: str, param_name: str, writer_role: str):
-            if not admin_accounts:
+        def verify_cross_account_stored_xss(post_path: str, post_url: str, resource_id, payload: str, param_name: str, writer_account: dict | None, writer_role: str):
+            if not auth_tokens or len(auth_tokens) < 2:
                 return
-            for admin_account, admin_path, admin_url in admin_read_candidates_for_post(post_path, resource_id):
-                admin_role = admin_account.get("role", "admin")
-                seen_key = (post_url, admin_url, payload, str(resource_id))
+            for reader_account, reader_path, reader_url, reader_params in cross_account_read_candidates_for_post(post_path, resource_id, writer_account):
+                reader_role = reader_account.get("role", "reader")
+                seen_key = (post_url, reader_url, payload, str(resource_id), reader_role)
                 if seen_key in cross_role_stored_seen:
                     continue
                 cross_role_stored_seen.add(seen_key)
                 try:
-                    admin_headers = build_auth_headers(admin_account.get("token"), admin_account)
-                    admin_res = requests.get(admin_url, headers=admin_headers, timeout=4)
+                    reader_headers = build_auth_headers(reader_account.get("token"), reader_account)
+                    reader_res = requests.get(reader_url, headers=reader_headers, params=reader_params or None, timeout=4)
                 except Exception as ce:
-                    print(f"[CROSS-ROLE STORED XSS DEBUG] admin GET fail on {admin_url}: {ce}")
+                    print(f"[CROSS-ACCOUNT STORED XSS DEBUG] reader GET fail on {reader_url} params={reader_params}: {ce}")
                     continue
-                if not (200 <= admin_res.status_code < 400):
+                if not (200 <= reader_res.status_code < 400):
                     print(
-                        f"[CROSS-ROLE STORED XSS DEBUG] admin GET {admin_url} returned "
-                        f"{admin_res.status_code}. Response: {summarize_response_for_log(admin_res)}"
+                        f"[CROSS-ACCOUNT STORED XSS DEBUG] reader GET {reader_url} returned "
+                        f"{reader_res.status_code}. Params: {reader_params}. Response: {summarize_response_for_log(reader_res)}"
                     )
                     continue
-                url_has_resource = bool(resource_id and str(resource_id) in admin_url)
+                url_has_resource = bool(resource_id and str(resource_id) in reader_url)
                 if url_has_resource:
-                    reflected = is_payload_reflected(payload, admin_res.text)
+                    reflected = is_payload_reflected(payload, reader_res.text)
                 else:
-                    reflected = reflected_near_resource_id(admin_res.text, payload, resource_id)
+                    reflected = reflected_near_resource_id(reader_res.text, payload, resource_id)
                 if not reflected:
                     continue
 
-                admin_content_type = admin_res.headers.get("Content-Type", "").lower()
+                reader_content_type = reader_res.headers.get("Content-Type", "").lower()
                 print(
-                    f"[CROSS-ROLE STORED XSS] !!! CONFIRMED writer '{writer_role}' -> "
-                    f"reader '{admin_role}' on {admin_url} (payload '{payload}' reflected) !!!"
+                    f"[CROSS-ACCOUNT STORED XSS] !!! CONFIRMED writer '{writer_role}' -> "
+                    f"reader '{reader_role}' on {reader_url} (payload '{payload}' reflected) !!!"
                 )
-                response_params = infer_reflected_response_params(admin_res, payload)
-                used_param = ", ".join(response_params or [param_name])
+                response_params = infer_reflected_response_params(reader_res, payload)
                 custom_alerts.append({
-                    "alert": "Cross-Role Stored Cross-Site Scripting (Stored XSS) Vulnerability",
-                    "url": admin_url,
+                    "alert": "Cross-Account Stored Cross-Site Scripting (Stored XSS) Vulnerability",
+                    "url": reader_url,
                     "method": "GET",
                     "risk": "High",
                     "confidence": "High",
-                    "param": used_param,
+                    "param": param_name,
+                    "reflected_response_params": response_params,
                     "attack": payload,
-                    "status_code": admin_res.status_code,
+                    "status_code": reader_res.status_code,
                     "evidence": (
                         f"Payload stored by {writer_role} via mutation request {post_url} was reflected "
-                        f"when read by {admin_role} via GET {admin_url}."
+                        f"when read by {reader_role} via GET {reader_url}."
                     ),
                     "custom_type": "40014",
-                    "evidence_request": format_http_request(admin_res.request),
-                    "evidence_response": format_http_response(admin_res),
-                    "expected_status_code": admin_res.status_code,
+                    "evidence_request": format_http_request(reader_res.request),
+                    "evidence_response": format_http_response(reader_res),
+                    "expected_status_code": reader_res.status_code,
                     "expected_evidence_in_response": payload,
+                    "cross_account_writer_role": writer_role,
+                    "cross_account_reader_role": reader_role,
+                    "cross_account_write_url": post_url,
+                    "cross_account_read_url": reader_url,
                     "screenshot_on": "page_loaded",
                     "description": (
-                        f"A lower-privileged writer ({writer_role}) stored input through {post_url}, "
-                        f"and the same payload was later returned to a higher-privileged admin reader "
-                        f"({admin_role}) through {admin_url} without output encoding. "
-                        f"(GET response Content-Type: {admin_content_type})"
+                        f"Input stored by one account boundary ({writer_role}) through {post_url} "
+                        f"was later returned to another account boundary ({reader_role}) through "
+                        f"{reader_url} without output encoding. "
+                        f"(GET response Content-Type: {reader_content_type})"
                     )
                 })
-                break
 
-        def is_dangerous_endpoint(method: str, path: str) -> tuple[bool, str]:
-            method_upper = (method or "").upper()
-            normalized_path = "/" + (path or "").lower().lstrip("/")
 
-            if method_upper == "DELETE":
-                return True, "DELETE requests can remove user/project/content data"
-
-            account_markers = [
-                "/api/users/me",
-                "/api/users/profile-image",
-                "/api/auth/logout",
-                "/api/auth/withdraw",
-                "/api/auth/delete",
-                "/api/account",
-                "/api/accounts",
-            ]
-            state_markers = [
-                "/close",
-                "/reopen",
-                "/status",
-                "/approve",
-                "/reject",
-                "/cancel",
-                "/suspend",
-                "/restore",
-                "/ban",
-                "/unban",
-            ]
-
-            if method_upper in {"PUT", "PATCH", "POST"}:
-                if any(marker in normalized_path for marker in account_markers):
-                    return True, "account/session/profile mutation is protected from active scanning"
-                if method_upper == "PATCH" and any(marker in normalized_path for marker in state_markers):
-                    return True, "state-transition endpoint is protected from active scanning"
-
-            return False, ""
         print("[Auth] scan account order: " + ", ".join(f"{a.get('role', 'account')}@{a.get('base_url', target_url)}" for a in scan_accounts))
 
         for scan_account in scan_accounts:
@@ -2051,7 +2310,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             for path, methods in account_endpoints.items():
                 for method, details in methods.items():
                     # 기본 api_url은 primary target 기준으로 구성 (select_token 내 path 추출용)
-                    blocked, block_reason = is_dangerous_endpoint(method, path)
+                    blocked, block_reason = is_dangerous_endpoint(method, path, details)
                     if blocked:
                         print(f"[Safety] skip {method.upper()} {path}: {block_reason}")
                         continue
@@ -2085,6 +2344,35 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 resolve_schema_ref(csrf_schema, swagger_components),
                                 swagger_components,
                             )
+
+                        auth_acceptance = classify_auth_acceptance(
+                            scan_account,
+                            api_url,
+                            method.upper(),
+                            body=csrf_json_body,
+                            token=best_token,
+                            fallback_cookie_name=session_cookie_name,
+                        )
+                        scan_account["auth_acceptance"] = auth_acceptance
+                        auth_acceptance_mode = auth_acceptance.get("mode")
+                        cookie_source = auth_acceptance.get("cookie_source", "none")
+                        csrf_acceptance_allowed = (
+                            auth_acceptance_mode in {"COOKIE_ONLY", "HEADER_OR_COOKIE"}
+                            and cookie_source == "real"
+                        )
+                        print(
+                            f"[AuthAcceptance] {best_role} {method.upper()} {api_url} "
+                            f"mode={auth_acceptance_mode} statuses={auth_acceptance.get('statuses')} "
+                            f"cookie_source={cookie_source}"
+                        )
+                        if auth_acceptance_mode in {"HEADER_ONLY", "HEADER_AND_COOKIE"}:
+                            print(f"[CSRF DEBUG] not applicable: auth_acceptance={auth_acceptance_mode} on {api_url}")
+                        elif auth_acceptance_mode == "PUBLIC_OR_BROKEN":
+                            print(f"[CSRF DEBUG] skip: no_auth succeeded on {api_url}; authentication/authorization issue, not CSRF")
+                        elif auth_acceptance_mode == "UNKNOWN":
+                            print(f"[CSRF DEBUG] deferred: auth acceptance could not be classified on {api_url}")
+                        elif cookie_source != "real":
+                            print(f"[CSRF DEBUG] potential only: cookie_source={cookie_source} on {api_url}; confirmed CSRF not reported")
     
                         # 1단계: 완전 미인증 시도 (401/403 등 반환 확인)
                         status_no_auth = None
@@ -2157,6 +2445,9 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                             
                             # 브라우저 전송 가능성 검증
                             has_unsafe_samesite = has_unsafe_samesite_cookie(scan_account, set_cookie)
+                            if not csrf_acceptance_allowed:
+                                has_unsafe_samesite = False
+                                csrf_token_absent = False
                             
                             is_cors_bypassable = False
                             if cors_origin == "*" or (cors_origin and cors_credentials == "true") or preflight_cors_bypassable:
@@ -2210,6 +2501,9 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                     "expected_status_code": status_cookie_auth,
                                     "screenshot_on": "response_received",
                                     "replay_script": csrf_req_parts["replay_script"],
+                                    "auth_acceptance_mode": auth_acceptance_mode,
+                                    "auth_acceptance_statuses": auth_acceptance.get("statuses", {}),
+                                    "cookie_source": cookie_source,
                                     "description": (
                                         f"이 엔드포인트는 중요 상태 변경(POST/PUT/DELETE)을 유도하지만 브라우저 자동 전송 쿠키의 SameSite 정책(Lax/Strict)이 미흡합니다. "
                                         f"또한 외부 Origin 도메인으로부터의 쿠키 동반 요청(Access-Control-Allow-Credentials: {cors_credentials})을 차단하지 못할 가능성이 있습니다. "
@@ -2245,6 +2539,9 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                                 "custom_type": "CSRF_CUSTOM",
                                                 "evidence_request": format_http_request(res_ct.request),
                                                 "evidence_response": format_http_response(res_ct),
+                                                "auth_acceptance_mode": auth_acceptance_mode,
+                                                "auth_acceptance_statuses": auth_acceptance.get("statuses", {}),
+                                                "cookie_source": cookie_source,
                                                 "description": f"서버가 엄격한 Content-Type 파싱을 하지 않아 HTML <form> 태그 등을 사용한 {ct} 형태의 CSRF 공격으로 중요 행동 변조가 가능합니다.",
                                                 "solution": "서버 측 컨트롤러 혹은 스프링 시큐리티 단계에서 Content-Type이 application/json 또는 올바른 형식인지 엄격히 검증(Validator)하여 이외의 타입은 415 에러로 강제 거부하도록 차단하세요."
                                             })
@@ -2277,6 +2574,9 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                             "custom_type": "CSRF_CUSTOM",
                                             "evidence_request": format_http_request(res_no_ref.request),
                                             "evidence_response": format_http_response(res_no_ref),
+                                            "auth_acceptance_mode": auth_acceptance_mode,
+                                            "auth_acceptance_statuses": auth_acceptance.get("statuses", {}),
+                                            "cookie_source": cookie_source,
                                             "description": "서버가 Referer 헤더의 유무 또는 허용 도메인 여부를 엄격히 확인하지 않고 있어, 공격자가 Referer 헤더를 지우거나 임의 주소로 요청하여 CSRF 공격을 성립시킬 수 있습니다.",
                                             "solution": "필터나 인터셉터 단에서 Referer 헤더가 없거나 신뢰할 수 없는 Origin인 경우 요청을 400 Bad Request 또는 403 Forbidden으로 차단하는 방어 로직을 적용하세요."
                                         })
@@ -2357,9 +2657,11 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                     base_test_json_keys = []
                     base_test_json_schemas = {}
                     base_json_defaults = {}
+                    base_json_required_defaults = {}
                     base_test_multipart_keys = []
                     base_test_multipart_schemas = {}
                     base_multipart_defaults = {}
+                    base_multipart_required_defaults = {}
                     base_multipart_file_keys = []
     
                     for param_meta in parameters:
@@ -2384,8 +2686,12 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 content.get("multipart/form-data", {}).get("schema", {}),
                                 swagger_components,
                             )
+                            required_multipart_props = set(multipart_schema.get("required") or [])
                             for prop_name, prop_meta in multipart_schema.get("properties", {}).items():
-                                base_multipart_defaults[prop_name] = default_value_for_schema(prop_meta, swagger_components, prop_name)
+                                default_multipart_value = default_value_for_schema(prop_meta, swagger_components, prop_name)
+                                base_multipart_defaults[prop_name] = default_multipart_value
+                                if prop_name in required_multipart_props:
+                                    base_multipart_required_defaults[prop_name] = default_multipart_value
                                 prop_type = get_schema_type(prop_meta, swagger_components)
                                 items_schema = resolve_schema_ref(prop_meta.get("items", {}), swagger_components)
                                 item_format = (items_schema.get("format") or "").lower() if isinstance(items_schema, dict) else ""
@@ -2408,18 +2714,27 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 for keypath in base_test_json_keys
                             }
                             base_json_defaults = build_default_payload_from_schema(resolved_json_schema, swagger_components)
+                            base_json_required_defaults = build_required_payload_from_schema(resolved_json_schema, swagger_components)
                             for prop_name, prop_meta in resolved_json_schema.get("properties", {}).items():
                                 if "enum" in prop_meta and prop_meta["enum"]:
                                     base_test_enum_defaults[prop_name] = prop_meta["enum"][0]
 
+                    for param_name in list(base_param_defaults):
+                        resolved_identity = resolve_identity_query_param(param_name, scan_account, best_token, best_base)
+                        if resolved_identity is not None:
+                            base_param_defaults[param_name] = resolved_identity
+
                     def multipart_files_for_request():
                         if not base_multipart_file_keys:
                             return None
-                        # Multipart-only endpoints, such as post image upload APIs, often reject
-                        # application/json before query params are even processed. A harmless empty
-                        # file part lets the request reach controller validation and XSS reflection logic.
+                        # Match real multipart upload flows: if the OpenAPI request declares file
+                        # fields, include a harmless 1x1 PNG even when the field is optional.
+                        png_1x1 = base64.b64decode(
+                            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ax"
+                            "p3n8AAAAASUVORK5CYII="
+                        )
                         return {
-                            key: ("", b"", "application/octet-stream")
+                            key: ("argus-test.png", png_1x1, "image/png")
                             for key in base_multipart_file_keys
                         }
     
@@ -2428,13 +2743,18 @@ def run_zap_scan(target_url: str, auth_tokens: list):
 
                     # 고도화 6: Baseline 사전 요청 전송 (Diff 기반 오탐 방지 목적)
                     baseline_params = dict(base_param_defaults)
-                    baseline_json = copy.deepcopy(base_json_defaults)
+                    baseline_json = copy.deepcopy(base_json_required_defaults)
                     for k in base_test_json_keys:
+                        top_key = k.split(".", 1)[0].replace("[0]", "")
+                        if top_key not in base_json_required_defaults:
+                            continue
                         prop_name = k.split(".")[-1]
                         dummy_val = default_value_for_schema(base_test_json_schemas.get(k, {"type": "string"}), swagger_components, prop_name)
                         set_nested_value_by_keypath(baseline_json, k, dummy_val)
-                    baseline_multipart = dict(base_multipart_defaults)
+                    baseline_multipart = dict(base_multipart_required_defaults)
                     for k in base_test_multipart_keys:
+                        if k not in base_multipart_required_defaults:
+                            continue
                         dummy_val = default_value_for_schema({"type": "string"}, swagger_components, k)
                         baseline_multipart[k] = base_test_enum_defaults.get(k, dummy_val)
     
@@ -2445,7 +2765,9 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                         if not is_multipart_request and base_test_json_keys:
                             req_headers["Content-Type"] = "application/json"
                         elif is_multipart_request:
-                            req_headers.pop("Content-Type", None)
+                            # requests가 자동으로 boundary를 가진 Content-Type 헤더를 채우도록 대소문자 구분 없이 소거
+                            for ct_key in [k for k in req_headers.keys() if k.lower() == "content-type"]:
+                                req_headers.pop(ct_key, None)
     
                         res_base = requests.request(
                             method=method.upper(),
@@ -2459,6 +2781,16 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                         )
                         baseline_status = res_base.status_code
                         baseline_body = res_base.text
+                        print(
+                            f"[HTTP TRACE] baseline {method.upper()} {resolved_api_url} "
+                            f"role={best_role} status={res_base.status_code} "
+                            f"params={baseline_params or {}} "
+                            f"json_keys={list(baseline_json.keys()) if isinstance(baseline_json, dict) and baseline_json else []} "
+                            f"multipart_keys={list(baseline_multipart.keys()) if baseline_multipart else []} "
+                            f"file_keys={base_multipart_file_keys if is_multipart_request else []} "
+                            f"content_type={res_base.headers.get('Content-Type', '')} "
+                            f"response={summarize_response_for_log(res_base, 300)}"
+                        )
                     except Exception as be:
                         print(f"[XSS Baseline DEBUG] Failed to get baseline response: {be}")
 
@@ -2496,8 +2828,11 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 test_params[target_param] = xss_payload
                             
                             # JSON Fuzzing 딕셔너리 구성: non-string fields keep type-correct defaults.
-                            test_json = copy.deepcopy(base_json_defaults)
+                            test_json = copy.deepcopy(base_json_required_defaults)
                             for k in base_test_json_keys:
+                                top_key = k.split(".", 1)[0].replace("[0]", "")
+                                if target_type != "json" and top_key not in base_json_required_defaults:
+                                    continue
                                 prop_name = k.split(".")[-1]
                                 dummy_val = default_value_for_schema(base_test_json_schemas.get(k, {"type": "string"}), swagger_components, prop_name)
                                 set_nested_value_by_keypath(test_json, k, dummy_val)
@@ -2505,8 +2840,10 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 set_nested_value_by_keypath(test_json, target_param, xss_payload)
                             
                             # Multipart Fuzzing 딕셔너리 구성: payload only goes into string fields.
-                            test_multipart = dict(base_multipart_defaults)
+                            test_multipart = dict(base_multipart_required_defaults)
                             for k in base_test_multipart_keys:
+                                if target_type != "multipart" and k not in base_multipart_required_defaults:
+                                    continue
                                 dummy_val = default_value_for_schema({"type": "string"}, swagger_components, k)
                                 test_multipart[k] = base_test_enum_defaults.get(k, dummy_val)
                             if target_type == "multipart":
@@ -2517,7 +2854,9 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 if target_type == "json":
                                     req_headers["Content-Type"] = "application/json"
                                 elif is_multipart_request:
-                                    req_headers.pop("Content-Type", None)
+                                    # requests가 자동으로 boundary를 가진 Content-Type 헤더를 채우도록 대소문자 구분 없이 소거
+                                    for ct_key in [k for k in req_headers.keys() if k.lower() == "content-type"]:
+                                        req_headers.pop(ct_key, None)
     
                                 print(f"[XSS DEBUG] testing -> {method.upper()} {resolved_api_url} | param: {target_param} ({target_type}) | payload: {xss_payload[:30]}...")
                                 res_xss = requests.request(
@@ -2534,6 +2873,17 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 res_body = res_xss.text
                                 x_content_type = res_xss.headers.get("X-Content-Type-Options", "").lower()
                                 content_type = res_xss.headers.get("Content-Type", "").lower()
+                                print(
+                                    f"[HTTP TRACE] xss {method.upper()} {resolved_api_url} "
+                                    f"role={best_role} param={target_param} target_type={target_type} "
+                                    f"status={res_xss.status_code} params={test_params or {}} "
+                                    f"json_keys={list(test_json.keys()) if isinstance(test_json, dict) and test_json else []} "
+                                    f"multipart_keys={list(test_multipart.keys()) if test_multipart else []} "
+                                    f"file_keys={base_multipart_file_keys if is_multipart_request else []} "
+                                    f"content_type={res_xss.headers.get('Content-Type', '')} "
+                                    f"payload_reflected={is_payload_reflected(xss_payload, res_body, baseline_body)} "
+                                    f"response={summarize_response_for_log(res_xss, 300)}"
+                                )
     
                                 # 4xx/5xx 에러 응답은 XSS로 처리하지 않음 (에러 페이지 반사는 6-1 영역)
                                 if res_xss.status_code >= 400:
@@ -2577,12 +2927,15 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                             t_params_2 = dict(base_param_defaults)
                                             if target_type == "query":
                                                 t_params_2[target_param] = ctx_payload
-                                            t_json_2 = copy.deepcopy(base_json_defaults)
+                                            t_json_2 = copy.deepcopy(base_json_required_defaults)
                                             for k in base_test_json_keys:
+                                                top_key = k.split(".", 1)[0].replace("[0]", "")
+                                                if target_type != "json" and top_key not in base_json_required_defaults:
+                                                    continue
                                                 set_nested_value_by_keypath(t_json_2, k, "safe")
                                             if target_type == "json":
                                                 set_nested_value_by_keypath(t_json_2, target_param, ctx_payload)
-                                            t_multipart_2 = dict(base_multipart_defaults)
+                                            t_multipart_2 = dict(base_multipart_required_defaults)
                                             if target_type == "multipart":
                                                 t_multipart_2[target_param] = ctx_payload
                                             try:
@@ -2754,7 +3107,8 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                             stored_targets.append(("multipart", m_key, base_test_multipart_schemas.get(m_key, {"type": "string"})))
                         stored_trials = []
                         for target_type, target_param, target_schema in stored_targets:
-                            for stored_payload in payloads_for_xss_field(target_param, target_schema, swagger_components)[:4]:
+                            for base_stored_payload in payloads_for_xss_field(target_param, target_schema, swagger_components)[:4]:
+                                stored_payload = make_unique_xss_payload(base_stored_payload, target_param)
                                 stored_trials.append((target_type, target_param, stored_payload))
                         # Stored XSS는 원인 필드 추적을 위해 한 번에 하나의 파라미터에만 payload를 저장한다.
                         for target_type, target_param, stored_payload in stored_trials:
@@ -2762,16 +3116,21 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                             if target_type == "query":
                                 store_params[target_param] = stored_payload
 
-                            store_json = copy.deepcopy(base_json_defaults)
+                            store_json = copy.deepcopy(base_json_required_defaults)
                             for k in base_test_json_keys:
+                                top_key = k.split(".", 1)[0].replace("[0]", "")
+                                if target_type != "json" and top_key not in base_json_required_defaults:
+                                    continue
                                 prop_name = k.split(".")[-1]
                                 dummy_val = default_value_for_schema(base_test_json_schemas.get(k, {"type": "string"}), swagger_components, prop_name)
                                 set_nested_value_by_keypath(store_json, k, base_test_enum_defaults.get(prop_name, dummy_val))
                             if target_type == "json":
                                 set_nested_value_by_keypath(store_json, target_param, stored_payload)
                             
-                            store_multipart = dict(base_multipart_defaults)
+                            store_multipart = dict(base_multipart_required_defaults)
                             for k in base_test_multipart_keys:
+                                if target_type != "multipart" and k not in base_multipart_required_defaults:
+                                    continue
                                 dummy_val = default_value_for_schema({"type": "string"}, swagger_components, k)
                                 store_multipart[k] = base_test_enum_defaults.get(k, dummy_val)
                             if target_type == "multipart":
@@ -2793,8 +3152,9 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                     import re as _re
                                     tmp_path = _re.sub(r"\{[^}]+\}", "1", get_path)
                                     tmp_url = f"{best_base.rstrip('/')}/{tmp_path.lstrip('/')}"
+                                    tmp_params = build_query_defaults_from_details(get_methods.get("get") or {}, swagger_components)
                                     try:
-                                        tmp_res = requests.get(tmp_url, headers=xss_headers, timeout=3)
+                                        tmp_res = requests.get(tmp_url, headers=xss_headers, params=tmp_params or None, timeout=3)
                                         if tmp_res.status_code == 200:
                                             get_baselines[get_path] = tmp_res.text
                                     except Exception:
@@ -2820,15 +3180,15 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                         pass
                                     if not resource_id:
                                         resource_id = extract_id_from_url(api_url)
-                                    if not is_admin_account(scan_account):
-                                        verify_cross_role_stored_xss(
-                                            post_path=path,
-                                            post_url=api_url,
-                                            resource_id=resource_id,
-                                            payload=stored_payload,
-                                            param_name=target_param,
-                                            writer_role=best_role,
-                                        )
+                                    verify_cross_account_stored_xss(
+                                        post_path=path,
+                                        post_url=api_url,
+                                        resource_id=resource_id,
+                                        payload=stored_payload,
+                                        param_name=target_param,
+                                        writer_account=scan_account,
+                                        writer_role=best_role,
+                                    )
     
                                     # 모든 GET 엔드포인트를 순회하며 치환 및 조회
                                     for get_path, get_methods in account_endpoints.items():
@@ -2840,10 +3200,11 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                             resolved_path = _re.sub(r"\{[^}]+\}", str(resource_id), get_path)
                                         else:
                                             resolved_path = get_path
-    
+
                                         get_url = f"{best_base.rstrip('/')}/{resolved_path.lstrip('/')}"
+                                        get_params = build_query_defaults_from_details(get_methods.get("get") or {}, swagger_components)
                                         try:
-                                            get_res = requests.get(get_url, headers=xss_headers, timeout=4)
+                                            get_res = requests.get(get_url, headers=xss_headers, params=get_params or None, timeout=4)
                                             # 해당 GET 엔드포인트 전용으로 백업해둔 Baseline 본문 가져오기
                                             specific_baseline = get_baselines.get(get_path)
                                             
@@ -2876,14 +3237,14 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                                     print(f"[STORED XSS] !!! CONFIRMED on {get_url} (Stored payload '{stored_payload}' reflected) !!!")
                                                     
                                                     response_params = infer_reflected_response_params(get_res, stored_payload)
-                                                    used_param = ", ".join(response_params or [target_param])
                                                     custom_alerts.append({
                                                         "alert": "Stored Cross-Site Scripting (Stored XSS) Vulnerability",
                                                         "url": get_url,
                                                         "method": "GET",
                                                         "risk": "High",
                                                         "confidence": "High",
-                                                        "param": used_param,
+                                                        "param": target_param,
+                                                        "reflected_response_params": response_params,
                                                         "attack": stored_payload,
                                                         "status_code": get_res.status_code,
                                                         "evidence": f"{method.upper()} {api_url} 저장 후 GET {get_url} 재조회 응답에 페이로드 '{stored_payload}'가 반사됨",
@@ -3180,6 +3541,9 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                     unique_key = "GLOBAL_ZAP_HSTS"
                 elif "Cookie" in alert_name and ("HttpOnly" in alert_name or "Secure" in alert_name or "SameSite" in alert_name):
                     unique_key = f"GLOBAL_ZAP_{alert_name.replace(' ', '_')[:40]}"
+                elif custom_type == "40014" and a.get("cross_account_reader_role"):
+                    reader_role = a.get("cross_account_reader_role", "")
+                    unique_key = f"{account_role}_{reader_role}_{method}_{url}_{key_id}"
                 else:
                     unique_key = f"{account_role}_{method}_{url}_{key_id}"
                 
@@ -3359,7 +3723,15 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 "account_role": alert.get("account_role", ""),
                 "account_roles": alert.get("account_roles", []),
                 "affected_parameters": alert.get("affected_parameters", []),
+                "reflected_response_params": alert.get("reflected_response_params", []),
                 "affected_urls": alert.get("affected_urls", []),
+                "auth_acceptance_mode": alert.get("auth_acceptance_mode", ""),
+                "auth_acceptance_statuses": alert.get("auth_acceptance_statuses", {}),
+                "cookie_source": alert.get("cookie_source", ""),
+                "cross_account_writer_role": alert.get("cross_account_writer_role", ""),
+                "cross_account_reader_role": alert.get("cross_account_reader_role", ""),
+                "cross_account_write_url": alert.get("cross_account_write_url", ""),
+                "cross_account_read_url": alert.get("cross_account_read_url", ""),
                 "remediation_summary": ko_info.get("summary", ""),
                 "remediation_cause": ko_info.get("cause", "").replace("{param}", param_name),
                 "remediation_guide": ko_info.get("action_guide", ""),
