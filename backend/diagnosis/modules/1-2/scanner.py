@@ -43,8 +43,6 @@ def _bootstrap_locals():
 
 @dataclass
 class ScanOptions:
-    max_targets: int = 60
-    scan_all_inventory: bool = False
     injector_enabled: bool = True
     direct_enabled: bool = True
     zap_enabled: bool = False
@@ -73,8 +71,6 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
         types = [t.strip() for t in types_raw.split(",") if t.strip()]
     injector_on = bool(cfg.get("injector_enabled", True))
     return ScanOptions(
-        max_targets=max(5, min(int(cfg.get("max_targets", 60)), 500)),
-        scan_all_inventory=bool(cfg.get("scan_all_inventory", False)),
         injector_enabled=injector_on,
         direct_enabled=bool(cfg.get("direct_enabled", injector_on)),
         zap_enabled=bool(cfg.get("zap_enabled", False)),
@@ -159,8 +155,6 @@ def run_g12_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     targets, target_meta = targets_mod.load_scan_targets(
         ctx.data_dir,
         raw,
-        max_targets=opts.max_targets,
-        scan_all=opts.scan_all_inventory,
     )
 
     if target_meta.get("error") == "no_api_tree":

@@ -251,12 +251,12 @@ def annotate_result(result: DetectionResult) -> DetectionResult:
         result.reporting_guidance = "Report as confirmed; verify parameterized queries in code."
     elif result.verification_status == VerificationStatus.VERIFIED and boolean_verified:
         result.classification = "CONFIRMED_INJECTION_BOOLEAN_BASED"
-        result.confidence = "HIGH"
-        result.argus_risk = "HIGH"
-        result.related_issue = "SQL Injection / Boolean-based Blind SQL Injection"
+        result.confidence = "MEDIUM"
+        result.argus_risk = "MEDIUM"
+        result.related_issue = "Potential Injection / Boolean-based Response Difference"
         result.why_injection = "True/false payloads produced stable response differences."
-        result.risk_comment = "Reproducible response delta — higher confidence than isolated 500 errors."
-        result.reporting_guidance = "Report as confirmed; trace user input into query conditions."
+        result.risk_comment = "Boolean-only evidence can overlap with validation or business-rule differences."
+        result.reporting_guidance = "Report as a reproducible candidate; confirm with logs/query tracing before calling it high risk."
     elif result.verification_status == VerificationStatus.VERIFIED and error_verified and matched_patterns:
         result.classification = "CONFIRMED_INJECTION_ERROR_PATTERN"
         result.confidence = "HIGH"
