@@ -8,12 +8,14 @@ compatibility ``run_zap_scan()`` function at the bottom of this file.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import contextlib
 import copy
 import importlib.util
 import json
 import os
 from pathlib import Path
 import re
+import sys
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -51,6 +53,20 @@ scan_status = {
 }
 
 
+class _Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for stream in self.streams:
+            stream.write(data)
+            stream.flush()
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+
 @dataclass
 class ScanResult:
     status: str
@@ -80,6 +96,22 @@ def update_status(is_running=None, progress=None, message=None, result_file=None
         scan_status["log_file"] = log_file
     if total_alerts is not None:
         scan_status["total_alerts"] = total_alerts
+    try:
+        from app.services import diagnosis_progress as dp
+
+        if is_running is False:
+            if progress == 100:
+                dp.finish(message or "1-1 scan completed")
+            elif message:
+                dp.fail(message)
+        else:
+            dp.update(
+                phase="running",
+                message=message,
+                percent=progress,
+            )
+    except Exception:
+        pass
 
 
 def _read_json(path: Path):
@@ -212,6 +244,20 @@ def _schema_from_api_tree_param(param: dict) -> dict:
     return schema
 
 
+def _looks_like_file_field(name: str, schema: dict | None = None) -> bool:
+    field = re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+    schema = schema or {}
+    schema_type = str(schema.get("type") or "").lower()
+    schema_format = str(schema.get("format") or "").lower()
+    items = schema.get("items") if isinstance(schema.get("items"), dict) else {}
+    item_format = str(items.get("format") or "").lower()
+    if schema_type == "string" and schema_format == "binary":
+        return True
+    if schema_type == "array" and item_format == "binary":
+        return True
+    return any(token in field for token in ["image", "images", "photo", "photos", "file", "files", "upload", "attachment"])
+
+
 def _api_tree_endpoint_to_openapi_detail(ep: dict) -> dict:
     detail = ep.get("openapi")
     if isinstance(detail, dict) and (detail.get("parameters") or detail.get("requestBody")):
@@ -220,7 +266,15 @@ def _api_tree_endpoint_to_openapi_detail(ep: dict) -> dict:
     detail = dict(detail or {})
     parameters = list(detail.get("parameters") or [])
     json_properties: dict[str, dict] = {}
+    json_required: list[str] = []
     form_properties: dict[str, dict] = {}
+    form_required: list[str] = []
+    request_header_content_types = {
+        str(header.get("sample") or header.get("value") or "").lower()
+        for header in ep.get("request_headers", []) or []
+        if str(header.get("name") or "").lower() == "content-type"
+    }
+    prefers_multipart = any("multipart/form-data" in value for value in request_header_content_types)
 
     for param in ep.get("request_params", []) or []:
         if not isinstance(param, dict):
@@ -233,19 +287,31 @@ def _api_tree_endpoint_to_openapi_detail(ep: dict) -> dict:
         required = bool(param.get("required", False))
         if location in {"query", "path", "header", "cookie"}:
             parameters.append({"name": name, "in": location, "required": required, "schema": schema})
-        elif location in {"body", "json"}:
+        elif location in {"body", "json"} and not prefers_multipart:
             json_properties[name] = schema
-        elif location in {"form", "formdata", "multipart"}:
+            if required:
+                json_required.append(name)
+        elif location in {"body", "form", "formdata", "multipart"}:
+            if prefers_multipart and _looks_like_file_field(name, schema):
+                schema = {"type": "array", "items": {"type": "string", "format": "binary"}}
             form_properties[name] = schema
+            if required:
+                form_required.append(name)
 
     if parameters:
         detail["parameters"] = parameters
 
     content = ((detail.get("requestBody") or {}).get("content") or {}).copy()
     if json_properties and "application/json" not in content:
-        content["application/json"] = {"schema": {"type": "object", "properties": json_properties}}
+        json_schema = {"type": "object", "properties": json_properties}
+        if json_required:
+            json_schema["required"] = json_required
+        content["application/json"] = {"schema": json_schema}
     if form_properties and "multipart/form-data" not in content:
-        content["multipart/form-data"] = {"schema": {"type": "object", "properties": form_properties}}
+        form_schema = {"type": "object", "properties": form_properties}
+        if form_required:
+            form_schema["required"] = form_required
+        content["multipart/form-data"] = {"schema": form_schema}
     if content:
         detail["requestBody"] = {"content": content}
 
@@ -295,6 +361,90 @@ def _build_auth_headers_for_mode(account: dict, mode: str | None = None) -> dict
         headers.pop("Authorization", None)
         headers["accessToken"] = clean_token
     return headers
+
+
+def _authorization_headers_from_account(account: dict) -> dict:
+    current = dict(_build_auth_headers_for_mode(account, account.get("auth_mode")))
+    current.pop("Cookie", None)
+    current.pop("cookie", None)
+    if current:
+        return current
+    for mode in ["header", "authorization_raw", "x_auth_token", "access_token_header", "access_token_camel_header"]:
+        headers = dict(_build_auth_headers_for_mode(account, mode))
+        headers.pop("Cookie", None)
+        headers.pop("cookie", None)
+        if headers:
+            return headers
+    return {}
+
+
+def _cookie_header_and_source(account: dict) -> tuple[str, str]:
+    cookie_header = auth.build_cookie_header_from_account(account)
+    if cookie_header:
+        return cookie_header, "real"
+    token = str(account.get("token") or "").replace("Bearer ", "").strip()
+    if token:
+        cookie_name = str(account.get("token_field") or "accessToken").split(".")[-1] or "accessToken"
+        return f"{cookie_name}={token}", "synthetic"
+    return "", "none"
+
+
+def _classify_auth_acceptance(
+    account: dict,
+    url: str,
+    method: str,
+    params: dict | None = None,
+    json_body: dict | None = None,
+    files=None,
+) -> dict:
+    authz_headers = _authorization_headers_from_account(account)
+    cookie_header, cookie_source = _cookie_header_and_source(account)
+    probes = {
+        "no_auth": {},
+        "header_only": dict(authz_headers),
+        "cookie_only": {"Cookie": cookie_header} if cookie_header else {},
+        "both": {**authz_headers, **({"Cookie": cookie_header} if cookie_header else {})},
+    }
+    statuses: dict[str, int | None] = {}
+    errors: dict[str, str] = {}
+    for name, probe_headers in probes.items():
+        try:
+            res = requests.request(
+                method,
+                url,
+                headers=probe_headers or None,
+                params=params or None,
+                json=json_body or None,
+                files=files,
+                timeout=6,
+            )
+            statuses[name] = res.status_code
+        except Exception as exc:
+            statuses[name] = None
+            errors[name] = str(exc)
+
+    def ok(name: str) -> bool:
+        return _is_successful_response(statuses.get(name) or 0)
+
+    if ok("no_auth"):
+        mode = "PUBLIC_OR_BROKEN"
+    elif ok("header_only") and not ok("cookie_only"):
+        mode = "HEADER_ONLY"
+    elif ok("cookie_only") and not ok("header_only"):
+        mode = "COOKIE_ONLY"
+    elif ok("header_only") and ok("cookie_only"):
+        mode = "HEADER_OR_COOKIE"
+    elif ok("both") and not ok("header_only") and not ok("cookie_only"):
+        mode = "HEADER_AND_COOKIE"
+    elif any(value is None for value in statuses.values()):
+        mode = "UNKNOWN"
+    else:
+        mode = "UNKNOWN"
+
+    result = {"mode": mode, "statuses": statuses, "cookie_source": cookie_source}
+    if errors:
+        result["errors"] = errors
+    return result
 
 
 def _auth_probe_paths(endpoints: dict, account: dict) -> list[str]:
@@ -350,6 +500,35 @@ def _detect_account_auth_mode(account: dict, target_url: str) -> str:
     return "disabled"
 
 
+def _account_role_text(account: dict | None) -> str:
+    account = account or {}
+    return " ".join(
+        str(value or "").lower()
+        for value in [
+            account.get("role"),
+            account.get("base_url"),
+            account.get("claims", {}),
+            account.get("email"),
+        ]
+    )
+
+
+def _endpoint_role_priority(path: str, account: dict | None) -> tuple[int, str]:
+    lowered = str(path or "").lower()
+    role_text = _account_role_text(account)
+    is_admin = "admin" in role_text
+    is_seller = "seller" in role_text
+    if is_admin and re.search(r"(^|/)admin(s)?(/|$)", lowered):
+        return (0, lowered)
+    if is_seller and re.search(r"(^|/)seller(s)?(/|$)", lowered):
+        return (0, lowered)
+    if not is_admin and re.search(r"(^|/)admin(s)?(/|$)", lowered):
+        return (3, lowered)
+    if not is_seller and re.search(r"(^|/)seller(s)?(/|$)", lowered):
+        return (3, lowered)
+    return (1, lowered)
+
+
 def _resolved_paths(path: str) -> list[str]:
     if "{" not in path:
         return [path]
@@ -401,7 +580,7 @@ def _request_defaults(details: dict, components: dict) -> tuple[dict, dict, dict
             prop_type = openapi_utils.get_schema_type(prop, components)
             item_schema = openapi_utils.resolve_schema_ref(prop.get("items", {}), components)
             item_format = (item_schema.get("format") or "").lower() if isinstance(item_schema, dict) else ""
-            if (prop_type == "string" and (prop.get("format") or "").lower() == "binary") or (prop_type == "array" and item_format == "binary"):
+            if _looks_like_file_field(name, prop):
                 multipart_file_keys.append(name)
     elif "application/json" in content:
         schema = openapi_utils.resolve_schema_ref(content["application/json"].get("schema") or {}, components)
@@ -455,7 +634,8 @@ def _is_successful_response(status_code: int) -> bool:
     return 200 <= int(status_code or 0) < 400
 
 
-def _csrf_alert(method: str, url: str, name: str, param: str, res, account_role: str) -> dict:
+def _csrf_alert(method: str, url: str, name: str, param: str, res, account_role: str, auth_acceptance: dict | None = None) -> dict:
+    auth_acceptance = auth_acceptance or {}
     return {
         "alert": name,
         "url": url,
@@ -470,6 +650,9 @@ def _csrf_alert(method: str, url: str, name: str, param: str, res, account_role:
         "account_role": account_role,
         "evidence_request": _format_request(res.request),
         "evidence_response": _format_response(res),
+        "auth_acceptance_mode": auth_acceptance.get("mode", ""),
+        "auth_acceptance_statuses": auth_acceptance.get("statuses", {}),
+        "cookie_source": auth_acceptance.get("cookie_source", "none"),
         "description": "State-changing request may be accepted without strong Origin/CSRF validation.",
         "solution": "Require server-side CSRF tokens or strict Origin/Referer checks for cookie-authenticated mutations.",
     }
@@ -579,6 +762,13 @@ def _map_alerts(alerts: list[dict]) -> list[dict]:
             "affected_parameters": alert.get("affected_parameters", []),
             "affected_urls": alert.get("affected_urls", []),
             "successful_attack_payloads": alert.get("successful_attack_payloads", []),
+            "auth_acceptance_mode": alert.get("auth_acceptance_mode", ""),
+            "auth_acceptance_statuses": alert.get("auth_acceptance_statuses", {}),
+            "cookie_source": alert.get("cookie_source", ""),
+            "cross_account_writer_role": alert.get("cross_account_writer_role", ""),
+            "cross_account_reader_role": alert.get("cross_account_reader_role", ""),
+            "cross_account_write_url": alert.get("cross_account_write_url", ""),
+            "cross_account_read_url": alert.get("cross_account_read_url", ""),
             "remediation_summary": alert.get("solution", ""),
             "remediation_cause": "",
             "remediation_guide": alert.get("solution", ""),
@@ -657,7 +847,11 @@ def scan_target(target_url: str, auth_tokens: list[dict] | None = None, result_d
         if zap and account is accounts[0]:
             zap_adapter.apply_auth_to_zap(zap, account.get("token"), auth.build_cookie_header_from_account(account))
 
-        for path, methods in (account.get("validated_endpoints") or {}).items():
+        ordered_endpoints = sorted(
+            (account.get("validated_endpoints") or {}).items(),
+            key=lambda item: _endpoint_role_priority(item[0], account),
+        )
+        for path, methods in ordered_endpoints:
             done += 1
             update_status(progress=min(85, 10 + int(done / total * 75)), message=f"Scanning {role} {path}")
             for method, details in (methods or {}).items():
@@ -733,10 +927,33 @@ def scan_target(target_url: str, auth_tokens: list[dict] | None = None, result_d
                                 alerts.append(_alert_from_xss(result, method, url, keypath, payload, res, role))
                                 break
 
-                    if _is_mutation(method) and auth.build_cookie_header_from_account(account):
-                        _log(f"[CSRF] testing {method} {url} origins={len(payloads.CSRF_TEST_ORIGINS)}")
+                    if _is_mutation(method):
+                        auth_acceptance = _classify_auth_acceptance(account, url, method, params, json_body, files)
+                        account["auth_acceptance"] = auth_acceptance
+                        acceptance_mode = auth_acceptance.get("mode")
+                        cookie_source = auth_acceptance.get("cookie_source", "none")
+                        _log(
+                            f"[AuthAcceptance] {role} {method} {url} mode={acceptance_mode} "
+                            f"statuses={auth_acceptance.get('statuses')} cookie_source={cookie_source}"
+                        )
+                        if acceptance_mode in {"HEADER_ONLY", "HEADER_AND_COOKIE"}:
+                            _log(f"[CSRF] not applicable {method} {url}: auth_acceptance={acceptance_mode}")
+                            continue
+                        if acceptance_mode == "PUBLIC_OR_BROKEN":
+                            _log(f"[CSRF] skip {method} {url}: no_auth succeeded; authentication/authorization issue, not CSRF")
+                            continue
+                        if acceptance_mode == "UNKNOWN":
+                            _log(f"[CSRF] deferred {method} {url}: auth acceptance could not be classified")
+                            continue
+                        if acceptance_mode not in {"COOKIE_ONLY", "HEADER_OR_COOKIE"}:
+                            continue
+                        if cookie_source != "real":
+                            _log(f"[CSRF] potential only {method} {url}: cookie_source={cookie_source}; not reporting confirmed CSRF")
+                            continue
+                        cookie_header = auth.build_cookie_header_from_account(account)
+                        _log(f"[CSRF] testing {method} {url} origins={len(payloads.CSRF_TEST_ORIGINS)} auth_acceptance={acceptance_mode}")
                         for origin in payloads.CSRF_TEST_ORIGINS:
-                            csrf_headers = {"Cookie": auth.build_cookie_header_from_account(account), "Origin": origin, "Referer": origin + "/csrf.html"}
+                            csrf_headers = {"Cookie": cookie_header, "Origin": origin, "Referer": origin + "/csrf.html"}
                             try:
                                 res = requests.request(method, url, headers=csrf_headers, json=json_body or {}, timeout=6)
                             except Exception:
@@ -744,7 +961,7 @@ def scan_target(target_url: str, auth_tokens: list[dict] | None = None, result_d
                             _log(f"[CSRF] origin={origin} {method} {url} -> {res.status_code}")
                             if res.status_code not in {401, 403, 415, 500} and rules.check_csrf_token_absence(res):
                                 _log(f"[CSRF] DETECTED {method} {url} origin={origin} status={res.status_code}")
-                                alerts.append(_csrf_alert(method, url, "CSRF Origin Verification Defect", "Origin", res, role))
+                                alerts.append(_csrf_alert(method, url, "CSRF Origin Verification Defect", "Origin", res, role, auth_acceptance))
                                 break
 
     if zap:
@@ -788,7 +1005,7 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
         try:
             from diagnosis.probe_auth import all_account_auths_with_meta
 
-            sessions, _meta = all_account_auths_with_meta(raw_config, data_dir=data_dir)
+            sessions, _meta = all_account_auths_with_meta(raw_config, data_dir=data_dir, refresh=True)
             auth_tokens = [
                 {
                     "role": session.get("role") or session.get("email") or "account",
@@ -799,6 +1016,9 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
                     "set_cookie_headers": session.get("set_cookie_lines") or [],
                     "login_url": session.get("login_url") or "",
                     "claims": session.get("claims") or {},
+                    "token_source": session.get("token_source") or session.get("delivery") or "",
+                    "token_field": session.get("token_field") or session.get("cookie_name") or "",
+                    "email": session.get("email") or "",
                 }
                 for session in sessions
                 if session.get("token") or session.get("access_token") or session.get("cookies")
@@ -814,41 +1034,51 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
         ]
 
     result_dir = Path(getattr(ctx, "report_dir", data_dir / "report" / "1-1"))
+    result_dir.mkdir(parents=True, exist_ok=True)
+    log_path = result_dir / "g11_scan.log"
+    update_status(log_file=str(log_path))
+
     findings: list[dict] = []
     scan_bases = list(endpoints_by_base) or [target_url]
-    for base_url in scan_bases:
-        base_key = _base_key(base_url)
-        base_auth_tokens = [
-            account
-            for account in auth_tokens
-            if _base_key(account.get("base_url") or base_url) == base_key
-        ]
-        legacy_accounts = base_auth_tokens or [{"role": "anonymous", "token": None, "base_url": base_url}]
-        for account in legacy_accounts:
-            account["base_url"] = account.get("base_url") or base_url
-            account["validated_endpoints"] = endpoints_by_base.get(base_url, {}) or account.get("validated_endpoints", {})
-            account["swagger_components"] = components or account.get("swagger_components", {})
+    with log_path.open("w", encoding="utf-8", errors="replace") as log_stream:
+        tee_out = _Tee(sys.stdout, log_stream)
+        tee_err = _Tee(sys.stderr, log_stream)
+        with contextlib.redirect_stdout(tee_out), contextlib.redirect_stderr(tee_err):
+            _log(f"[G11] log_file={log_path}")
+            _log(f"[G11] started_at={time.strftime('%Y-%m-%dT%H:%M:%S%z')}")
+            for base_url in scan_bases:
+                base_key = _base_key(base_url)
+                base_auth_tokens = [
+                    account
+                    for account in auth_tokens
+                    if _base_key(account.get("base_url") or base_url) == base_key
+                ]
+                legacy_accounts = base_auth_tokens or [{"role": "anonymous", "token": None, "base_url": base_url}]
+                for account in legacy_accounts:
+                    account["base_url"] = account.get("base_url") or base_url
+                    account["validated_endpoints"] = endpoints_by_base.get(base_url, {}) or account.get("validated_endpoints", {})
+                    account["swagger_components"] = components or account.get("swagger_components", {})
 
-        before = Path.cwd()
-        result_dir.mkdir(parents=True, exist_ok=True)
-        previous_result_dir_override = getattr(zap_runner, "result_dir_override", None)
-        try:
-            os.chdir(result_dir.parent)
-            zap_runner.scan_status = scan_status
-            zap_runner.result_dir_override = str(result_dir.resolve())
-            zap_runner.run_zap_scan(base_url, legacy_accounts)
-        finally:
-            zap_runner.result_dir_override = previous_result_dir_override
-            os.chdir(before)
+                before = Path.cwd()
+                previous_result_dir_override = getattr(zap_runner, "result_dir_override", None)
+                try:
+                    os.chdir(result_dir.parent)
+                    zap_runner.scan_status = scan_status
+                    zap_runner.result_dir_override = str(result_dir.resolve())
+                    zap_runner.run_zap_scan(base_url, legacy_accounts)
+                finally:
+                    zap_runner.result_dir_override = previous_result_dir_override
+                    os.chdir(before)
 
-        result_path = result_dir / "zap_report_summary_web_ui.json"
-        if result_path.is_file():
-            try:
-                loaded = json.loads(result_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, list):
-                    findings.extend(loaded)
-            except Exception as exc:
-                _log(f"[G11] failed to read legacy result {result_path}: {exc}")
+                result_path = result_dir / "zap_report_summary_web_ui.json"
+                if result_path.is_file():
+                    try:
+                        loaded = json.loads(result_path.read_text(encoding="utf-8"))
+                        if isinstance(loaded, list):
+                            findings.extend(loaded)
+                    except Exception as exc:
+                        _log(f"[G11] failed to read legacy result {result_path}: {exc}")
+            _log(f"[G11] finished_at={time.strftime('%Y-%m-%dT%H:%M:%S%z')}")
     source_msg = f" api_tree={source_name}" if source_name else ""
     status = "fail" if findings else "pass"
     return ScanResult(status=status, findings=findings, message=f"1-1 scan completed.{source_msg} findings={len(findings)}")

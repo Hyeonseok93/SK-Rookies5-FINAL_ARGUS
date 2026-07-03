@@ -658,7 +658,6 @@ export function DiagnosisPage() {
                       engine: mod.engine,
                     })
                   : null;
-
                 return (
                   <div key={section.id} className="border-b border-cyber-border/40 last:border-b-0">
                     <div className="flex items-center gap-2 px-4 py-3 transition hover:bg-cyber-accent/5">
@@ -741,7 +740,7 @@ export function DiagnosisPage() {
                             <div className="h-1.5 overflow-hidden rounded-full bg-cyber-border/40">
                               <div
                                 className="h-full rounded-full bg-cyan-400/80 transition-all duration-500"
-                                style={{ width: `${Math.max(2, runProgress.percent)}%` }}
+                                style={{ width: `${runProgress.percent}%` }}
                               />
                             </div>
                             <p className="font-mono text-[10px] text-cyber-muted">

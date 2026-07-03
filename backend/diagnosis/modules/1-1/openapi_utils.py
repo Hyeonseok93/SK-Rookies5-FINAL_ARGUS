@@ -133,14 +133,27 @@ def default_value_for_schema(schema: dict, components: dict | None = None, param
     schema = resolve_schema_ref(schema or {}, components)
     name = str(param_name or "").lower()
     schema_type = get_schema_type(schema, components)
+    
+    # 1. Enum 검사 (Enum이 선언되어 있다면 첫 번째 값을 선택하여 유효성 에러 우회)
+    if "enum" in schema and isinstance(schema["enum"], list) and len(schema["enum"]) > 0:
+        return schema["enum"][0]
+        
     if "email" in name:
         return "user@example.com"
     if any(token in name for token in ["phone", "tel", "mobile", "contact"]):
         return "010-1234-5678"
+        
+    # 2. Integer 범위 고려 검사
     if schema_type == "integer":
-        return 1
+        min_val = schema.get("minimum", 1)
+        max_val = schema.get("maximum", 99999)
+        return min_val if min_val <= 1 else min_val
+        
+    # 3. Number 범위 고려 검사
     if schema_type == "number":
-        return 1.0
+        min_val = schema.get("minimum", 1.0)
+        return float(min_val)
+        
     if schema_type == "boolean":
         return True
     if schema_type == "array":
