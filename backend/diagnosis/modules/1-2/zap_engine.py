@@ -129,11 +129,7 @@ class ZapEngine:
                 self.zap.openapi.import_file(os.path.abspath(swagger_url), target_url)
             time.sleep(2)
 
-        self.log(f"Running Spider: {target_url}")
-        scan_id = self.zap.spider.scan(url=target_url, maxchildren=10)
-        while int(self.zap.spider.status(scan_id)) < 100:
-            time.sleep(1)
-        time.sleep(2)
+        self.log("Using imported OpenAPI spec as fixed ZAP scan targets.")
 
     def run_active_scan(self, target_url: str, *, max_minutes: int = 30) -> List[DetectionResult]:
         self.log(f"Active Scan (Injection) start: {target_url}")
