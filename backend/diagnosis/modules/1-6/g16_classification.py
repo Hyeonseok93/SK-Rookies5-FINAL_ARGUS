@@ -10,16 +10,26 @@ from diagnosis.result import DiagnosisFinding
 def severity(raw: dict[str, Any]) -> str:
     cls = raw.get("classification") or {}
     final_status = str(cls.get("final_status") or "").lower()
-    risk = str(raw.get("risk") or "").upper()
-    if final_status == "not_vulnerable":
+    cls_confidence = str(cls.get("confidence") or "").lower()
+    review_bucket = str(raw.get("review_bucket") or "").lower()
+
+    if final_status == "not_vulnerable" or review_bucket == "noise":
         return "info"
-    if risk in {"CRITICAL", "HIGH"}:
+
+    # A raw HTTP risk label (CRITICAL/HIGH) reflects "the fuzzer sent an attack
+    # payload and got a 5xx", not that the finding was actually validated. The
+    # engine's own classification (final_status/confidence) and the
+    # baseline-comparison review_bucket carry the real signal, so severity is
+    # derived from those instead of blindly trusting raw["risk"].
+    if final_status == "vulnerable" and cls_confidence == "high" and review_bucket == "report_candidate":
         return "high"
-    if risk == "MEDIUM":
+    if final_status == "vulnerable":
         return "medium"
-    if risk == "LOW":
+    if final_status == "potential_vulnerable" and review_bucket == "report_candidate":
+        return "medium"
+    if final_status == "potential_vulnerable":
         return "low"
-    return "medium" if final_status in {"vulnerable", "potential_vulnerable"} else "info"
+    return "info"
 
 
 def finding_message(raw: dict[str, Any]) -> str:
@@ -38,6 +48,8 @@ def convert_findings(raw_findings: list[dict[str, Any]], limit: int) -> list[Dia
             continue
         cls = raw.get("classification") or {}
         if cls.get("final_status") == "not_vulnerable":
+            continue
+        if str(raw.get("review_bucket") or "").lower() == "noise":
             continue
         out.append(
             DiagnosisFinding(
