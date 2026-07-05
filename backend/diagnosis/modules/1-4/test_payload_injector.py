@@ -262,7 +262,7 @@ class SsrfBaselineDiffTests(unittest.TestCase):
             patch.object(
                 self.injector.session,
                 "request",
-                side_effect=[response(200, "normal"), response(502, "upstream failed")],
+                side_effect=[response(200, "normal")] + [response(502, "upstream failed")] * 3,
             ),
         ):
             control = self.injector._probe_soft_constraint(hit, baseline)
@@ -273,6 +273,73 @@ class SsrfBaselineDiffTests(unittest.TestCase):
         self.assertTrue(control["passed"])
         self.assertIs(result.control_probe, control)
         self.assertEqual(result.to_dict()["control_probe"]["value"], "not-a-date-xyz")
+
+    def test_baseline_diff_requires_all_three_rounds(self):
+        hit = self._soft_hit()
+        baseline = response(200, "normal")
+        injector = PayloadInjector(delay_between_requests=0)
+        with (
+            patch.object(injector, "_build_url", return_value=hit.target.full_url),
+            patch.object(injector, "_build_request_kwargs", return_value={}),
+            patch.object(injector.session, "request", side_effect=[
+                response(502, "different"), response(200, "normal")
+            ]),
+        ):
+            result = injector._inject_single(
+                hit, "http://127.0.0.1", baseline, control_probe={"passed": True}
+            )
+        self.assertFalse(result.confirmed)
+        self.assertEqual(len(result.confirmation_rounds), 2)
+
+    def test_repeated_timing_control_success_is_high(self):
+        hit = self._soft_hit()
+        baseline = response(200, "normal")
+        injector = PayloadInjector(delay_between_requests=0)
+        with (
+            patch.object(injector, "_build_url", return_value=hit.target.full_url),
+            patch.object(injector, "_build_request_kwargs", return_value={}),
+            patch.object(injector.session, "request", side_effect=[
+                requests.Timeout(), requests.Timeout(), requests.Timeout(), response(200, "control")
+            ]),
+        ):
+            result = injector._inject_single(
+                hit, "http://127.0.0.1", baseline, control_probe={"passed": True}
+            )
+        self.assertTrue(result.confirmed)
+        self.assertEqual(result.confidence, "HIGH")
+        self.assertEqual(len(result.confirmation_rounds), 4)
+
+    def test_repeated_timing_control_timeout_is_not_confirmed(self):
+        hit = self._soft_hit()
+        baseline = response(200, "normal")
+        injector = PayloadInjector(delay_between_requests=0)
+        with (
+            patch.object(injector, "_build_url", return_value=hit.target.full_url),
+            patch.object(injector, "_build_request_kwargs", return_value={}),
+            patch.object(injector.session, "request", side_effect=[requests.Timeout()] * 4),
+        ):
+            result = injector._inject_single(
+                hit, "http://127.0.0.1", baseline, control_probe={"passed": True}
+            )
+        self.assertFalse(result.confirmed)
+        self.assertIn("대조 URL도 타임아웃", result.evidence)
+
+    def test_confirmed_result_contains_comparison_summaries(self):
+        hit = self._soft_hit()
+        baseline = response(200, "normal")
+        injector = PayloadInjector(delay_between_requests=0)
+        with (
+            patch.object(injector, "_build_url", return_value=hit.target.full_url),
+            patch.object(injector, "_build_request_kwargs", return_value={}),
+            patch.object(injector.session, "request", return_value=response(502, "abnormal")),
+        ):
+            result = injector._inject_single(
+                hit, "http://127.0.0.1", baseline, control_probe={"passed": True}
+            )
+        data = result.to_dict()
+        self.assertEqual(len(data["confirmation_rounds"]), 3)
+        self.assertEqual(data["baseline_summary"]["status"], 200)
+        self.assertEqual(data["payload_summary"]["status"], 502)
 
 
 if __name__ == "__main__":

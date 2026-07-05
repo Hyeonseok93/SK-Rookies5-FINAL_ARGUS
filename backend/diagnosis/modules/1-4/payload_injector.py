@@ -193,6 +193,9 @@ class InjectionResult:
     request_content_type: str = ""
     stored_ssrf_probe: Optional[dict] = None
     control_probe: Optional[dict] = None
+    confirmation_rounds: Optional[List[dict]] = None
+    baseline_summary: Optional[dict] = None
+    payload_summary: Optional[dict] = None
     _response_body_preview: Optional[str] = field(default=None, repr=False)
 
     def to_dict(self) -> dict:
@@ -218,6 +221,9 @@ class InjectionResult:
             "request_content_type": self.request_content_type,
             "stored_ssrf_probe": self.stored_ssrf_probe,
             "control_probe": self.control_probe,
+            "confirmation_rounds": self.confirmation_rounds,
+            "baseline_summary": self.baseline_summary,
+            "payload_summary": self.payload_summary,
         }
 
 
@@ -281,7 +287,7 @@ class PayloadInjector:
                  whitelisted_domain_for_bypass: str = "example.com",
                  max_payloads_per_param: int = 8,
                   oob_provider: Optional[OobCallbackProvider] = None,
-                  retry_count: int = 1,
+                  retry_count: int = 2,
                   auth_headers: Optional[Dict[str, str]] = None,
                    resource_ids: Optional[Dict[str, List[str]]] = None,
                    auth_refresh_callback: Optional[Callable[[], Optional[Dict[str, str]]]] = None,
@@ -1093,6 +1099,9 @@ class PayloadInjector:
         last_exception = None
         timeout_count = 0
         connection_error_count = 0
+        confirmation_details = []
+        confirmed_count = 0
+        last_result = None
         for attempt in range(self.retry_count + 1):
             start = time.time()
             try:
@@ -1103,11 +1112,53 @@ class PayloadInjector:
                     hit, payload, resp, elapsed_ms, baseline,
                     allow_soft_constrained=bool(control_probe and control_probe.get("passed")),
                 )
+                confirmation_details.append({
+                    "attempt": attempt + 1,
+                    "status_code": resp.status_code,
+                    "response_length": len(resp.text or ""),
+                    "elapsed_ms": round(elapsed_ms, 1),
+                    "confirmed": confirmed,
+                    "detection_method": detection_method,
+                })
+                last_result = (confirmed, evidence, detection_method, resp, elapsed_ms)
+                if confirmed:
+                    confirmed_count += 1
+                    continue
+                break
 
-                return InjectionResult(
+            except Timeout:
+                elapsed_ms = (time.time() - start) * 1000
+                timeout_count += 1
+                last_exception = "Timeout"
+                confirmation_details.append({
+                    "attempt": attempt + 1, "status_code": None,
+                    "response_length": None, "elapsed_ms": round(elapsed_ms, 1),
+                    "confirmed": False, "detection_method": "TIMEOUT",
+                })
+                continue
+
+            except ConnectionError as e:
+                connection_error_count += 1
+                last_exception = str(e)
+                continue
+            except RequestException as e:
+                last_exception = str(e)
+                continue
+
+        attempts = self.retry_count + 1
+        if last_result is not None:
+            confirmed, evidence, detection_method, resp, elapsed_ms = last_result
+            fully_reproduced = confirmed_count == attempts
+            if confirmed and not fully_reproduced:
+                evidence = (
+                    f"{evidence} ({confirmed_count}/{attempts}회만 재현되어 확정 보류)"
+                )
+            elif fully_reproduced:
+                evidence = f"{evidence} ({confirmed_count}/{attempts}회 재현 확인)"
+            return InjectionResult(
                     hit=hit,
                     payload=f"{label}:{payload}" if label else payload,
-                    confirmed=confirmed,
+                    confirmed=fully_reproduced,
                     evidence=evidence,
                     response_status=resp.status_code,
                     response_time_ms=round(elapsed_ms, 1),
@@ -1127,45 +1178,101 @@ class PayloadInjector:
                     request_headers=request_headers,
                     request_content_type=request_content_type,
                     control_probe=control_probe,
+                    confirmation_rounds=confirmation_details,
+                    baseline_summary=self._response_summary(baseline),
+                    payload_summary=self._response_summary(resp, elapsed_ms),
                     _response_body_preview=(resp.text or "")[:500]
                     if not _is_binary_response(resp) else None,
                 )
 
-            except Timeout:
-                elapsed_ms = (time.time() - start) * 1000
-                timeout_count += 1
-                last_exception = "Timeout"
-                continue
-
-            except ConnectionError as e:
-                connection_error_count += 1
-                last_exception = str(e)
-                continue
-
-            except RequestException as e:
-                last_exception = str(e)
-                continue
-
-        attempts = self.retry_count + 1
         baseline_is_valid = baseline is not None and baseline.status_code not in (401, 403)
         if hit.vuln_type == VulnType.SSRF and baseline_is_valid and timeout_count == attempts:
+            control_url = "http://example.com"
+            control_kwargs = self._build_request_kwargs(hit, control_url)
+            control_started = time.time()
+            control_timed_out = False
+            control_resp = None
+            try:
+                control_resp = self.session.request(
+                    target.method, self._build_url(hit, control_url), **control_kwargs
+                )
+                control_elapsed_ms = (time.time() - control_started) * 1000
+            except Timeout:
+                control_elapsed_ms = (time.time() - control_started) * 1000
+                control_timed_out = True
+            except RequestException:
+                control_elapsed_ms = (time.time() - control_started) * 1000
+                control_timed_out = True
+            confirmation_details.append({
+                "attempt": "control",
+                "payload": control_url,
+                "status_code": control_resp.status_code if control_resp is not None else None,
+                "response_length": len(control_resp.text or "") if control_resp is not None else None,
+                "elapsed_ms": round(control_elapsed_ms, 1),
+                "confirmed": not control_timed_out,
+                "detection_method": "CONTROL_TIMING",
+            })
+            baseline_elapsed_ms = self._response_elapsed_ms(baseline)
+            control_slow = (
+                not control_timed_out and baseline_elapsed_ms is not None
+                and baseline_elapsed_ms > 0
+                and control_elapsed_ms >= baseline_elapsed_ms * 5
+            )
+            if control_timed_out:
+                return InjectionResult(
+                    hit=hit, payload=payload, confirmed=False,
+                    evidence="대조 URL도 타임아웃 - 네트워크/서버 부하 가능성으로 SSRF 판정 보류",
+                    detection_method="REPEATED_TIMING", confidence="LOW",
+                    baseline_status=baseline.status_code, baseline_length=len(baseline.text or ""),
+                    request_body=request_body, request_headers=request_headers,
+                    request_content_type=request_content_type, control_probe=control_probe,
+                    confirmation_rounds=confirmation_details,
+                    baseline_summary=self._response_summary(baseline),
+                    payload_summary={"status": None, "length": None,
+                                     "elapsed_ms": round(self.timeout * 1000, 1),
+                                     "body_preview": ""},
+                )
             return InjectionResult(
                 hit=hit, payload=payload, confirmed=True,
                 evidence=f"정상 기준 요청은 응답했지만 SSRF 페이로드는 {attempts}회 연속 타임아웃 - 서버 측 URL 요청 가능성",
                 response_time_ms=round(self.timeout * 1000, 1),
                 detection_method="REPEATED_TIMING",
-                confidence="HIGH",
+                confidence="MEDIUM" if control_slow else "HIGH",
                 baseline_status=baseline.status_code,
                 baseline_length=len(baseline.text),
                 request_body=request_body,
                 request_headers=request_headers,
                 request_content_type=request_content_type,
                 control_probe=control_probe,
+                confirmation_rounds=confirmation_details,
+                baseline_summary=self._response_summary(baseline),
+                payload_summary={"status": None, "length": None,
+                                 "elapsed_ms": round(self.timeout * 1000, 1),
+                                 "body_preview": ""},
             )
 
         if last_exception:
             print(f"[요청 실패] {target.method} {url} ({param.name}={payload}) -> {last_exception}")
         return None
+
+    @staticmethod
+    def _response_elapsed_ms(resp: Optional[requests.Response]) -> Optional[float]:
+        if resp is None or getattr(resp, "elapsed", None) is None:
+            return None
+        return resp.elapsed.total_seconds() * 1000
+
+    def _response_summary(self, resp: Optional[requests.Response],
+                          elapsed_ms: Optional[float] = None) -> Optional[dict]:
+        if resp is None:
+            return None
+        body = resp.text or ""
+        measured = elapsed_ms if elapsed_ms is not None else self._response_elapsed_ms(resp)
+        return {
+            "status": resp.status_code,
+            "length": len(body),
+            "elapsed_ms": round(measured, 1) if measured is not None else None,
+            "body_preview": self._sanitize_snippet(body[:200]),
+        }
 
     @staticmethod
     def _response_body_snippet(hit: SearchHit, confirmed: bool,

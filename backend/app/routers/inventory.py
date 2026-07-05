@@ -120,7 +120,7 @@ def get_tree(
 
 @router.get("/endpoints", response_model=EndpointListResponse)
 def list_endpoints(
-    q: str | None = Query(None, description="Filter by path/method/base_url"),
+    q: str | None = Query(None, description="Filter by path/method/base_url/request parameter"),
     source: str | None = Query(None, description="Filter by source id (url_list, api_list, openapi)"),
     inventory: str = Query("ready", description="ready (built) or verified (after verify)"),
     limit: int = Query(50, ge=1, le=500),
@@ -139,6 +139,7 @@ def list_endpoints(
             if needle in e.path.lower()
             or needle in e.method.lower()
             or needle in e.base_url.lower()
+            or any(needle in p.name.lower() for p in e.request_params)
         ]
     if source:
         items = [
