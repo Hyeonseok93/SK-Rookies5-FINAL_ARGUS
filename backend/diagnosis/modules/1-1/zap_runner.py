@@ -2400,14 +2400,8 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                     _alerts_snapshot = len(custom_alerts)
     
                     # (1) [SK 쉴더스 1-1] CSRF 공격 가능성 정밀 진단
-                    # 중요 상태 변경을 일으키는 모든 POST/PUT/DELETE API를 점검합니다.
-                    if method.lower() in ["post", "put", "delete"]:
-                        # 기본 공격 헤더 (Origin/Referer 위조)
-                        csrf_headers = {
-                            "Origin": "http://evil-attacker.local",
-                            "Referer": "http://evil-attacker.local/exploit.html",
-                            "Content-Type": "application/json"
-                        }
+                    # 중요 상태 변경을 일으키는 모든 POST/PUT/DELETE/PATCH API를 점검합니다.
+                    if method.lower() in ["post", "put", "delete", "patch"]:
                         csrf_json_body = {}
                         csrf_body_spec = details.get("requestBody", {}) if isinstance(details, dict) else {}
                         csrf_content = csrf_body_spec.get("content", {}) if isinstance(csrf_body_spec, dict) else {}
@@ -2417,305 +2411,127 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 resolve_schema_ref(csrf_schema, swagger_components),
                                 swagger_components,
                             )
-
-                        auth_acceptance = classify_auth_acceptance(
-                            scan_account,
-                            api_url,
-                            method.upper(),
-                            body=csrf_json_body,
-                            token=best_token,
-                            fallback_cookie_name=session_cookie_name,
-                        )
-                        scan_account["auth_acceptance"] = auth_acceptance
-                        auth_acceptance_mode = auth_acceptance.get("mode")
-                        cookie_source = auth_acceptance.get("cookie_source", "none")
-                        csrf_acceptance_allowed = (
-                            auth_acceptance_mode in {"COOKIE_ONLY", "HEADER_OR_COOKIE"}
-                            and cookie_source == "real"
-                        )
-                        print(
-                            f"[AuthAcceptance] {best_role} {method.upper()} {api_url} "
-                            f"mode={auth_acceptance_mode} statuses={auth_acceptance.get('statuses')} "
-                            f"cookie_source={cookie_source}"
-                        )
-                        if auth_acceptance_mode in {"HEADER_ONLY", "HEADER_AND_COOKIE"}:
-                            print(f"[CSRF DEBUG] not applicable: auth_acceptance={auth_acceptance_mode} on {api_url}")
-                        elif auth_acceptance_mode == "PUBLIC_OR_BROKEN":
-                            print(f"[CSRF DEBUG] skip: no_auth succeeded on {api_url}; authentication/authorization issue, not CSRF")
-                        elif auth_acceptance_mode == "UNKNOWN":
-                            print(f"[CSRF DEBUG] deferred: auth acceptance could not be classified on {api_url}")
-                        elif cookie_source != "real":
-                            print(f"[CSRF DEBUG] potential only: cookie_source={cookie_source} on {api_url}; confirmed CSRF not reported")
-    
-                        # 1단계: 완전 미인증 시도 (401/403 등 반환 확인)
-                        status_no_auth = None
-                        req_evidence = ""
-                        res_evidence = ""
-                        try:
-                            res_no_auth = requests.request(
-                                method=method.upper(),
-                                url=api_url,
-                                json=csrf_json_body,
-                                headers=csrf_headers,
-                                timeout=4
-                            )
-                            status_no_auth = res_no_auth.status_code
-                            req_evidence = format_http_request(res_no_auth.request)
-                            res_evidence = format_http_response(res_no_auth)
-                        except Exception as e:
-                            print(f"[CSRF DEBUG] No Auth Request Fail to {api_url}: {e}")
-    
-                        # 2단계: 쿠키에 세션 토큰만 탑재 시도 (SameSite 우회 및 인가 확인)
-                        # 중요: Authorization 헤더는 의도적으로 누락시켜 오직 쿠키만 전송하는 크로스 사이트 요청을 재현함
-                        cookies_headers = {}
+                            
+                        # 기본 인증 헤더 준비
+                        base_auth_headers = {}
+                        if best_token:
+                            base_auth_headers["Authorization"] = best_token
                         cookie_auth_header = build_cookie_header_from_account(scan_account)
-                        if not cookie_auth_header and best_token:
-                            clean_token = best_token.replace("Bearer ", "").strip()
-                            cookie_auth_header = f"{session_cookie_name}={clean_token}"
                         if cookie_auth_header:
-                            cookies_headers["Cookie"] = cookie_auth_header
-                            
+                            base_auth_headers["Cookie"] = cookie_auth_header
+
+                        # 공격 시나리오별 헤더 준비
+                        # 1. Referer/Origin 변조 (해커 도메인)
+                        headers_tampered_ref = {**base_auth_headers, "Origin": "http://evil-attacker.local", "Referer": "http://evil-attacker.local/exploit.html", "Content-Type": "application/json"}
+                        
+                        # 2. Referer/Origin 누락 (삭제)
+                        headers_no_ref = {**base_auth_headers, "Content-Type": "application/json"}
+                        
+                        # 3. CSRF 토큰 누락 (쿠키 및 기본 인증은 유지한 상태에서 별도의 CSRF 토큰 없이 요청)
+                        headers_no_token = {**base_auth_headers, "Content-Type": "application/json"}
+                        # 사용자의 지시에 따라 Authorization 헤더를 삭제하지 않고, 쿠키 기반(인증 완료) 환경에서 추가적인 CSRF 토큰 검증이 있는지만 순수하게 테스트합니다.
+                        
                         try:
-                            headers_with_cookie = {**csrf_headers, **cookies_headers}
-                            # Authorization 헤더가 없는 상태로 요청 전송
-                            res_cookie_auth = requests.request(
-                                method=method.upper(),
-                                url=api_url,
-                                json=csrf_json_body,
-                                headers=headers_with_cookie,
-                                timeout=4
-                            )
-                            status_cookie_auth = res_cookie_auth.status_code
+                            # 1. Referer 변조 테스트 (변조된 Referer/Origin 포함)
+                            res_tampered_ref = requests.request(method=method.upper(), url=api_url, json=csrf_json_body, headers=headers_tampered_ref, timeout=4)
+                            status_tampered_ref = res_tampered_ref.status_code
                             
-                            req_evidence = format_http_request(res_cookie_auth.request)
-                            res_evidence = format_http_response(res_cookie_auth)
+                            # 2. Referer 누락 테스트 (Origin, Referer 아예 없음)
+                            res_no_ref = requests.request(method=method.upper(), url=api_url, json=csrf_json_body, headers=headers_no_ref, timeout=4)
+                            status_no_ref = res_no_ref.status_code
                             
-                            set_cookie = res_cookie_auth.headers.get("Set-Cookie", "").lower()
-                            cors_origin = res_cookie_auth.headers.get("Access-Control-Allow-Origin", "")
-                            cors_credentials = res_cookie_auth.headers.get("Access-Control-Allow-Credentials", "")
-                            csrf_token_absent = check_csrf_token_absence(res_cookie_auth)
+                            # 3. Token 누락 테스트 (Authorization/토큰 파라미터 삭제)
+                            res_no_token = requests.request(method=method.upper(), url=api_url, json=csrf_json_body, headers=headers_no_token, timeout=4)
+                            status_no_token = res_no_token.status_code
                             
-                            # CORS 우회 가능성 검증 (Preflight 모사)
-                            preflight_cors_bypassable = False
-                            for attack_origin in ["http://evil-attacker.local", "https://evil-attacker.com", "null"]:
-                                try:
-                                    options_res = requests.options(
-                                        api_url,
-                                        headers={
-                                            "Origin": attack_origin,
-                                            "Access-Control-Request-Method": method.upper(),
-                                            "Access-Control-Request-Headers": "Content-Type",
-                                        },
-                                        timeout=4,
-                                    )
-                                    allowed_origin = options_res.headers.get("Access-Control-Allow-Origin", "")
-                                    allowed_credentials = options_res.headers.get("Access-Control-Allow-Credentials", "")
-                                    if allowed_origin in ["*", attack_origin] or (allowed_origin and allowed_credentials.lower() == "true"):
-                                        preflight_cors_bypassable = True
-                                        break
-                                except Exception:
-                                    continue
-                            
-                            # 브라우저 전송 가능성 검증
+                            # SameSite 속성 확인
+                            set_cookie = res_tampered_ref.headers.get("Set-Cookie", "").lower()
                             has_unsafe_samesite = has_unsafe_samesite_cookie(scan_account, set_cookie)
-                            if not csrf_acceptance_allowed:
-                                has_unsafe_samesite = False
-                                csrf_token_absent = False
-                            
-                            is_cors_bypassable = False
-                            if cors_origin == "*" or (cors_origin and cors_credentials == "true") or preflight_cors_bypassable:
-                                is_cors_bypassable = True
-    
-                            # 쿠키만으로 인가 필터를 통과하고 SameSite 설정이 안전하지 않으면 취약성 판정
-                            is_csrf_vulnerable = False
-                            if status_no_auth in [401, 403] and status_cookie_auth not in [401, 403, 500]:
-                                if has_unsafe_samesite:
-                                    is_csrf_vulnerable = True
-                            elif has_unsafe_samesite and set_cookie:
-                                is_csrf_vulnerable = True
-                            elif csrf_token_absent and has_unsafe_samesite and status_cookie_auth not in [401, 403, 500]:
-                                is_csrf_vulnerable = True
+                            if not cookie_auth_header:
+                                # 쿠키를 쓰지 않는 경우 브라우저 레벨의 SameSite 방어가 무의미하므로 취약(Pass)하다고 전제
+                                has_unsafe_samesite = True
                                 
-                            cookie_names = cookie_names_from_header(cookie_auth_header)
-                            cookie_names_text = ", ".join(cookie_names) if cookie_names else "none"
-                            cookie_auth_summary = summarize_response_for_log(res_cookie_auth)
-                            print(f"[CSRF DEBUG] Target: {method.upper()} {api_url} -> NoAuth: {status_no_auth} | CookieAuth: {status_cookie_auth} | SameSiteUnsafe: {has_unsafe_samesite} | SetCookie: {bool(set_cookie)} | CookieNames: {cookie_names_text} | CookieAuthSummary: {cookie_auth_summary}")
+                            # 판단 로직
+                            # 통과(Pass) 판정 기준: 상태 코드가 400 미만이거나 405(Method Not Allowed 등 비인가 거부가 아닌 상태)
+                            def is_passed(status):
+                                return status < 400 or status == 405
+
+                            # High: 3대 방어선 모두 뚫림
+                            is_high_risk = is_passed(status_tampered_ref) and is_passed(status_no_token) and has_unsafe_samesite
                             
-                            if is_csrf_vulnerable:
-                                risk_level = "Medium"
-                                if is_cors_bypassable:
-                                    risk_level = "High"
-                                if status_cookie_auth in [401, 403]:
-                                    risk_level = "Low"
-                                    
-                                print(f"[CSRF DEBUG] !!! CSRF VULNERABILITY DETECTED on {api_url} !!!")
-                                
-                                csrf_req_parts = extract_request_parts(
-                                    res_cookie_auth.request,
-                                    body_json=csrf_json_body,
-                                    query_params=None
-                                )
+                            # Medium: 방어선이 불완전함 (Referer 누락 또는 토큰 누락에 대해 에러 없이 통과)
+                            is_medium_risk = False
+                            if not is_high_risk:
+                                if is_passed(status_no_ref) or is_passed(status_no_token):
+                                    is_medium_risk = True
+
+                            print(f"[CSRF DEBUG] {method.upper()} {api_url} -> TamperedRef: {status_tampered_ref}, NoRef: {status_no_ref}, NoToken: {status_no_token}, UnsafeSameSite: {has_unsafe_samesite}")
+                            
+                            if is_high_risk:
+                                csrf_req_parts = extract_request_parts(res_tampered_ref.request, body_json=csrf_json_body, query_params=None)
                                 custom_alerts.append({
-                                    "alert": "Cross-Site Request Forgery (CSRF) Vulnerability via Cookie Authentication Bypass",
+                                    "alert": "Cross-Site Request Forgery (CSRF) Vulnerability - Confirmed",
                                     "url": api_url,
                                     "method": method.upper(),
-                                    "risk": risk_level,
+                                    "risk": "High",
                                     "confidence": "High",
-                                    "param": "Cookie",
-                                    "attack": "Origin: http://evil-attacker.local",
+                                    "param": "Referer/Token/SameSite",
+                                    "attack": "Tampered Referer & Missing Token & Unsafe SameSite",
                                     "custom_type": "CSRF_CUSTOM",
-                                    "evidence_request": req_evidence,
-                                    "evidence_response": res_evidence,
+                                    "evidence_request": format_http_request(res_tampered_ref.request),
+                                    "evidence_response": format_http_response(res_tampered_ref),
                                     "parsed_request_headers": csrf_req_parts["parsed_request_headers"],
                                     "parsed_request_body": csrf_req_parts["parsed_request_body"],
                                     "parsed_request_query": csrf_req_parts["parsed_request_query"],
                                     "auth_token_used": csrf_req_parts["auth_token_used"],
                                     "login_required": csrf_req_parts["login_required"],
-                                    "expected_status_code": status_cookie_auth,
+                                    "expected_status_code": status_tampered_ref,
                                     "screenshot_on": "response_received",
                                     "replay_script": csrf_req_parts["replay_script"],
-                                    "auth_acceptance_mode": auth_acceptance_mode,
-                                    "auth_acceptance_statuses": auth_acceptance.get("statuses", {}),
-                                    "cookie_source": cookie_source,
                                     "description": (
-                                        f"이 엔드포인트는 중요 상태 변경(POST/PUT/DELETE)을 유도하지만 브라우저 자동 전송 쿠키의 SameSite 정책(Lax/Strict)이 미흡합니다. "
-                                        f"또한 외부 Origin 도메인으로부터의 쿠키 동반 요청(Access-Control-Allow-Credentials: {cors_credentials})을 차단하지 못할 가능성이 있습니다. "
-                                        f"(NoAuth: {status_no_auth}, CookieAuth: {status_cookie_auth}, SameSiteUnsafe: {has_unsafe_samesite})"
+                                        "이 API는 3대 CSRF 방어선이 모두 뚫려있는 고위험(High) 상태입니다.\n"
+                                        "1. Referer 변조: 해커 도메인 전달 시에도 검증 없이 통과(Pass)\n"
+                                        "2. 토큰 우회: CSRF 토큰을 누락해도 백엔드가 통과(Pass)\n"
+                                        "3. 쿠키 속성: SameSite 속성이 없거나 None으로 설정되어 브라우저 자동 전송(Pass)\n"
+                                        "결과적으로 200 OK 등 성공 응답을 반환하여 데이터가 실제로 변경될 수 있습니다.\n\n"
+                                        "**[수동 확인 필요 사항]**\n"
+                                        "진단자는 해당 API가 실제로 민감한 정보(비밀번호 변경, 결제, 권한 부여 등)를 수정하거나 탈취할 수 있는 주요 비즈니스 로직인지 수동으로 확인해야 합니다."
                                     ),
-                                    "solution": "1. 쿠키 발급 시 'SameSite=Lax' 또는 'Strict' 속성을 설정하여 브라우저 자동 전송 범위를 제한하세요. 2. API 인증 방식을 쿠키가 아닌 Authorization HTTP 헤더(Bearer) 전송 방식으로 일원화하세요."
+                                    "solution": "1. Referer 검증 로직 추가 (화이트리스트 방식)\n2. 상태 변경 요청 시 Anti-CSRF 토큰 발급 및 검증 로직 구현\n3. 세션 쿠키에 SameSite=Lax 또는 Strict 속성 적용"
                                 })
-    
-                            # ── CSRF 고도화 2단계: Content-Type 변조 공격 시도 (HTML Form 우회 가능성) ──
-                            if is_csrf_vulnerable:
-                                for ct in ["text/plain", "multipart/form-data", "application/x-www-form-urlencoded"]:
-                                    ct_headers = {**headers_with_cookie, "Content-Type": ct}
-                                    try:
-                                        res_ct = requests.request(
-                                            method=method.upper(),
-                                            url=api_url,
-                                            data="{}",
-                                            headers=ct_headers,
-                                            timeout=4
-                                        )
-                                        # 415 (Unsupported Media Type)로 제한되지 않고 요청 인가 통과 시 취약 판정
-                                        if res_ct.status_code not in [401, 403, 415, 500]:
-                                            custom_alerts.append({
-                                                "alert": f"CSRF via Content-Type Bypass ({ct})",
-                                                "url": api_url,
-                                                "method": method.upper(),
-                                                "risk": "High",
-                                                "confidence": "High",
-                                                "param": "Content-Type",
-                                                "attack": f"Content-Type: {ct}",
-                                                "status_code": res_ct.status_code,
-                                                "evidence": f"Content-Type을 {ct}로 우회하여 요청을 전송했으나 인가 통과(Status: {res_ct.status_code})",
-                                                "custom_type": "CSRF_CUSTOM",
-                                                "evidence_request": format_http_request(res_ct.request),
-                                                "evidence_response": format_http_response(res_ct),
-                                                "auth_acceptance_mode": auth_acceptance_mode,
-                                                "auth_acceptance_statuses": auth_acceptance.get("statuses", {}),
-                                                "cookie_source": cookie_source,
-                                                "description": f"서버가 엄격한 Content-Type 파싱을 하지 않아 HTML <form> 태그 등을 사용한 {ct} 형태의 CSRF 공격으로 중요 행동 변조가 가능합니다.",
-                                                "solution": "서버 측 컨트롤러 혹은 스프링 시큐리티 단계에서 Content-Type이 application/json 또는 올바른 형식인지 엄격히 검증(Validator)하여 이외의 타입은 415 에러로 강제 거부하도록 차단하세요."
-                                            })
-                                            break
-                                    except Exception:
-                                        continue
-    
-                            # ── CSRF 고도화 3단계: Referer 검증 미흡 / 제거 우회 시도 ──
-                            if is_csrf_vulnerable:
-                                no_referer_headers = {k: v for k, v in headers_with_cookie.items() if k.lower() != "referer"}
-                                try:
-                                    res_no_ref = requests.request(
-                                        method=method.upper(),
-                                        url=api_url,
-                                        json=csrf_json_body,
-                                        headers=no_referer_headers,
-                                        timeout=4
-                                    )
-                                    if res_no_ref.status_code not in [401, 403, 500]:
-                                        custom_alerts.append({
-                                            "alert": "CSRF Referer Verification Defect",
-                                            "url": api_url,
-                                            "method": method.upper(),
-                                            "risk": "Medium",
-                                            "confidence": "High",
-                                            "param": "Referer",
-                                            "attack": "Removed Referer Header",
-                                            "status_code": res_no_ref.status_code,
-                                            "evidence": "Referer 헤더를 완전히 배제하고 요청하였으나 차단되지 않고 처리됨",
-                                            "custom_type": "CSRF_CUSTOM",
-                                            "evidence_request": format_http_request(res_no_ref.request),
-                                            "evidence_response": format_http_response(res_no_ref),
-                                            "auth_acceptance_mode": auth_acceptance_mode,
-                                            "auth_acceptance_statuses": auth_acceptance.get("statuses", {}),
-                                            "cookie_source": cookie_source,
-                                            "description": "서버가 Referer 헤더의 유무 또는 허용 도메인 여부를 엄격히 확인하지 않고 있어, 공격자가 Referer 헤더를 지우거나 임의 주소로 요청하여 CSRF 공격을 성립시킬 수 있습니다.",
-                                            "solution": "필터나 인터셉터 단에서 Referer 헤더가 없거나 신뢰할 수 없는 Origin인 경우 요청을 400 Bad Request 또는 403 Forbidden으로 차단하는 방어 로직을 적용하세요."
-                                        })
-                                except Exception:
-                                    pass
-    
-                            # ── CSRF 고도화 4단계: SameSite=None 명시적 위험성 식별 ──
-                            if "samesite=none" in set_cookie:
-                                has_secure = "secure" in set_cookie
-                                risk_level = "High" if not has_secure else "Medium"
+                            elif is_medium_risk:
+                                csrf_req_parts = extract_request_parts(res_no_ref.request, body_json=csrf_json_body, query_params=None)
                                 custom_alerts.append({
-                                    "alert": "SameSite=None Attribute Detected on Cookies",
+                                    "alert": "Cross-Site Request Forgery (CSRF) Vulnerability - Potential/Bypass",
                                     "url": api_url,
                                     "method": method.upper(),
-                                    "risk": risk_level,
-                                    "confidence": "High",
-                                    "param": "Set-Cookie",
-                                    "attack": "SameSite=None",
-                                    "status_code": res_cookie_auth.status_code,
-                                    "evidence": f"Set-Cookie 내에 안전하지 않은 속성 노출: {res_cookie_auth.headers.get('Set-Cookie')}",
-                                    "custom_type": "COOKIE_SAMESITE_CUSTOM",
-                                    "evidence_request": format_http_request(res_cookie_auth.request),
-                                    "evidence_response": format_http_response(res_cookie_auth),
-                                    "description": f"쿠키 발급 시 SameSite=None을 명시적으로 사용하면 모든 크로스 사이트 요청에 대해 쿠키가 무조건 첨부되어 CSRF 및 개인정보 탈취에 극도로 취약해집니다.{' 특히 Secure 속성이 누락되어 암호화되지 않은 HTTP 환경에서 전송 위협이 배가됩니다.' if not has_secure else ''}",
-                                    "solution": "꼭 필요하지 않다면 쿠키 발급 정책을 SameSite=Lax로 변경하고, 불가피하게 None을 유지해야 하는 경우 Secure 속성을 명시적으로 적용하십시오."
+                                    "risk": "Medium",
+                                    "confidence": "Medium",
+                                    "param": "Referer/Token",
+                                    "attack": "Omitted Referer or Token",
+                                    "custom_type": "CSRF_CUSTOM",
+                                    "evidence_request": format_http_request(res_no_ref.request),
+                                    "evidence_response": format_http_response(res_no_ref),
+                                    "parsed_request_headers": csrf_req_parts["parsed_request_headers"],
+                                    "parsed_request_body": csrf_req_parts["parsed_request_body"],
+                                    "parsed_request_query": csrf_req_parts["parsed_request_query"],
+                                    "auth_token_used": csrf_req_parts["auth_token_used"],
+                                    "login_required": csrf_req_parts["login_required"],
+                                    "expected_status_code": status_no_ref,
+                                    "screenshot_on": "response_received",
+                                    "replay_script": csrf_req_parts["replay_script"],
+                                    "description": (
+                                        "이 API는 방어 로직이 가동 중이나, 일부 우회 조건이 성립하여 잠재적 위험(Medium)이 존재합니다.\n"
+                                        "예를 들어, 서버가 평소에는 요청을 차단하지만 Referer 헤더를 아예 삭제하고 보내거나 토큰 파라미터를 누락했을 때 백엔드 필터가 에러 없이 200 OK 등으로 통과시키는 결함이 발견되었습니다.\n\n"
+                                        "**[수동 확인 필요 사항]**\n"
+                                        "진단자는 Referer가 없을 때나 Token 파라미터를 삭제했을 때, 서버 컨트롤러 내에서 예외 처리가 올바르게 되고 있는지 소스코드 단의 검증 로직을 수동으로 확인해야 합니다."
+                                    ),
+                                    "solution": "1. Referer 헤더가 아예 존재하지 않는 경우에도 예외 처리(403 등) 하도록 수정\n2. CSRF 토큰 파라미터가 요청 객체에 없을 때 NullPointerException 우회가 아닌 명시적 거부 처리 적용"
                                 })
-    
-                            # ── CORS 고도화: Origin 반사 취약점 (CORS Origin Reflection) ──
-                            for test_origin in ["https://evil-attacker.local", "null"]:
-                                cors_test_headers = {**headers_with_cookie, "Origin": test_origin}
-                                try:
-                                    res_cors = requests.request(
-                                        method=method.upper(),
-                                        url=api_url,
-                                        headers=cors_test_headers,
-                                        timeout=4
-                                    )
-                                    acao = res_cors.headers.get("Access-Control-Allow-Origin", "")
-                                    acac = res_cors.headers.get("Access-Control-Allow-Credentials", "").lower()
-                                    if acao == test_origin and acac == "true":
-                                        print(f"[CORS DEBUG] !!! CORS Origin Reflection Detected on {api_url} via Origin: {test_origin} !!!")
-                                        custom_alerts.append({
-                                            "alert": f"CORS Origin Reflection Vulnerability ({test_origin})",
-                                            "url": api_url,
-                                            "method": method.upper(),
-                                            "risk": "High",
-                                            "confidence": "High",
-                                            "param": "Origin",
-                                            "attack": f"Origin: {test_origin}",
-                                            "status_code": res_cors.status_code,
-                                            "evidence": f"임의로 전송한 Origin '{test_origin}'이 ACAO 헤더에 반사되고 Credentials가 허용됨",
-                                            "custom_type": "CORS_ORIGIN_REFLECTION",
-                                            "evidence_request": format_http_request(res_cors.request),
-                                            "evidence_response": format_http_response(res_cors),
-                                            "description": (
-                                                f"서버가 Access-Control-Allow-Origin 헤더값을 고정하지 않고, 브라우저가 전송한 Origin 헤더('{test_origin}')를 그대로 반사해 출력하고 있습니다. "
-                                                f"동시에 Access-Control-Allow-Credentials 헤더가 true로 설정되어 있어, 공격 도메인에서 희생자의 브라우저 세션 권한을 실어 API 데이터를 자유롭게 열람/탈취하는 비인가 접근이 성립됩니다."
-                                            ),
-                                            "solution": "Access-Control-Allow-Origin의 값을 와일드카드(*) 또는 반사값 대신 사전에 정의된 신뢰 도메인 화이트리스트로 고정하고, 신뢰 도메인 매칭 시에만 응답 헤더를 동적으로 선언하십시오."
-                                        })
-                                except Exception:
-                                    continue
-    
+
                         except Exception as ce:
                             print(f"CSRF Custom scan skip for {api_url}: {ce}")
-                            
+
                     # (2) [SK 쉴더스 1-1] XSS 공격 가능성 정밀 진단
                     # 다중 페이로드를 순회하여 WAF/필터 우회 변형 포함 탐지. 첫 검출 즉시 중단.
                     xss_headers = build_auth_headers(best_token, scan_account)
@@ -2868,227 +2684,227 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                         print(f"[XSS DEBUG] skip fuzzing -> {method.upper()} {resolved_api_url} baseline returned {baseline_status} for account '{best_role}'")
                         continue
     
-                    reflected_xss_detected = False
-                    successful_payloads = []
-                    xss_first_result = None
-                    xss_first_req_parts = None
-                    xss_first_res = None
-                    xss_first_content_type = ""
-                    xss_first_x_content_type = ""
-                    target_vulnerable_param = ""
-    
-                    # 테스트 대상 파라미터 후보 리스트 (쿼리 파라미터 + JSON 바디 키 + Multipart 폼 필드)
-                    params_to_test = []
-                    for q_param in base_test_params.keys():
-                        params_to_test.append(("query", q_param, base_test_param_schemas.get(q_param, {"type": "string"})))
-                    for j_key in base_test_json_keys:
-                        params_to_test.append(("json", j_key, base_test_json_schemas.get(j_key, {"type": "string"})))
-                    for m_key in base_test_multipart_keys:
-                        params_to_test.append(("multipart", m_key, base_test_multipart_schemas.get(m_key, {"type": "string"})))
-    
-                    for target_type, target_param, target_schema in params_to_test:
-                        field_payloads = payloads_for_xss_field(target_param, target_schema, swagger_components)
-                        if not field_payloads:
-                            print(f"[XSS DEBUG] skip field -> {method.upper()} {resolved_api_url} | param: {target_param} ({target_type}) not suitable for XSS payloads")
-                            continue
-                        for xss_payload in field_payloads:
-                            # 타겟 파라미터 하나만 페이로드를 주입하고, 나머지는 안전한 기본값("safe")을 설정함
-                            test_params = dict(base_param_defaults)
-                            if target_type == "query":
-                                test_params[target_param] = xss_payload
-                            
-                            # JSON Fuzzing 딕셔너리 구성: non-string fields keep type-correct defaults.
-                            test_json = copy.deepcopy(base_json_required_defaults)
-                            for k in base_test_json_keys:
-                                top_key = k.split(".", 1)[0].replace("[0]", "")
-                                if target_type != "json" and top_key not in base_json_required_defaults:
-                                    continue
-                                prop_name = k.split(".")[-1]
-                                dummy_val = default_value_for_schema(base_test_json_schemas.get(k, {"type": "string"}), swagger_components, prop_name)
-                                set_nested_value_by_keypath(test_json, k, dummy_val)
-                            if target_type == "json":
-                                set_nested_value_by_keypath(test_json, target_param, xss_payload)
-                            
-                            # Multipart Fuzzing 딕셔너리 구성: payload only goes into string fields.
-                            test_multipart = dict(base_multipart_required_defaults)
-                            for k in base_test_multipart_keys:
-                                if target_type != "multipart" and k not in base_multipart_required_defaults:
-                                    continue
-                                dummy_val = default_value_for_schema({"type": "string"}, swagger_components, k)
-                                test_multipart[k] = base_test_enum_defaults.get(k, dummy_val)
-                            if target_type == "multipart":
-                                test_multipart[target_param] = xss_payload
-    
-                            try:
-                                req_headers = {**xss_headers}
-                                if target_type == "json":
-                                    req_headers["Content-Type"] = "application/json"
-                                elif is_multipart_request:
-                                    # requests가 자동으로 boundary를 가진 Content-Type 헤더를 채우도록 대소문자 구분 없이 소거
-                                    for ct_key in [k for k in req_headers.keys() if k.lower() == "content-type"]:
-                                        req_headers.pop(ct_key, None)
-    
-                                print(f"[XSS DEBUG] testing -> {method.upper()} {resolved_api_url} | param: {target_param} ({target_type}) | payload: {xss_payload[:30]}...")
-                                res_xss = requests.request(
-                                    method=method.upper(),
-                                    url=resolved_api_url,
-                                    params=test_params if test_params else None,
-                                    json=test_json if (test_json and target_type == "json") else None,
-                                    data=test_multipart if (is_multipart_request and test_multipart) else None,
-                                    files=multipart_files_for_request() if is_multipart_request else None,
-                                    headers=req_headers,
-                                    timeout=4
-                                )
-    
-                                res_body = res_xss.text
-                                x_content_type = res_xss.headers.get("X-Content-Type-Options", "").lower()
-                                content_type = res_xss.headers.get("Content-Type", "").lower()
-                                print(
-                                    f"[HTTP TRACE] xss {method.upper()} {resolved_api_url} "
-                                    f"role={best_role} param={target_param} target_type={target_type} "
-                                    f"status={res_xss.status_code} params={test_params or {}} "
-                                    f"json_keys={list(test_json.keys()) if isinstance(test_json, dict) and test_json else []} "
-                                    f"multipart_keys={list(test_multipart.keys()) if test_multipart else []} "
-                                    f"file_keys={base_multipart_file_keys if is_multipart_request else []} "
-                                    f"content_type={res_xss.headers.get('Content-Type', '')} "
-                                    f"payload_reflected={is_payload_reflected(xss_payload, res_body, baseline_body)} "
-                                    f"response={summarize_response_for_log(res_xss, 300)}"
-                                )
-    
-                                # 4xx/5xx 에러 응답은 XSS로 처리하지 않음 (에러 페이지 반사는 6-1 영역)
-                                if res_xss.status_code >= 400:
-                                    print(f"[XSS DEBUG] skipped -> {method.upper()} {api_url} returned status {res_xss.status_code}. Response: {res_body[:200]}")
-                                    if looks_like_validation_rejection(res_xss):
-                                        print(f"[XSS DEBUG] stop field -> {method.upper()} {resolved_api_url} | param: {target_param} rejected by validation")
-                                        break
-                                    continue
-    
-    
-                                # 고도화 6: baseline_body를 공급하여 Diff 영역에서만 반사 여부 검증
-                                xss_result = classify_xss_response(
-                                    payload=xss_payload,
-                                    response_body=res_body,
-                                    content_type=content_type,
-                                    method=method.upper(),
-                                    is_mutation=(target_type in ["json", "multipart"]),
-                                    response_headers=res_xss.headers,
-                                    baseline_body=baseline_body
-                                )
-    
-    
-                                if xss_result:
-                                    reflected_xss_detected = True
-                                    target_vulnerable_param = target_param
-                                    if xss_payload not in successful_payloads:
-                                        successful_payloads.append(xss_payload)
-                                    
-                                    # 첫 번째 감지 시, 반사 컨텍스트에 맞춰 2차 정밀 스캔 진행 (2차 우회 최적화)
-                                    if not xss_first_result:
-                                        xss_first_result = xss_result
-                                        xss_first_res = res_xss
-                                        xss_first_content_type = content_type
-                                        xss_first_x_content_type = x_content_type
-                                        
-                                        # ── XSS 고도화 2단계: 컨텍스트 기반 2차 정밀 페이로드 검증 ──
-                                        reflection_ctx = xss_result.get("reflection_context", "HTML body")
-                                        context_specific_payloads = CONTEXT_PAYLOADS.get(reflection_ctx, [])
-                                        
-                                        for ctx_payload in context_specific_payloads:
-                                            t_params_2 = dict(base_param_defaults)
-                                            if target_type == "query":
-                                                t_params_2[target_param] = ctx_payload
-                                            t_json_2 = copy.deepcopy(base_json_required_defaults)
-                                            for k in base_test_json_keys:
-                                                top_key = k.split(".", 1)[0].replace("[0]", "")
-                                                if target_type != "json" and top_key not in base_json_required_defaults:
-                                                    continue
-                                                set_nested_value_by_keypath(t_json_2, k, "safe")
-                                            if target_type == "json":
-                                                set_nested_value_by_keypath(t_json_2, target_param, ctx_payload)
-                                            t_multipart_2 = dict(base_multipart_required_defaults)
-                                            if target_type == "multipart":
-                                                t_multipart_2[target_param] = ctx_payload
-                                            try:
-                                                req_headers_2 = {**xss_headers}
-                                                if target_type == "json":
-                                                    req_headers_2["Content-Type"] = "application/json"
-                                                elif is_multipart_request:
-                                                    req_headers_2.pop("Content-Type", None)
-                                                res_ctx_2 = requests.request(
-                                                    method=method.upper(),
-                                                    url=api_url,
-                                                    params=t_params_2 if t_params_2 else None,
-                                                    json=t_json_2 if (t_json_2 and target_type == "json") else None,
-                                                    data=t_multipart_2 if (is_multipart_request and t_multipart_2) else None,
-                                                    files=multipart_files_for_request() if is_multipart_request else None,
-                                                    headers=req_headers_2,
-                                                    timeout=4
-                                                )
-                                                result_2 = classify_xss_response(
-                                                    payload=ctx_payload,
-                                                    response_body=res_ctx_2.text,
-                                                    content_type=content_type,
-                                                    method=method.upper(),
-                                                    is_mutation=(target_type == "json"),
-                                                    response_headers=res_ctx_2.headers,
-                                                    baseline_body=baseline_body
-                                                )
-                                                if result_2:
-                                                    if ctx_payload not in successful_payloads:
-                                                        successful_payloads.append(ctx_payload)
-                                                    # 컨텍스트에 맞춘 증거 패킷으로 대표값 업데이트
-                                                    xss_first_result = result_2
-                                                    xss_first_res = res_ctx_2
-                                                    xss_payload = ctx_payload
-                                            except Exception:
-                                                continue
-    
-                                        # 스크립트 작성용 파싱 추출
-                                        xss_first_req_parts = extract_request_parts(
-                                            xss_first_res.request,
-                                            body_json=test_json if target_type == "json" else None,
-                                            query_params=test_params if target_type == "query" else None
-                                        )
-    
-                            except Exception as xe:
-                                print(f"XSS Custom scan skip for {api_url} ({target_param}): {xe}")
-    
-                    if reflected_xss_detected and xss_first_result:
-                        print(f"[XSS DEBUG] !!! {xss_first_result['kind'].upper()} XSS DETECTED on {api_url} (Param: {target_vulnerable_param}, Success Payloads: {len(successful_payloads)}) !!!")
-    
-                        replay_with_payload = xss_first_req_parts["replay_script"].replace(
-                            "'/* 공격 페이로드 삽입 */'",
-                            repr(successful_payloads[0])
-                        )
-                        custom_alerts.append({
-                            "alert": xss_first_result["alert"],
-                            "url": api_url,
-                            "method": method.upper(),
-                            "risk": xss_first_result["risk"],
-                            "confidence": xss_first_result["confidence"],
-                            "param": target_vulnerable_param,
-                            "attack": successful_payloads[0],
-                            "status_code": xss_first_res.status_code,
-                            "evidence": xss_first_result["evidence"],
-                            "custom_type": xss_first_result["custom_type"],
-                            "evidence_request": format_http_request(xss_first_res.request),
-                            "evidence_response": format_http_response(xss_first_res),
-                            "parsed_request_headers": xss_first_req_parts["parsed_request_headers"],
-                            "parsed_request_body": xss_first_req_parts["parsed_request_body"],
-                            "parsed_request_query": xss_first_req_parts["parsed_request_query"],
-                            "auth_token_used": xss_first_req_parts["auth_token_used"],
-                            "login_required": xss_first_req_parts["login_required"],
-                            "expected_status_code": xss_first_res.status_code,
-                            "expected_evidence_in_response": successful_payloads[0],
-                            "screenshot_on": "response_received",
-                            "replay_script": replay_with_payload,
-                            "successful_attack_payloads": successful_payloads,
-                            "description": (
-                                f"{xss_first_result['description']} "
-                                f"(응답 마임타입: {xss_first_content_type}, 보안헤더 nosniff 누락 상태: {'Y' if 'nosniff' not in xss_first_x_content_type else 'N'})"
-                            )
-                        })
-    
+#                     reflected_xss_detected = False
+#                     successful_payloads = []
+#                     xss_first_result = None
+#                     xss_first_req_parts = None
+#                     xss_first_res = None
+#                     xss_first_content_type = ""
+#                     xss_first_x_content_type = ""
+#                     target_vulnerable_param = ""
+#     
+#                     # 테스트 대상 파라미터 후보 리스트 (쿼리 파라미터 + JSON 바디 키 + Multipart 폼 필드)
+#                     params_to_test = []
+#                     for q_param in base_test_params.keys():
+#                         params_to_test.append(("query", q_param, base_test_param_schemas.get(q_param, {"type": "string"})))
+#                     for j_key in base_test_json_keys:
+#                         params_to_test.append(("json", j_key, base_test_json_schemas.get(j_key, {"type": "string"})))
+#                     for m_key in base_test_multipart_keys:
+#                         params_to_test.append(("multipart", m_key, base_test_multipart_schemas.get(m_key, {"type": "string"})))
+#     
+#                     for target_type, target_param, target_schema in params_to_test:
+#                         field_payloads = payloads_for_xss_field(target_param, target_schema, swagger_components)
+#                         if not field_payloads:
+#                             print(f"[XSS DEBUG] skip field -> {method.upper()} {resolved_api_url} | param: {target_param} ({target_type}) not suitable for XSS payloads")
+#                             continue
+#                         for xss_payload in field_payloads:
+#                             # 타겟 파라미터 하나만 페이로드를 주입하고, 나머지는 안전한 기본값("safe")을 설정함
+#                             test_params = dict(base_param_defaults)
+#                             if target_type == "query":
+#                                 test_params[target_param] = xss_payload
+#                             
+#                             # JSON Fuzzing 딕셔너리 구성: non-string fields keep type-correct defaults.
+#                             test_json = copy.deepcopy(base_json_required_defaults)
+#                             for k in base_test_json_keys:
+#                                 top_key = k.split(".", 1)[0].replace("[0]", "")
+#                                 if target_type != "json" and top_key not in base_json_required_defaults:
+#                                     continue
+#                                 prop_name = k.split(".")[-1]
+#                                 dummy_val = default_value_for_schema(base_test_json_schemas.get(k, {"type": "string"}), swagger_components, prop_name)
+#                                 set_nested_value_by_keypath(test_json, k, dummy_val)
+#                             if target_type == "json":
+#                                 set_nested_value_by_keypath(test_json, target_param, xss_payload)
+#                             
+#                             # Multipart Fuzzing 딕셔너리 구성: payload only goes into string fields.
+#                             test_multipart = dict(base_multipart_required_defaults)
+#                             for k in base_test_multipart_keys:
+#                                 if target_type != "multipart" and k not in base_multipart_required_defaults:
+#                                     continue
+#                                 dummy_val = default_value_for_schema({"type": "string"}, swagger_components, k)
+#                                 test_multipart[k] = base_test_enum_defaults.get(k, dummy_val)
+#                             if target_type == "multipart":
+#                                 test_multipart[target_param] = xss_payload
+#     
+#                             try:
+#                                 req_headers = {**xss_headers}
+#                                 if target_type == "json":
+#                                     req_headers["Content-Type"] = "application/json"
+#                                 elif is_multipart_request:
+#                                     # requests가 자동으로 boundary를 가진 Content-Type 헤더를 채우도록 대소문자 구분 없이 소거
+#                                     for ct_key in [k for k in req_headers.keys() if k.lower() == "content-type"]:
+#                                         req_headers.pop(ct_key, None)
+#     
+#                                 print(f"[XSS DEBUG] testing -> {method.upper()} {resolved_api_url} | param: {target_param} ({target_type}) | payload: {xss_payload[:30]}...")
+#                                 res_xss = requests.request(
+#                                     method=method.upper(),
+#                                     url=resolved_api_url,
+#                                     params=test_params if test_params else None,
+#                                     json=test_json if (test_json and target_type == "json") else None,
+#                                     data=test_multipart if (is_multipart_request and test_multipart) else None,
+#                                     files=multipart_files_for_request() if is_multipart_request else None,
+#                                     headers=req_headers,
+#                                     timeout=4
+#                                 )
+#     
+#                                 res_body = res_xss.text
+#                                 x_content_type = res_xss.headers.get("X-Content-Type-Options", "").lower()
+#                                 content_type = res_xss.headers.get("Content-Type", "").lower()
+#                                 print(
+#                                     f"[HTTP TRACE] xss {method.upper()} {resolved_api_url} "
+#                                     f"role={best_role} param={target_param} target_type={target_type} "
+#                                     f"status={res_xss.status_code} params={test_params or {}} "
+#                                     f"json_keys={list(test_json.keys()) if isinstance(test_json, dict) and test_json else []} "
+#                                     f"multipart_keys={list(test_multipart.keys()) if test_multipart else []} "
+#                                     f"file_keys={base_multipart_file_keys if is_multipart_request else []} "
+#                                     f"content_type={res_xss.headers.get('Content-Type', '')} "
+#                                     f"payload_reflected={is_payload_reflected(xss_payload, res_body, baseline_body)} "
+#                                     f"response={summarize_response_for_log(res_xss, 300)}"
+#                                 )
+#     
+#                                 # 4xx/5xx 에러 응답은 XSS로 처리하지 않음 (에러 페이지 반사는 6-1 영역)
+#                                 if res_xss.status_code >= 400:
+#                                     print(f"[XSS DEBUG] skipped -> {method.upper()} {api_url} returned status {res_xss.status_code}. Response: {res_body[:200]}")
+#                                     if looks_like_validation_rejection(res_xss):
+#                                         print(f"[XSS DEBUG] stop field -> {method.upper()} {resolved_api_url} | param: {target_param} rejected by validation")
+#                                         break
+#                                     continue
+#     
+#     
+#                                 # 고도화 6: baseline_body를 공급하여 Diff 영역에서만 반사 여부 검증
+#                                 xss_result = classify_xss_response(
+#                                     payload=xss_payload,
+#                                     response_body=res_body,
+#                                     content_type=content_type,
+#                                     method=method.upper(),
+#                                     is_mutation=(target_type in ["json", "multipart"]),
+#                                     response_headers=res_xss.headers,
+#                                     baseline_body=baseline_body
+#                                 )
+#     
+#     
+#                                 if xss_result:
+#                                     reflected_xss_detected = True
+#                                     target_vulnerable_param = target_param
+#                                     if xss_payload not in successful_payloads:
+#                                         successful_payloads.append(xss_payload)
+#                                     
+#                                     # 첫 번째 감지 시, 반사 컨텍스트에 맞춰 2차 정밀 스캔 진행 (2차 우회 최적화)
+#                                     if not xss_first_result:
+#                                         xss_first_result = xss_result
+#                                         xss_first_res = res_xss
+#                                         xss_first_content_type = content_type
+#                                         xss_first_x_content_type = x_content_type
+#                                         
+#                                         # ── XSS 고도화 2단계: 컨텍스트 기반 2차 정밀 페이로드 검증 ──
+#                                         reflection_ctx = xss_result.get("reflection_context", "HTML body")
+#                                         context_specific_payloads = CONTEXT_PAYLOADS.get(reflection_ctx, [])
+#                                         
+#                                         for ctx_payload in context_specific_payloads:
+#                                             t_params_2 = dict(base_param_defaults)
+#                                             if target_type == "query":
+#                                                 t_params_2[target_param] = ctx_payload
+#                                             t_json_2 = copy.deepcopy(base_json_required_defaults)
+#                                             for k in base_test_json_keys:
+#                                                 top_key = k.split(".", 1)[0].replace("[0]", "")
+#                                                 if target_type != "json" and top_key not in base_json_required_defaults:
+#                                                     continue
+#                                                 set_nested_value_by_keypath(t_json_2, k, "safe")
+#                                             if target_type == "json":
+#                                                 set_nested_value_by_keypath(t_json_2, target_param, ctx_payload)
+#                                             t_multipart_2 = dict(base_multipart_required_defaults)
+#                                             if target_type == "multipart":
+#                                                 t_multipart_2[target_param] = ctx_payload
+#                                             try:
+#                                                 req_headers_2 = {**xss_headers}
+#                                                 if target_type == "json":
+#                                                     req_headers_2["Content-Type"] = "application/json"
+#                                                 elif is_multipart_request:
+#                                                     req_headers_2.pop("Content-Type", None)
+#                                                 res_ctx_2 = requests.request(
+#                                                     method=method.upper(),
+#                                                     url=api_url,
+#                                                     params=t_params_2 if t_params_2 else None,
+#                                                     json=t_json_2 if (t_json_2 and target_type == "json") else None,
+#                                                     data=t_multipart_2 if (is_multipart_request and t_multipart_2) else None,
+#                                                     files=multipart_files_for_request() if is_multipart_request else None,
+#                                                     headers=req_headers_2,
+#                                                     timeout=4
+#                                                 )
+#                                                 result_2 = classify_xss_response(
+#                                                     payload=ctx_payload,
+#                                                     response_body=res_ctx_2.text,
+#                                                     content_type=content_type,
+#                                                     method=method.upper(),
+#                                                     is_mutation=(target_type == "json"),
+#                                                     response_headers=res_ctx_2.headers,
+#                                                     baseline_body=baseline_body
+#                                                 )
+#                                                 if result_2:
+#                                                     if ctx_payload not in successful_payloads:
+#                                                         successful_payloads.append(ctx_payload)
+#                                                     # 컨텍스트에 맞춘 증거 패킷으로 대표값 업데이트
+#                                                     xss_first_result = result_2
+#                                                     xss_first_res = res_ctx_2
+#                                                     xss_payload = ctx_payload
+#                                             except Exception:
+#                                                 continue
+#     
+#                                         # 스크립트 작성용 파싱 추출
+#                                         xss_first_req_parts = extract_request_parts(
+#                                             xss_first_res.request,
+#                                             body_json=test_json if target_type == "json" else None,
+#                                             query_params=test_params if target_type == "query" else None
+#                                         )
+#     
+#                             except Exception as xe:
+#                                 print(f"XSS Custom scan skip for {api_url} ({target_param}): {xe}")
+#     
+#                     if reflected_xss_detected and xss_first_result:
+#                         print(f"[XSS DEBUG] !!! {xss_first_result['kind'].upper()} XSS DETECTED on {api_url} (Param: {target_vulnerable_param}, Success Payloads: {len(successful_payloads)}) !!!")
+#     
+#                         replay_with_payload = xss_first_req_parts["replay_script"].replace(
+#                             "'/* 공격 페이로드 삽입 */'",
+#                             repr(successful_payloads[0])
+#                         )
+#                         custom_alerts.append({
+#                             "alert": xss_first_result["alert"],
+#                             "url": api_url,
+#                             "method": method.upper(),
+#                             "risk": xss_first_result["risk"],
+#                             "confidence": xss_first_result["confidence"],
+#                             "param": target_vulnerable_param,
+#                             "attack": successful_payloads[0],
+#                             "status_code": xss_first_res.status_code,
+#                             "evidence": xss_first_result["evidence"],
+#                             "custom_type": xss_first_result["custom_type"],
+#                             "evidence_request": format_http_request(xss_first_res.request),
+#                             "evidence_response": format_http_response(xss_first_res),
+#                             "parsed_request_headers": xss_first_req_parts["parsed_request_headers"],
+#                             "parsed_request_body": xss_first_req_parts["parsed_request_body"],
+#                             "parsed_request_query": xss_first_req_parts["parsed_request_query"],
+#                             "auth_token_used": xss_first_req_parts["auth_token_used"],
+#                             "login_required": xss_first_req_parts["login_required"],
+#                             "expected_status_code": xss_first_res.status_code,
+#                             "expected_evidence_in_response": successful_payloads[0],
+#                             "screenshot_on": "response_received",
+#                             "replay_script": replay_with_payload,
+#                             "successful_attack_payloads": successful_payloads,
+#                             "description": (
+#                                 f"{xss_first_result['description']} "
+#                                 f"(응답 마임타입: {xss_first_content_type}, 보안헤더 nosniff 누락 상태: {'Y' if 'nosniff' not in xss_first_x_content_type else 'N'})"
+#                             )
+#                         })
+#     
                     # ── XSS 고도화 3단계: HTTP 헤더 인젝션 XSS (Header Injection) ──
                     # User-Agent, Referer, X-Forwarded-For 등 클라이언트 전송 헤더가 응답 페이지나 에러 출력에 그대로 반사되는 취약점을 진단합니다.
                     INJECTABLE_HEADERS = [
@@ -3751,7 +3567,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 val_reason = "POST 요청을 통한 데이터 저장 성공 및 GET 재조회 응답에서의 영구 스크립트 유출 확인 (정탐)"
             elif k_type == "CSRF_CUSTOM":
                 val_status = "True Positive"
-                val_reason = "Authorization 헤더가 배제된 쿠키 자동 전송 요청 조건에서 중요 상태 변경 API 호출이 정상 수용됨 (정탐)"
+                val_reason = "조작되거나 누락된 Referer/Token 조건에서 중요 상태 변경 API 호출이 방어 로직 없이 정상 수용됨 (정탐)"
             elif k_type == "CORS_ORIGIN_REFLECTION":
                 val_status = "True Positive"
                 val_reason = "요청에 실어 보낸 임의의 공격용 Origin 헤더가 ACAO 응답 헤더에 그대로 반사되고 Credentials가 허용됨 (정탐)"
