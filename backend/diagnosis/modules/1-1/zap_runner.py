@@ -2412,122 +2412,119 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 swagger_components,
                             )
                             
-                        # 기본 인증 헤더 준비
-                        base_auth_headers = {}
-                        if best_token:
-                            base_auth_headers["Authorization"] = best_token
+                        # 기본 인증 헤더에서 쿠키만 분리하여 준비
+                        headers_cookie_only = {"Content-Type": "application/json"}
                         cookie_auth_header = build_cookie_header_from_account(scan_account)
                         if cookie_auth_header:
-                            base_auth_headers["Cookie"] = cookie_auth_header
+                            headers_cookie_only["Cookie"] = cookie_auth_header
 
-                        # 공격 시나리오별 헤더 준비
+                        # 공격 시나리오별 헤더 준비 (모두 Authorization 등 커스텀 토큰 제외, 쿠키만 포함)
                         # 1. Referer/Origin 변조 (해커 도메인)
-                        headers_tampered_ref = {**base_auth_headers, "Origin": "http://evil-attacker.local", "Referer": "http://evil-attacker.local/exploit.html", "Content-Type": "application/json"}
+                        headers_tampered_ref = {**headers_cookie_only, "Origin": "http://evil-attacker.local", "Referer": "http://evil-attacker.local/exploit.html"}
                         
                         # 2. Referer/Origin 누락 (삭제)
-                        headers_no_ref = {**base_auth_headers, "Content-Type": "application/json"}
-                        
-                        # 3. CSRF 토큰 누락 (쿠키 및 기본 인증은 유지한 상태에서 별도의 CSRF 토큰 없이 요청)
-                        headers_no_token = {**base_auth_headers, "Content-Type": "application/json"}
-                        # 사용자의 지시에 따라 Authorization 헤더를 삭제하지 않고, 쿠키 기반(인증 완료) 환경에서 추가적인 CSRF 토큰 검증이 있는지만 순수하게 테스트합니다.
+                        headers_no_ref = {**headers_cookie_only}
                         
                         try:
-                            # 1. Referer 변조 테스트 (변조된 Referer/Origin 포함)
-                            res_tampered_ref = requests.request(method=method.upper(), url=api_url, json=csrf_json_body, headers=headers_tampered_ref, timeout=4)
-                            status_tampered_ref = res_tampered_ref.status_code
+                            # 1. 자동 전송 수단(쿠키) 인증 통과 여부 테스트 (Authorization 헤더 전면 삭제)
+                            res_cookie_only = requests.request(method=method.upper(), url=api_url, json=csrf_json_body, headers=headers_cookie_only, timeout=4)
+                            status_cookie_only = res_cookie_only.status_code
                             
-                            # 2. Referer 누락 테스트 (Origin, Referer 아예 없음)
-                            res_no_ref = requests.request(method=method.upper(), url=api_url, json=csrf_json_body, headers=headers_no_ref, timeout=4)
-                            status_no_ref = res_no_ref.status_code
-                            
-                            # 3. Token 누락 테스트 (Authorization/토큰 파라미터 삭제)
-                            res_no_token = requests.request(method=method.upper(), url=api_url, json=csrf_json_body, headers=headers_no_token, timeout=4)
-                            status_no_token = res_no_token.status_code
-                            
-                            # SameSite 속성 확인
-                            set_cookie = res_tampered_ref.headers.get("Set-Cookie", "").lower()
-                            has_unsafe_samesite = has_unsafe_samesite_cookie(scan_account, set_cookie)
-                            if not cookie_auth_header:
-                                # 쿠키를 쓰지 않는 경우 브라우저 레벨의 SameSite 방어가 무의미하므로 취약(Pass)하다고 전제
-                                has_unsafe_samesite = True
-                                
-                            # 판단 로직
-                            # 통과(Pass) 판정 기준: 상태 코드가 400 미만이거나 405(Method Not Allowed 등 비인가 거부가 아닌 상태)
                             def is_passed(status):
                                 return status < 400 or status == 405
+                                
+                            # 1차 검증: 백엔드가 쿠키만으로는 인증을 안 받아준다면 (예: 401/403)
+                            # -> 헤더 토큰이 필수인 안전한 API이므로 CSRF 공격 불가능!
+                            if not is_passed(status_cookie_only):
+                                print(f"[CSRF DEBUG] {method.upper()} {api_url} -> CookieOnly: {status_cookie_only} (SAFE: Cookie auth rejected)")
+                            else:
+                                # --- 이 아래부터는 쿠키만으로 인증이 통과된(위험한) API에 대해서만 실행됨 ---
+                                
+                                # 2. Referer 변조 테스트 (변조된 Referer/Origin 포함)
+                                res_tampered_ref = requests.request(method=method.upper(), url=api_url, json=csrf_json_body, headers=headers_tampered_ref, timeout=4)
+                                status_tampered_ref = res_tampered_ref.status_code
+                                
+                                # 3. Referer 누락 테스트 (Origin, Referer 아예 없음)
+                                res_no_ref = requests.request(method=method.upper(), url=api_url, json=csrf_json_body, headers=headers_no_ref, timeout=4)
+                                status_no_ref = res_no_ref.status_code
+                                
+                                # 4. SameSite 속성 확인
+                                set_cookie = res_tampered_ref.headers.get("Set-Cookie", "").lower()
+                                has_unsafe_samesite = has_unsafe_samesite_cookie(scan_account, set_cookie)
+                                if not cookie_auth_header:
+                                    has_unsafe_samesite = True
+                                    
+                                # 판단 로직 (CSRF 토큰 누락은 이미 CookieOnly 테스트 통과로 뚫린 것으로 간주)
+                                # High: 출처 검증 뚫림(tampered_ref) AND SameSite 속성 뚫림
+                                is_high_risk = is_passed(status_tampered_ref) and has_unsafe_samesite
+                                
+                                # Medium: Referer 누락 시 에러 없이 통과됨
+                                is_medium_risk = False
+                                if not is_high_risk:
+                                    if is_passed(status_no_ref):
+                                        is_medium_risk = True
 
-                            # High: 3대 방어선 모두 뚫림
-                            is_high_risk = is_passed(status_tampered_ref) and is_passed(status_no_token) and has_unsafe_samesite
-                            
-                            # Medium: 방어선이 불완전함 (Referer 누락 또는 토큰 누락에 대해 에러 없이 통과)
-                            is_medium_risk = False
-                            if not is_high_risk:
-                                if is_passed(status_no_ref) or is_passed(status_no_token):
-                                    is_medium_risk = True
-
-                            print(f"[CSRF DEBUG] {method.upper()} {api_url} -> TamperedRef: {status_tampered_ref}, NoRef: {status_no_ref}, NoToken: {status_no_token}, UnsafeSameSite: {has_unsafe_samesite}")
-                            
-                            if is_high_risk:
-                                csrf_req_parts = extract_request_parts(res_tampered_ref.request, body_json=csrf_json_body, query_params=None)
-                                custom_alerts.append({
-                                    "alert": "Cross-Site Request Forgery (CSRF) Vulnerability - Confirmed",
-                                    "url": api_url,
-                                    "method": method.upper(),
-                                    "risk": "High",
-                                    "confidence": "High",
-                                    "param": "Referer/Token/SameSite",
-                                    "attack": "Tampered Referer & Missing Token & Unsafe SameSite",
-                                    "custom_type": "CSRF_CUSTOM",
-                                    "evidence_request": format_http_request(res_tampered_ref.request),
-                                    "evidence_response": format_http_response(res_tampered_ref),
-                                    "parsed_request_headers": csrf_req_parts["parsed_request_headers"],
-                                    "parsed_request_body": csrf_req_parts["parsed_request_body"],
-                                    "parsed_request_query": csrf_req_parts["parsed_request_query"],
-                                    "auth_token_used": csrf_req_parts["auth_token_used"],
-                                    "login_required": csrf_req_parts["login_required"],
-                                    "expected_status_code": status_tampered_ref,
-                                    "screenshot_on": "response_received",
-                                    "replay_script": csrf_req_parts["replay_script"],
-                                    "description": (
-                                        "이 API는 3대 CSRF 방어선이 모두 뚫려있는 고위험(High) 상태입니다.\n"
-                                        "1. Referer 변조: 해커 도메인 전달 시에도 검증 없이 통과(Pass)\n"
-                                        "2. 토큰 우회: CSRF 토큰을 누락해도 백엔드가 통과(Pass)\n"
-                                        "3. 쿠키 속성: SameSite 속성이 없거나 None으로 설정되어 브라우저 자동 전송(Pass)\n"
-                                        "결과적으로 200 OK 등 성공 응답을 반환하여 데이터가 실제로 변경될 수 있습니다.\n\n"
-                                        "**[수동 확인 필요 사항]**\n"
-                                        "진단자는 해당 API가 실제로 민감한 정보(비밀번호 변경, 결제, 권한 부여 등)를 수정하거나 탈취할 수 있는 주요 비즈니스 로직인지 수동으로 확인해야 합니다."
-                                    ),
-                                    "solution": "1. Referer 검증 로직 추가 (화이트리스트 방식)\n2. 상태 변경 요청 시 Anti-CSRF 토큰 발급 및 검증 로직 구현\n3. 세션 쿠키에 SameSite=Lax 또는 Strict 속성 적용"
-                                })
-                            elif is_medium_risk:
-                                csrf_req_parts = extract_request_parts(res_no_ref.request, body_json=csrf_json_body, query_params=None)
-                                custom_alerts.append({
-                                    "alert": "Cross-Site Request Forgery (CSRF) Vulnerability - Potential/Bypass",
-                                    "url": api_url,
-                                    "method": method.upper(),
-                                    "risk": "Medium",
-                                    "confidence": "Medium",
-                                    "param": "Referer/Token",
-                                    "attack": "Omitted Referer or Token",
-                                    "custom_type": "CSRF_CUSTOM",
-                                    "evidence_request": format_http_request(res_no_ref.request),
-                                    "evidence_response": format_http_response(res_no_ref),
-                                    "parsed_request_headers": csrf_req_parts["parsed_request_headers"],
-                                    "parsed_request_body": csrf_req_parts["parsed_request_body"],
-                                    "parsed_request_query": csrf_req_parts["parsed_request_query"],
-                                    "auth_token_used": csrf_req_parts["auth_token_used"],
-                                    "login_required": csrf_req_parts["login_required"],
-                                    "expected_status_code": status_no_ref,
-                                    "screenshot_on": "response_received",
-                                    "replay_script": csrf_req_parts["replay_script"],
-                                    "description": (
-                                        "이 API는 방어 로직이 가동 중이나, 일부 우회 조건이 성립하여 잠재적 위험(Medium)이 존재합니다.\n"
-                                        "예를 들어, 서버가 평소에는 요청을 차단하지만 Referer 헤더를 아예 삭제하고 보내거나 토큰 파라미터를 누락했을 때 백엔드 필터가 에러 없이 200 OK 등으로 통과시키는 결함이 발견되었습니다.\n\n"
-                                        "**[수동 확인 필요 사항]**\n"
-                                        "진단자는 Referer가 없을 때나 Token 파라미터를 삭제했을 때, 서버 컨트롤러 내에서 예외 처리가 올바르게 되고 있는지 소스코드 단의 검증 로직을 수동으로 확인해야 합니다."
-                                    ),
-                                    "solution": "1. Referer 헤더가 아예 존재하지 않는 경우에도 예외 처리(403 등) 하도록 수정\n2. CSRF 토큰 파라미터가 요청 객체에 없을 때 NullPointerException 우회가 아닌 명시적 거부 처리 적용"
-                                })
+                                print(f"[CSRF DEBUG] {method.upper()} {api_url} -> CookieOnly: {status_cookie_only}, TamperedRef: {status_tampered_ref}, NoRef: {status_no_ref}, UnsafeSameSite: {has_unsafe_samesite}")
+                                
+                                if is_high_risk:
+                                    csrf_req_parts = extract_request_parts(res_tampered_ref.request, body_json=csrf_json_body, query_params=None)
+                                    custom_alerts.append({
+                                        "alert": "Cross-Site Request Forgery (CSRF) Vulnerability - Confirmed",
+                                        "url": api_url,
+                                        "method": method.upper(),
+                                        "risk": "High",
+                                        "confidence": "High",
+                                        "param": "Referer/Token/SameSite",
+                                        "attack": "Tampered Referer & Missing Token & Unsafe SameSite",
+                                        "custom_type": "CSRF_CUSTOM",
+                                        "evidence_request": format_http_request(res_tampered_ref.request),
+                                        "evidence_response": format_http_response(res_tampered_ref),
+                                        "parsed_request_headers": csrf_req_parts["parsed_request_headers"],
+                                        "parsed_request_body": csrf_req_parts["parsed_request_body"],
+                                        "parsed_request_query": csrf_req_parts["parsed_request_query"],
+                                        "auth_token_used": csrf_req_parts["auth_token_used"],
+                                        "login_required": csrf_req_parts["login_required"],
+                                        "expected_status_code": status_tampered_ref,
+                                        "screenshot_on": "response_received",
+                                        "replay_script": csrf_req_parts["replay_script"],
+                                        "description": (
+                                            "이 API는 3대 CSRF 방어선이 모두 뚫려있는 고위험(High) 상태입니다.\n"
+                                            "1. 쿠키 의존성: Authorization 헤더 없이 브라우저의 자동 쿠키 전송만으로 API 인증을 허용함\n"
+                                            "2. 출처 검증: 변조된 Referer(해커 도메인)를 전송해도 예외 없이 정상 처리함\n"
+                                            "3. SameSite: 세션 쿠키에 SameSite 속성이 없거나 None으로 설정되어 브라우저가 자동 전송을 막지 못함\n"
+                                            "결과적으로 타 사이트에서 위조된 요청이 성공하여 데이터가 변조될 위험이 매우 큽니다."
+                                        ),
+                                        "solution": "1. 헤더 기반(Bearer) 인증만 허용하도록 쿠키 Fallback 로직 제거\n2. 불가피할 경우 쿠키 발급 시 SameSite=Lax 적용\n3. Anti-CSRF 토큰 검증 로직 추가"
+                                    })
+                                elif is_medium_risk:
+                                    csrf_req_parts = extract_request_parts(res_no_ref.request, body_json=csrf_json_body, query_params=None)
+                                    custom_alerts.append({
+                                        "alert": "Cross-Site Request Forgery (CSRF) Vulnerability - Potential/Bypass",
+                                        "url": api_url,
+                                        "method": method.upper(),
+                                        "risk": "Medium",
+                                        "confidence": "Medium",
+                                        "param": "Referer/Token",
+                                        "attack": "Omitted Referer or Token",
+                                        "custom_type": "CSRF_CUSTOM",
+                                        "evidence_request": format_http_request(res_no_ref.request),
+                                        "evidence_response": format_http_response(res_no_ref),
+                                        "parsed_request_headers": csrf_req_parts["parsed_request_headers"],
+                                        "parsed_request_body": csrf_req_parts["parsed_request_body"],
+                                        "parsed_request_query": csrf_req_parts["parsed_request_query"],
+                                        "auth_token_used": csrf_req_parts["auth_token_used"],
+                                        "login_required": csrf_req_parts["login_required"],
+                                        "expected_status_code": status_no_ref,
+                                        "screenshot_on": "response_received",
+                                        "replay_script": csrf_req_parts["replay_script"],
+                                        "description": (
+                                            "이 API는 브라우저의 자동 전송 수단(쿠키)만으로 인증을 통과시켜 주는 결함이 있으며, 추가로 일부 출처(Referer) 우회 조건이 성립하여 잠재적 위험(Medium)이 존재합니다.\n"
+                                            "해커 사이트 도메인(Tampered Referer)은 차단하고 있지만, 헤더를 아예 조작 삭제한 No Referer 상황에서는 방어 필터가 정상 작동하지 않고 200 OK 등을 반환합니다.\n\n"
+                                            "**[수동 확인 필요 사항]**\n"
+                                            "진단자는 Referer가 없을 때 서버 컨트롤러 내에서 403 예외 처리가 올바르게 되고 있는지 검증 로직을 수동으로 확인해야 합니다."
+                                        ),
+                                        "solution": "1. 헤더 기반(Bearer) 인증만 허용하도록 쿠키 Fallback 로직 제거\n2. 쿠키 발급 시 SameSite=Lax 또는 Strict 설정\n3. Referer 헤더 누락 시 엄격한 차단(403) 정책 적용"
+                                    })
 
                         except Exception as ce:
                             print(f"CSRF Custom scan skip for {api_url}: {ce}")
@@ -3429,9 +3426,11 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                     unique_key = f"GLOBAL_ZAP_{alert_name.replace(' ', '_')[:40]}"
                 elif custom_type == "40014" and a.get("cross_account_reader_role"):
                     reader_role = a.get("cross_account_reader_role", "")
-                    unique_key = f"{account_role}_{reader_role}_{method}_{url}_{key_id}"
+                    param_name = a.get("param", "")
+                    unique_key = f"{account_role}_{reader_role}_{method}_{url}_{key_id}_{param_name}"
                 else:
-                    unique_key = f"{account_role}_{method}_{url}_{key_id}"
+                    param_name = a.get("param", "")
+                    unique_key = f"{account_role}_{method}_{url}_{key_id}_{param_name}"
                 
             param_name = a.get("param", "")
             
@@ -3448,7 +3447,10 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 grouped_alerts[unique_key]["evidence_request"] = a.get("evidence_request", "")
                 grouped_alerts[unique_key]["evidence_response"] = a.get("evidence_response", "")
                 # 성공 페이로드 초기화
-                grouped_alerts[unique_key]["successful_attack_payloads"] = list(a.get("successful_attack_payloads", []))
+                init_payloads = a.get("successful_attack_payloads", [])
+                if not init_payloads and a.get("attack"):
+                    init_payloads = [a.get("attack")]
+                grouped_alerts[unique_key]["successful_attack_payloads"] = list(init_payloads)
             else:
                 grouped_alerts[unique_key]["occurrence_count"] += 1
                 current_url = f"{method} {url}"
@@ -3471,8 +3473,13 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 # 성공 페이로드 리스트 병합 (중복 제거)
                 existing_payloads = grouped_alerts[unique_key].get("successful_attack_payloads", [])
                 new_payloads = a.get("successful_attack_payloads", [])
+                if not new_payloads and a.get("attack"):
+                    new_payloads = [a.get("attack")]
                 combined = list(set(existing_payloads + new_payloads))
-                grouped_alerts[unique_key]["successful_attack_payloads"] = sorted(combined, key=lambda p: XSS_PAYLOADS.index(p) if p in XSS_PAYLOADS else 999)
+                try:
+                    grouped_alerts[unique_key]["successful_attack_payloads"] = sorted(combined, key=lambda p: XSS_PAYLOADS.index(p) if p in XSS_PAYLOADS else 999)
+                except Exception:
+                    grouped_alerts[unique_key]["successful_attack_payloads"] = combined
 
                     
         # 병합된 Alert 리스트 추출
@@ -3488,6 +3495,13 @@ def run_zap_scan(target_url: str, auth_tokens: list):
         re_mapped_alerts = []
         for alert in final_alerts:
             alert_name = alert.get("alert", "")
+            writer_role = alert.get("cross_account_writer_role")
+            reader_role = alert.get("cross_account_reader_role")
+            if alert.get("custom_type") == "40014" and writer_role and reader_role:
+                suffix = f" (작성: {writer_role}, 열람: {reader_role})"
+                if suffix not in alert_name:
+                    alert_name += suffix
+                    
             param_name = alert.get("param", "")
             attack_val = alert.get("attack", "")
             description = alert.get("description", "")
@@ -3564,10 +3578,10 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             k_type = custom_type or plugin_id
             if k_type == "40014" or k_type == "STORED_XSS_CUSTOM":
                 val_status = "True Positive"
-                val_reason = "POST 요청을 통한 데이터 저장 성공 및 GET 재조회 응답에서의 영구 스크립트 유출 확인 (정탐)"
+                val_reason = "POST 요청을 통한 데이터 저장 및 GET 재조회 응답에서의 영구 스크립트 유출 확인 (정탐). 단, 실제 브라우저 렌더링 시 프론트엔드(React/Vue 등)의 자동 이스케이프 설정에 따라 공격 성공 여부가 달라질 수 있으므로 프론트 연동 테스트를 통한 최종 확정이 필요합니다."
             elif k_type == "CSRF_CUSTOM":
                 val_status = "True Positive"
-                val_reason = "조작되거나 누락된 Referer/Token 조건에서 중요 상태 변경 API 호출이 방어 로직 없이 정상 수용됨 (정탐)"
+                val_reason = "조작되거나 누락된 Referer/Token 조건에서 중요 상태 변경 API 호출이 수용됨 (정탐). 단, 실제 브라우저 환경의 SameSite 쿠키 정책 및 CORS/Origin 설정에 따라 공격 발화 여부가 달라질 수 있으므로 추가 확인이 필요합니다."
             elif k_type == "CORS_ORIGIN_REFLECTION":
                 val_status = "True Positive"
                 val_reason = "요청에 실어 보낸 임의의 공격용 Origin 헤더가 ACAO 응답 헤더에 그대로 반사되고 Credentials가 허용됨 (정탐)"
@@ -3624,6 +3638,16 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 "remediation_code": ko_info.get("code_example", "")
             })
             
+        # [요구사항 반영] XSS 및 CSRF 관련 취약점만 리포팅하도록 필터링
+        xss_csrf_alerts = []
+        for a in re_mapped_alerts:
+            v_type = a.get("vuln_type", "").lower()
+            a_name = a.get("alert", "").lower()
+            if "xss" in v_type or "csrf" in v_type or "xss" in a_name or "csrf" in a_name or "cross-site" in a_name:
+                xss_csrf_alerts.append(a)
+        
+        re_mapped_alerts = xss_csrf_alerts
+
         update_status(total_alerts=len(re_mapped_alerts))
         
         # 결과 파일 저장
@@ -3661,7 +3685,10 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 
                 for idx, a in enumerate(meaningful_alerts):
                     jf.write("    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                    jf.write(f"    // 【{idx + 1}번 항목】 공격 분류: {a.get('vuln_id')} - {a.get('vuln_type')} (위험 등급: {a.get('risk')})\n")
+                    writer_role = a.get("cross_account_writer_role")
+                    reader_role = a.get("cross_account_reader_role")
+                    roles_str = f" (작성: {writer_role}, 열람: {reader_role})" if writer_role and reader_role else ""
+                    jf.write(f"    // 【{idx + 1}번 항목】 공격 분류: {a.get('vuln_id')} - {a.get('vuln_type')}{roles_str} (위험 등급: {a.get('risk')})\n")
                     jf.write(f"    // 💡 위협 설명: {a.get('vuln_description')}\n")
                     
                     guide_lines = a.get("remediation_guide", "").split("\n")
