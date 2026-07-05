@@ -30,7 +30,84 @@ def _load_g62_probes():
 
 
 _G62 = _load_g62_probes()
-_post_login = _G62._post_login
+
+
+def _post_login_once_with_retry_after(
+    client: httpx.Client,
+    *,
+    url: str,
+    mode: str,
+    id_field: str,
+    pw_field: str,
+    email: str,
+    password: str,
+    timeout: float,
+) -> tuple[int | None, str, str | None, str | None, str | None]:
+    """POST once and retain Retry-After, which the shared 6-2 helper discards."""
+    payload = {id_field: email, pw_field: password}
+    headers = {"User-Agent": "ARGUS-3-2/1.0"}
+    try:
+        if mode == "json":
+            response = client.post(
+                url,
+                json=payload,
+                timeout=timeout,
+                headers={**headers, "Accept": "application/json, */*"},
+            )
+        else:
+            response = client.post(
+                url,
+                data=payload,
+                timeout=timeout,
+                headers={**headers, "Accept": "text/html, application/json, */*"},
+                follow_redirects=True,
+            )
+        return (
+            response.status_code,
+            response.text,
+            response.headers.get("content-type"),
+            None,
+            response.headers.get("retry-after"),
+        )
+    except httpx.HTTPError as exc:
+        return None, "", None, str(exc)[:200], None
+
+
+def _post_login_with_retry_after(
+    client: httpx.Client,
+    *,
+    login_url: str,
+    id_field: str,
+    pw_field: str,
+    email: str,
+    password: str,
+    timeout: float,
+) -> tuple[int | None, str, str | None, str | None, str, str | None]:
+    """Mirror 6-2's form/JSON fallback while also returning Retry-After."""
+    url = probe_url(login_url)
+    if _G62._is_api_login_url(url):
+        status, body, ctype, err, retry_after = _post_login_once_with_retry_after(
+            client, url=url, mode="json", id_field=id_field, pw_field=pw_field,
+            email=email, password=password, timeout=timeout,
+        )
+        return status, body, ctype, err, "json", retry_after
+
+    first = _post_login_once_with_retry_after(
+        client, url=url, mode="form", id_field=id_field, pw_field=pw_field,
+        email=email, password=password, timeout=timeout,
+    )
+    status, body, ctype, err, retry_after = first
+    if err is None and status not in (404, 405, 415, None):
+        return status, body, ctype, err, "form", retry_after
+
+    second = _post_login_once_with_retry_after(
+        client, url=url, mode="json", id_field=id_field, pw_field=pw_field,
+        email=email, password=password, timeout=timeout,
+    )
+    status2, body2, ctype2, err2, retry_after2 = second
+    if err2 is None and (err is not None or status2 not in (404, 405, 415, None)):
+        return status2, body2, ctype2, err2, "json", retry_after2
+    return status, body, ctype, err, "form", retry_after
 
 
 def run_lockout_probes(
@@ -39,7 +116,7 @@ def run_lockout_probes(
     auth_cfg: dict[str, Any],
     account_email: str,
     wrong_password: str = DEFAULT_WRONG_PASSWORD,
-    max_attempts: int = 12,
+    max_attempts: int = 6,
     interval_sec: float = 0.05,
     snapshot_fn: Any,
     analyze_fn: Any,
@@ -74,7 +151,7 @@ def run_lockout_probes(
             last_err: str | None = None
 
             for attempt in range(1, max_attempts + 1):
-                status, body, ctype, err, mode = _post_login(
+                status, body, ctype, err, mode, retry_after = _post_login_with_retry_after(
                     client,
                     login_url=login_url,
                     id_field=id_field,
@@ -84,7 +161,6 @@ def run_lockout_probes(
                     timeout=timeout,
                 )
                 probe_mode = mode
-                retry_after: str | None = None
                 if err:
                     last_err = err
                     snap = snapshot_fn(
@@ -113,6 +189,7 @@ def run_lockout_probes(
                         "error_code": snap.error_code,
                         "primary_message": snap.primary_message,
                         "body_fingerprint": snap.body_fingerprint,
+                        "retry_after": retry_after,
                         "error": err,
                     }
                 )
@@ -177,7 +254,8 @@ def run_lockout_probes(
                         severity="medium",
                         message=(
                             f"[3-2] No auth failure limit at `{label}` — "
-                            f"{max_attempts} wrong-password attempt(s), response unchanged"
+                            "5 consecutive failures produced no lockout/rate limit "
+                            f"({max_attempts} total attempts, response unchanged)"
                         ),
                         evidence={
                             **base_evidence,

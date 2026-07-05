@@ -528,7 +528,7 @@ class DiagnosisG36RunOptions(BaseModel):
 class DiagnosisG32RunOptions(BaseModel):
     """Per-run overrides for guideline 3-2 auth failure count limit scan."""
 
-    max_attempts: int | None = Field(default=None, ge=3, le=25)
+    max_attempts: int | None = Field(default=None, ge=6, le=25)
     timeout: float | None = Field(default=None, ge=1.0, le=60.0)
     interval_sec: float | None = Field(default=None, ge=0.0, le=2.0)
     wrong_password: str | None = None
