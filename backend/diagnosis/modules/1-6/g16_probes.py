@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -166,9 +167,15 @@ def run_engine(
     stderr_path = output_dir / "w16_engine_stderr.log"
     stdout_file = stdout_path.open("w", encoding="utf-8", errors="replace")
     stderr_file = stderr_path.open("w", encoding="utf-8", errors="replace")
+    env = os.environ.copy()
+    if isinstance(cfg.get("role_login_targets"), dict):
+        env["ARGUS_ROLE_LOGIN_TARGETS"] = json.dumps(cfg["role_login_targets"])
+    if isinstance(cfg.get("role_login_paths"), dict):
+        env["ARGUS_ROLE_LOGIN_PATHS"] = json.dumps(cfg["role_login_paths"])
     proc = subprocess.Popen(
         cmd,
         cwd=str(engine_target.engine_root),
+        env=env,
         text=True,
         stdout=stdout_file,
         stderr=stderr_file,

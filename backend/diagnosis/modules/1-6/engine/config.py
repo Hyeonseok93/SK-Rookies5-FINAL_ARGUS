@@ -2,6 +2,7 @@
 # config.py  ─  ARGUS W-1-6 범용 진단 엔진 v3 전역 설정
 # =============================================================================
 
+import json
 import os
 
 
@@ -17,6 +18,21 @@ class Config:
     LOGIN_SPEC: str = os.getenv("ARGUS_LOGIN_SPEC", "")
     LOGIN_TARGET: str = os.getenv("ARGUS_LOGIN_TARGET", "")
     LOGIN_PATH: str = os.getenv("ARGUS_LOGIN_PATH", "")
+
+    # admin처럼 별도 포트/호스트에서 서비스되는 백엔드용 추가 스펙 (선택)
+    # 지정하면 이 스펙의 엔드포인트도 fuzz_targets에 합쳐진다.
+    # ADMIN_TARGET을 비워두면 스펙의 servers[0].url을 그대로 base_url로 쓴다.
+    ADMIN_API_SPEC: str = os.getenv("ARGUS_ADMIN_API_SPEC", "")
+    ADMIN_TARGET: str = os.getenv("ARGUS_ADMIN_TARGET", "")
+
+    # role별 로그인 대상 override (예: onde-admin 백엔드가 8081 포트를 따로 씀)
+    # {"admin": "http://localhost:8081"}
+    # 여기 없는 role은 LOGIN_TARGET → TARGET_URL 순으로 fallback.
+    # ARGUS_ROLE_LOGIN_TARGETS 환경변수는 JSON 문자열로 받는다.
+    _role_login_targets_raw = os.getenv("ARGUS_ROLE_LOGIN_TARGETS", "")
+    ROLE_LOGIN_TARGETS: dict = json.loads(_role_login_targets_raw) if _role_login_targets_raw else {}
+    _role_login_paths_raw = os.getenv("ARGUS_ROLE_LOGIN_PATHS", "")
+    ROLE_LOGIN_PATHS: dict = json.loads(_role_login_paths_raw) if _role_login_paths_raw else {}
 
     # 역할별 계정 {"admin": "pass", "user": "pass2"}
     # CLI --roles 인수로 덮어씀
@@ -73,6 +89,7 @@ class Config:
 
     # 출력
     OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "./output")
+    REQUEST_TEMPLATES: str = os.getenv("ARGUS_REQUEST_TEMPLATES", "")
 
     # 민감 키워드
     SENSITIVE_KEYWORDS: list = [

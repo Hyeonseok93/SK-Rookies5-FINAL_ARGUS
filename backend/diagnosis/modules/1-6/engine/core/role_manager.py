@@ -39,6 +39,15 @@ class RoleManager:
         # { "admin": {"token": "...", "session": requests.Session, "endpoints": []} }
         self._roles: dict = {}
 
+    def _role_override(self, mapping: dict, role_name: str) -> str:
+        """Return exact role override, then email local-part override."""
+        if not isinstance(mapping, dict):
+            return ""
+        if role_name in mapping:
+            return str(mapping[role_name])
+        local_part = role_name.split("@", 1)[0]
+        return str(mapping.get(local_part, ""))
+
     # -------------------------------------------------------------------------
     # 전체 역할 로그인
     # -------------------------------------------------------------------------
@@ -57,7 +66,7 @@ class RoleManager:
         for role_name, password in roles.items():
             logger.info(f"[RoleManager] 로그인 시도: {role_name}")
             try:
-                token = self._login_api(role_name, password)
+                token = self._login_api(role_name, role_name, password)
                 session = self._make_session(token)
                 self._roles[role_name] = {
                     "token":     token,
@@ -77,19 +86,32 @@ class RoleManager:
     # -------------------------------------------------------------------------
     # API 로그인 (토큰 발급)
     # -------------------------------------------------------------------------
-    def _login_api(self, username: str, password: str) -> str:
+    def _login_api(self, role_name: str, username: str, password: str) -> str:
         """
         Swagger 명세서에서 찾은 로그인 엔드포인트로 API 호출해서 JWT 를 받아옵니다.
 
         Args:
-            username: 로그인 아이디 (역할명과 동일)
-            password: 로그인 비밀번호
+            role_name: 역할명. cfg.ROLE_LOGIN_TARGETS 에 이 role의 override가
+                       있으면 그 base_url로 로그인한다 (예: admin은 8081 포트).
+                       없으면 LOGIN_TARGET → TARGET_URL 순으로 fallback.
+            username:  로그인 아이디 (역할명과 동일)
+            password:  로그인 비밀번호
 
         Returns:
             JWT 문자열
         """
-        base_url = (getattr(self.cfg, "LOGIN_TARGET", "") or self.cfg.TARGET_URL).rstrip("/")
-        login_path = getattr(self.cfg, "LOGIN_PATH", "") or self.login_info.get("path", "/login")
+        role_login_targets = getattr(self.cfg, "ROLE_LOGIN_TARGETS", {}) or {}
+        base_url = (
+            self._role_override(role_login_targets, role_name)
+            or getattr(self.cfg, "LOGIN_TARGET", "")
+            or self.cfg.TARGET_URL
+        ).rstrip("/")
+        role_login_paths = getattr(self.cfg, "ROLE_LOGIN_PATHS", {}) or {}
+        login_path = (
+            self._role_override(role_login_paths, role_name)
+            or getattr(self.cfg, "LOGIN_PATH", "")
+            or self.login_info.get("path", "/login")
+        )
         method = self.login_info.get("method", "post")
         id_field = self.login_info.get("id_field", "username")
         pw_field = self.login_info.get("pw_field", "password")
@@ -178,7 +200,7 @@ class RoleManager:
             True: 갱신 성공, False: 실패
         """
         try:
-            new_token = self._login_api(role_name, password)
+            new_token = self._login_api(role_name, role_name, password)
             new_session = self._make_session(new_token)
             self._roles[role_name]["token"] = new_token
             self._roles[role_name]["session"] = new_session

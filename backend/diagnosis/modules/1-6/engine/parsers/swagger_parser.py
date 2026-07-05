@@ -368,14 +368,26 @@ class SwaggerParser:
     # -------------------------------------------------------------------------
     # 퍼징에 바로 쓸 수 있는 형태로 정리
     # -------------------------------------------------------------------------
-    def get_fuzz_targets(self) -> list:
+    def get_fuzz_targets(self, override_host: str = "") -> list:
         """
         퍼저가 바로 사용할 수 있는 형태로 엔드포인트 + 파라미터를 정리합니다.
         인증이 필요한 엔드포인트와 POST/PUT/PATCH 위주로 반환합니다.
 
+        Args:
+            override_host: 주어지면 스펙의 servers[0].url 대신 이 값을
+                           base_url로 사용 (예: CLI --target). 기존 동작
+                           (항상 --target 우선)을 그대로 유지하려면
+                           호출부에서 이 값을 넘겨야 한다.
+
         Returns:
-            [{"path": "/api/v1/users", "method": "post", "body_schema": {...}}, ...]
+            [{"path": "/api/v1/users", "method": "post", "body_schema": {...},
+              "base_url": "http://localhost:8080"}, ...]
+
+        base_url은 여러 스펙(예: 일반 API + admin 전용 스펙)을 합쳐서
+        fuzzer에 넘길 때, 각 endpoint가 자기 서버로 요청을 보내도록 하기
+        위함입니다 (예: admin 스펙만 포트가 다른 경우).
         """
+        base_url = self.get_base_url(override_host)
         targets = []
         for ep in self.get_endpoints():
             # W-1-6 은 데이터 주입이 목적이므로 body 가 있는 엔드포인트 우선
@@ -386,6 +398,7 @@ class SwaggerParser:
                 "body_schema":  body,
                 "requires_auth": ep["requires_auth"],
                 "summary":      ep["summary"],
+                "base_url":     base_url,
             })
         logger.info(f"[Parser] 퍼징 대상 정리 완료: {len(targets)} 개")
         return targets

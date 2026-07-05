@@ -3,6 +3,7 @@
 # ZAP 경보 + 퍼저 결과 + CDP 로그를 하나의 목록으로 합칩니다.
 # =============================================================================
 
+import difflib
 import json
 import logging
 import re
@@ -14,6 +15,8 @@ try:
 except ImportError:
     KISA_TO_CWE_OWASP = {}
     OWASP_TOP10_2021 = {}
+
+from core.false_positive_rules import apply_risk_downgrade
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,15 @@ FU_URL_HINTS = ("upload", "file", "image", "attachment", "document")
 INJECTION_MARKERS = (
     "..", "%2f", "etc", "passwd", "'", "\"", "<script", "${", "{{", "}}",
     "null", "undefined", "nan", "infinity", " or ", " and ", "%00",
+)
+INFO_LEAK_MARKERS = (
+    "stack trace", "stacktrace", "traceback (most recent call last)",
+    "exception in thread", "nullpointerexception", "runtimeexception",
+    "methodargumenttypemismatchexception", "httpmessagenotreadableexception",
+    "constraintviolationexception", "sql syntax", "sqlstate",
+    "sql exception", "syntax error at or near", "select * from",
+    "insert into", "delete from", "/var/", "/usr/", "/home/",
+    "c:\\", "root:x:",
 )
 
 
@@ -104,6 +116,9 @@ class VulnerabilityCollector:
                 "request_header": msg_detail.get("request_header", ""),
                 "response_header": msg_detail.get("response_header", ""),
                 "response_body_snippet": msg_detail.get("response_body_snippet", ""),
+                # _classify_finding / _root_cause_signature 는 response_text_snippet 키를 읽으므로
+                # 여기서 동일한 값을 별칭으로 채워 소스 간 키 불일치를 없앤다.
+                "response_text_snippet": msg_detail.get("response_body_snippet", ""),
                 "response_json": msg_detail.get("response_json"),
             }
             filtered.append(entry)
@@ -198,6 +213,8 @@ class VulnerabilityCollector:
                 "vuln_name": "CDP 이상 징후 감지",
                 "response_size_bytes": size,
                 "response_body_snippet": entry.get("response_body_snippet", ""),
+                # ZAP과 동일하게 response_text_snippet 별칭을 채워 분류 함수와 키를 맞춘다.
+                "response_text_snippet": entry.get("response_body_snippet", ""),
                 "response_json": entry.get("response_json"),
             }
             anomalies.append(anomaly)
@@ -277,7 +294,11 @@ def _dedupe_findings(findings: list) -> list:
 
         if RISK_ORDER.get(finding.get("risk", "INFO"), 99) < RISK_ORDER.get(item.get("risk", "INFO"), 99):
             item["risk"] = finding.get("risk", item.get("risk"))
-            item["response_text_snippet"] = finding.get("response_text_snippet", item.get("response_text_snippet", ""))
+            # response_text_snippet(퍼저) / response_body_snippet(ZAP·CDP) 둘 다 대비해 갱신
+            new_snippet = _get_snippet(finding)
+            if new_snippet:
+                item["response_text_snippet"] = new_snippet
+                item["response_body_snippet"] = new_snippet
             item["response_json"] = finding.get("response_json", item.get("response_json"))
 
         if finding.get("elapsed_sec", 0) > item.get("elapsed_sec", 0):
@@ -316,8 +337,17 @@ def _normalize_url_for_grouping(url: str) -> str:
         return url.split("?", 1)[0]
 
 
+def _get_snippet(finding: dict) -> str:
+    """
+    response_text_snippet(퍼저) 또는 response_body_snippet(ZAP/CDP) 중
+    존재하는 값을 반환한다. 소스별로 키 이름이 다를 수 있으므로
+    분류/시그니처 계산 지점에서 항상 이 헬퍼를 통해서만 스니펫을 읽는다.
+    """
+    return finding.get("response_text_snippet") or finding.get("response_body_snippet") or ""
+
+
 def _root_cause_signature(finding: dict) -> str:
-    snippet = (finding.get("response_text_snippet") or "").lower()
+    snippet = _get_snippet(finding).lower()
     status = str(finding.get("status_code", ""))
     patterns = [
         "httpmessagenotreadableexception",
@@ -339,10 +369,40 @@ def _root_cause_signature(finding: dict) -> str:
 
 
 def _classify_finding(finding: dict) -> None:
+    """
+    finding 하나에 confidence/triage_status/evidence_reason을 in-place로 채운다.
+
+    v6.2 업데이트: fuzzer.py가 이제 baseline 요청의 실제 응답
+    (status/elapsed/body_snippet)을 finding["request_context"]에 실어 보낸다
+    (request_context.baseline_verified=True인 경우에 한함 — mutating
+    method이면서 ZAP 템플릿이 없는 엔드포인트는 여전히 baseline을 실측하지
+    않으므로 baseline_verified=False로 남는다). 이 데이터가 있을 때는
+    아래에서 실제 diff(반사 마커 / 응답 유사도 / 응답시간 배율)를 쓰고,
+    없을 때는 기존 고정 문자열 매칭으로 폴백한다.
+
+    ⚠️ 그래도 남아있는 한계 (의도적으로 미해결 — 버그 아님):
+
+    1. 500 분기: baseline_verified=True일 때만 "baseline 정상인데 attack만
+       500"을 구분해서 confirmed로 올린다. baseline_verified=False (주로
+       mutating 메소드에서 ZAP 템플릿이 없는 경우)면 여전히 원래
+       엔드포인트가 500이었는지 공격이 유발한 500인지 구분 못 하고,
+       그 사실을 evidence_reason에 명시한 채로 confidence를 낮춘다 —
+       즉 "모른다"를 정직하게 노출하는 쪽으로 바꿨을 뿐 자동으로
+       완전히 닫히는 문제는 아니다.
+
+    2. 200/201 분기: baseline diff는 이제 동작하지만 세 가지 휴리스틱
+       (marker reflection, SequenceMatcher 유사도, 3배 이상 응답시간)일
+       뿐 진짜 semantic diff가 아니다. 페이로드가 응답 바디에 안 나타나면서
+       서버 상태만 조용히 바꾸는 business-logic 취약점(예: 과거에 잡았던
+       마일리지 음수 주입처럼 응답은 200이고 바디도 baseline과 거의
+       똑같은데 DB 값만 바뀌는 케이스)은 이 휴리스틱으로는 못 잡는다.
+       이런 케이스는 여전히 "manual review"로 빠지도록 의도적으로 열어둠.
+    """
     status = finding.get("status_code")
     url = (finding.get("url") or "").lower()
-    snippet = (finding.get("response_text_snippet") or "").lower()
+    snippet = _get_snippet(finding).lower()
     kisa_code = finding.get("kisa_code", "")
+    ctx = finding.get("request_context") or {}
 
     confidence = "medium"
     triage = "suspected"
@@ -352,13 +412,34 @@ def _classify_finding(finding: dict) -> None:
         confidence = "medium"
         reasons.append("request timed out")
     elif isinstance(status, int) and status >= 500:
-        confidence = "high"
-        triage = "confirmed"
-        reasons.append("server returned 5xx")
+        if ctx.get("baseline_verified"):
+            if ctx.get("baseline_valid"):
+                confidence = "high"
+                triage = "confirmed"
+                reasons.append("verified baseline succeeded, attack payload triggered 5xx")
+            else:
+                confidence = "low"
+                triage = "suspected"
+                reasons.append("baseline itself already failed - cannot attribute 5xx to the payload")
+        else:
+            confidence = "medium"
+            triage = "confirmed"
+            reasons.append("server returned 5xx (baseline unverified for this endpoint - attribution uncertain)")
     elif status == 413:
-        confidence = "high"
-        triage = "confirmed"
-        reasons.append("payload size limit exceeded")
+        confidence = "low"
+        triage = "noise"
+        finding["risk"] = "INFO"
+        reasons.append("payload size limit rejected by server")
+    elif isinstance(status, int) and 400 <= status < 500:
+        if any(marker in snippet for marker in INFO_LEAK_MARKERS):
+            confidence = "medium"
+            triage = "suspected"
+            reasons.append("4xx rejection body contains internal information")
+        else:
+            confidence = "low"
+            triage = "noise"
+            finding["risk"] = "INFO"
+            reasons.append("normal 4xx rejection without internal leak evidence")
     elif status in (200, 201):
         if kisa_code == "FU" and not any(hint in url for hint in FU_URL_HINTS):
             confidence = "low"
@@ -369,14 +450,47 @@ def _classify_finding(finding: dict) -> None:
             confidence = "high"
             triage = "confirmed"
             reasons.append("response contains exploit evidence")
+        elif ctx.get("baseline_verified"):
+            baseline_snippet = (ctx.get("baseline_body_snippet") or "").lower()
+            baseline_elapsed = ctx.get("baseline_elapsed_sec")
+            elapsed = finding.get("elapsed_sec")
+            reflected = [m for m in INJECTION_MARKERS if m in snippet and m not in baseline_snippet]
+            similarity = (difflib.SequenceMatcher(None, baseline_snippet, snippet).ratio()
+                          if baseline_snippet else None)
+
+            if reflected:
+                confidence = "medium"
+                triage = "suspected"
+                reasons.append(f"injection marker '{reflected[0]}' present in response but absent from baseline")
+            elif (isinstance(elapsed, (int, float)) and isinstance(baseline_elapsed, (int, float))
+                  and baseline_elapsed > 0.05 and elapsed >= baseline_elapsed * 3 and elapsed >= 1.5):
+                confidence = "medium"
+                triage = "suspected"
+                reasons.append(f"response time {elapsed:.2f}s is {elapsed / baseline_elapsed:.1f}x baseline "
+                                f"({baseline_elapsed:.2f}s) - possible time-based blind injection")
+            elif similarity is not None and similarity < 0.5:
+                confidence = "medium"
+                triage = "suspected"
+                reasons.append(f"response body diverged from baseline (similarity {similarity:.2f})")
+            elif similarity is not None and similarity >= 0.97:
+                confidence = "low"
+                triage = "noise"
+                finding["risk"] = "INFO"
+                reasons.append(f"response nearly identical to verified baseline (similarity {similarity:.2f}) "
+                                "- payload had no observable effect")
+            else:
+                confidence = "low"
+                reasons.append("successful response requires manual review (baseline diff inconclusive)")
         else:
             confidence = "low"
-            reasons.append("successful response requires manual review")
+            reasons.append("successful response requires manual review (no verified baseline to diff against)")
 
-    if "jsontoken" in snippet or "json token" in snippet:
-        if finding.get("risk") == "CRITICAL":
-            finding["risk"] = "HIGH"
-        reasons.append("JsonToken parser wording is not a secret leak")
+    # 오탐 억제 규칙은 core/false_positive_rules.py 테이블에서 관리.
+    # (fuzzer.py의 _has_real_sensitive_leak과 동일한 테이블을 공유)
+    new_risk, fp_reason = apply_risk_downgrade(snippet, finding.get("risk"))
+    if fp_reason:
+        finding["risk"] = new_risk
+        reasons.append(fp_reason)
 
     finding["confidence"] = confidence
     finding["triage_status"] = triage
