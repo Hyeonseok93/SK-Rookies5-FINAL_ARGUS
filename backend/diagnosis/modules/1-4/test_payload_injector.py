@@ -8,6 +8,9 @@ from payload_injector import InjectionResult, PayloadInjector
 from input_parser import _schema_sample_value
 from models import InputSource, ParamLocation, RiskLevel, ScanParam, ScanTarget
 from search_engine import SearchHit, VulnType
+from input_parser import _schema_sample_value
+from models import InputSource, ParamLocation, RiskLevel, ScanParam, ScanTarget
+from search_engine import SearchHit, VulnType
 
 
 def response(status, body):
@@ -114,6 +117,32 @@ class SsrfBaselineDiffTests(unittest.TestCase):
         self.assertEqual(detail["baseline_status"], 409)
         self.assertTrue(detail["baseline_polluted"])
         self.assertIn("정리한 후 재스캔 권장", detail["skip_reason"])
+
+    def test_schema_samples_honor_structured_formats(self):
+        cases = [
+            ("pickup", {"type": "string", "format": "date"}, "2026-01-01"),
+            ("at", {"type": "string", "format": "date-time"}, "2026-01-01T00:00:00"),
+            ("at", {"type": "string", "format": "time"}, "00:00:00"),
+            ("owner", {"type": "string", "format": "email"}, "argus-test@example.com"),
+            ("id", {"type": "string", "format": "uuid"}, "00000000-0000-0000-0000-000000000000"),
+        ]
+        for name, schema, expected in cases:
+            self.assertEqual(_schema_sample_value(name, schema), expected)
+
+    def test_baseline_uses_valid_date_for_sibling_parameter(self):
+        target = ScanTarget(
+            method="GET", base_url="http://example.test", path="/cars/search",
+            params=[
+                ScanParam("pickupDate", ParamLocation.QUERY, schema={"type": "string", "format": "date"}),
+                ScanParam("returnTime", ParamLocation.QUERY, schema={"type": "string", "format": "date-time"}),
+            ], source=InputSource.SWAGGER,
+        )
+        with patch.object(self.injector.session, "request", return_value=response(200, "ok")) as request:
+            probe = self.injector.probe_target_access(target)
+
+        self.assertEqual(probe.response.status_code, 200)
+        self.assertEqual(request.call_args.kwargs["params"]["pickupDate"], "2026-01-01")
+        self.assertEqual(request.call_args.kwargs["params"]["returnTime"], "2026-01-01T00:00:00")
 
     def test_schema_samples_honor_structured_formats(self):
         cases = [

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from app.services.auth_probe_service import login_all_accounts
+from diagnosis.probe_auth import all_account_auths_with_meta
 from app.services.zap_util import ZapNotAvailableError
 from diagnosis.context import DiagnosisContext
 from diagnosis.result import DiagnosisFinding
@@ -74,13 +74,9 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
     )
 
 
-def _primary_auth(raw: dict[str, Any]) -> dict[str, Any] | None:
-    auth_cfg = raw.get("auth") or {}
-    accounts = auth_cfg.get("accounts") or []
-    if not accounts:
-        return None
-    logins = login_all_accounts(auth_cfg, accounts)
-    return logins[0] if logins else None
+def _primary_auth(raw: dict[str, Any], *, data_dir: Path | None = None) -> dict[str, Any] | None:
+    sessions, _meta = all_account_auths_with_meta(raw, data_dir=data_dir, refresh=True)
+    return sessions[0] if sessions else None
 
 
 def _dedupe_redirect_findings(items: list[DiagnosisFinding]) -> list[DiagnosisFinding]:
@@ -214,7 +210,7 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     if opts.zap_enabled:
         zap = _load_local("zap_scan")
-        auth = _primary_auth(raw)
+        auth = _primary_auth(raw, data_dir=ctx.data_dir)
         try:
             zap_phase("ZAP 1-5 redirect scan…")
             zf, zstats = zap.run_zap_phase(

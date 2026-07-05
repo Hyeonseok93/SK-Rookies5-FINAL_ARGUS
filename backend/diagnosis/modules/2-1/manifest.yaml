@@ -1,0 +1,10 @@
+id: "2-1"
+title: "악성코드파일 업로드"
+chapter: 2
+implemented: true
+engine: httpx
+tags:
+  - file-upload
+  - extension-bypass
+  - svg-xss
+  - webshell

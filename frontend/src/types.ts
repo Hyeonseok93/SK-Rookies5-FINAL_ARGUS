@@ -292,7 +292,9 @@ export interface DiagnosisSectionReport {
 
 export interface DiagnosisRunSectionResponse {
   ok: boolean;
-  report: DiagnosisSectionReport;
+  accepted?: boolean;
+  async_run?: boolean;
+  report?: DiagnosisSectionReport | null;
 }
 
 export interface DiagnosisG15RunOptionsPayload {
@@ -444,6 +446,15 @@ export interface DiagnosisG42RunOptionsPayload {
   probe_account_email?: string;
 }
 
+export interface DiagnosisG21RunOptionsPayload {
+  seller_email?: string;
+  seller_password?: string;
+  seller_id?: number;
+  user_email?: string;
+  user_password?: string;
+  timeout?: number;
+}
+
 export interface DiagnosisG41RunOptionsPayload {
   probe_mode?: "base_only" | "sample" | "full";
   sample_size?: number;
@@ -460,6 +471,7 @@ export interface DiagnosisG41RunOptionsPayload {
 export interface DiagnosisRunSectionRequest {
   g12?: DiagnosisG12RunOptionsPayload;
   g15?: DiagnosisG15RunOptionsPayload;
+  g21?: DiagnosisG21RunOptionsPayload;
   g41?: DiagnosisG41RunOptionsPayload;
   g22?: DiagnosisG22RunOptionsPayload;
   g32?: DiagnosisG32RunOptionsPayload;

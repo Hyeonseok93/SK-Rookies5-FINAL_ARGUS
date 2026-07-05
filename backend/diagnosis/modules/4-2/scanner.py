@@ -157,6 +157,7 @@ def run_g42_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         login_report,
         raw_config=raw,
         override_email=opts.probe_account_email,
+        probe_path=opts.probe_path,
     )
     login_url = None
     if account:

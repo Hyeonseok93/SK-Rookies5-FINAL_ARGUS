@@ -1,4 +1,5 @@
 """ARGUS 1-4 엔진 결과를 팀 표준 DiagnosisFinding으로 변환"""
+"""ARGUS 1-4 엔진 결과를 팀 표준 DiagnosisFinding으로 변환"""
 from __future__ import annotations
 
 from typing import Any

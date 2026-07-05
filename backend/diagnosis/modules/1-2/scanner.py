@@ -43,14 +43,12 @@ def _bootstrap_locals():
 
 @dataclass
 class ScanOptions:
-    max_targets: int = 60
-    scan_all_inventory: bool = False
     injector_enabled: bool = True
     direct_enabled: bool = True
     zap_enabled: bool = False
     zap_max_minutes: int = 20
     verification_mode: str = "balanced"
-    injection_types: list[str] = field(default_factory=lambda: ["SQL", "NOSQL", "SSTI", "COMMAND", "XPATH"])
+    injection_types: list[str] = field(default_factory=lambda: ["SQL", "NOSQL", "COMMAND", "XPATH"])
     include_unsafe_methods: bool = False
     keep_all_results: bool = False
 
@@ -73,14 +71,12 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
         types = [t.strip() for t in types_raw.split(",") if t.strip()]
     injector_on = bool(cfg.get("injector_enabled", True))
     return ScanOptions(
-        max_targets=max(5, min(int(cfg.get("max_targets", 60)), 500)),
-        scan_all_inventory=bool(cfg.get("scan_all_inventory", False)),
         injector_enabled=injector_on,
         direct_enabled=bool(cfg.get("direct_enabled", injector_on)),
         zap_enabled=bool(cfg.get("zap_enabled", False)),
         zap_max_minutes=max(1, min(int(cfg.get("zap_max_minutes", 20)), 120)),
         verification_mode=str(cfg.get("verification_mode", "balanced")),
-        injection_types=types or ["SQL", "NOSQL", "SSTI", "COMMAND", "XPATH"],
+        injection_types=types or ["SQL", "NOSQL", "COMMAND", "XPATH"],
         include_unsafe_methods=bool(cfg.get("include_unsafe_methods", False)),
         keep_all_results=bool(cfg.get("keep_all_results", False)),
     )
@@ -159,8 +155,6 @@ def run_g12_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     targets, target_meta = targets_mod.load_scan_targets(
         ctx.data_dir,
         raw,
-        max_targets=opts.max_targets,
-        scan_all=opts.scan_all_inventory,
     )
 
     if target_meta.get("error") == "no_api_tree":

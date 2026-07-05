@@ -46,8 +46,8 @@ services:
       - ..:/workspace:ro
       # 빌드·진단 산출물 유지 (uploads, report, api-tree 등)
       - ./backend/data:/app/data
-      # 진단 모듈 코드 → 호스트와 동기화
-      - ./backend/diagnosis/modules:/app/diagnosis/modules
+      # 진단 패키지 전체 → 호스트와 동기화 (modules 외 auth_session_pool 등 포함)
+      - ./backend/diagnosis:/app/diagnosis
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

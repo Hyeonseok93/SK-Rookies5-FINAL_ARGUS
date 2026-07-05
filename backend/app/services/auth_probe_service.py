@@ -256,12 +256,18 @@ def build_login_entry_report(
     sessions: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Summarize which accounts succeed on which login entry points."""
+    from diagnosis.replay.normalize import canonical_login_url
+
     entries = configured_login_entries(auth_cfg)
-    entry_urls = [e["url"] for e in entries]
+    entry_urls: list[str] = []
+    for e in entries:
+        canon = canonical_login_url(str(e.get("url") or ""))
+        if canon and canon not in entry_urls:
+            entry_urls.append(canon)
     ok_by_email: dict[str, list[str]] = {}
     for session in sessions:
         email = str(session.get("email") or "")
-        url = str(session.get("login_url") or "")
+        url = canonical_login_url(str(session.get("login_url") or ""))
         if email and url:
             ok_by_email.setdefault(email, [])
             if url not in ok_by_email[email]:
@@ -319,10 +325,17 @@ def probe_passes_for_endpoint(
     ep: Any,
     account_auths: list[dict[str, Any]],
     *,
+    login_report: dict[str, Any] | None = None,
     include_anonymous: bool = True,
 ) -> list[tuple[dict[str, Any] | None, str]]:
-    """All auth sessions for every endpoint — no path-based filtering."""
-    return auth_passes(account_auths, include_anonymous=include_anonymous)
+    from diagnosis.endpoint_auth_passes import probe_passes_for_endpoint as _scoped
+
+    return _scoped(
+        ep,
+        account_auths,
+        login_report=login_report,
+        include_anonymous=include_anonymous,
+    )
 
 
 def account_access_allowed(http_status: int | None) -> bool:

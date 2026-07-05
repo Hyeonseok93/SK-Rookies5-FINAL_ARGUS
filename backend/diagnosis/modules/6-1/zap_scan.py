@@ -14,8 +14,9 @@ from app.services.zap_util import (
     reset_zap_workspace,
     seed_probe_urls,
     select_seed_urls,
-    wait_for_passive_scan,
+    stop_zap_scans,
 )
+from diagnosis.exceptions import DiagnosisCancelled
 from diagnosis.probe_transport import ZapTransport
 from diagnosis.result import DiagnosisFinding
 from inventory.probe_build import build_probe_request
@@ -60,6 +61,28 @@ def endpoints_to_probe_targets(endpoints: list[Endpoint]) -> list[dict[str, str]
     return targets
 
 
+def _raise_if_cancelled() -> None:
+    from app.services import diagnosis_progress as dp
+
+    if dp.is_cancel_requested():
+        raise DiagnosisCancelled("User cancelled diagnosis")
+
+
+def _wait_for_passive_scan_cancellable(zap: Any, *, max_seconds: int = 90) -> int:
+    deadline = time.time() + max_seconds
+    last_remaining = 0
+    while time.time() < deadline:
+        _raise_if_cancelled()
+        try:
+            last_remaining = int(zap.pscan.records_to_scan)
+        except Exception:
+            break
+        if last_remaining <= 0:
+            break
+        time.sleep(1)
+    return last_remaining
+
+
 def active_scan_bases(
     zap: Any,
     base_urls: list[str],
@@ -68,6 +91,7 @@ def active_scan_bases(
 ) -> list[str]:
     scan_ids: list[str] = []
     for base in base_urls:
+        _raise_if_cancelled()
         try:
             sid = zap.ascan.scan(url=probe_url(base.rstrip("/")), recurse=False, scanpolicyname="")
             if sid:
@@ -77,6 +101,7 @@ def active_scan_bases(
 
     deadline = time.time() + max_minutes * 60
     while time.time() < deadline:
+        _raise_if_cancelled()
         pending = 0
         for sid in scan_ids:
             try:
@@ -173,6 +198,9 @@ def run_zap_phase(
     zap_unified_enabled: bool = True,
     zap_supplemental_enabled: bool = True,
     on_progress: Callable[..., None] | None = None,
+    auth_pool: Any | None = None,
+    build_passes: Callable[[Endpoint, list[dict[str, Any]]], list[tuple[str, dict[str, str]]]]
+    | None = None,
 ) -> tuple[list[DiagnosisFinding], dict[str, Any]]:
     """
     ZAP phase — unified ARGUS param/body/path fuzz via ZapTransport (2-2 pattern),
@@ -214,6 +242,8 @@ def run_zap_phase(
                 passes=passes,
                 enable=enable,
                 on_progress=on_progress,
+                auth_pool=auth_pool,
+                build_passes=build_passes,
             )
             unified_collapsed, unified_collapse_stats = probes_mod.collapse_auth_findings(raw_unified)
             unified_findings = unified_collapsed
@@ -229,9 +259,10 @@ def run_zap_phase(
                 **unified_collapse_stats,
             }
             unified_requests_sent = budget.sent
-            wait_for_passive_scan(zap, max_seconds=90)
+            _wait_for_passive_scan_cancellable(zap, max_seconds=90)
 
         if zap_supplemental_enabled:
+            _raise_if_cancelled()
             if on_progress:
                 on_progress(
                     endpoints_done=len(endpoints),
@@ -249,7 +280,7 @@ def run_zap_phase(
                 priority_urls=priority_seed_urls,
             )
             seeded = seed_probe_urls(zap, seed_urls)
-            passive_remaining = wait_for_passive_scan(zap)
+            passive_remaining = _wait_for_passive_scan_cancellable(zap)
             scan_ids = active_scan_bases(zap, base_urls, max_minutes=max_minutes)
             native_findings = collect_zap_native_findings(zap, base_urls)
             stats["supplemental"] = {
@@ -267,13 +298,26 @@ def run_zap_phase(
         stats["native_findings"] = len(native_findings)
         stats["alerts"] = len(findings)
         stats["findings"] = len(findings)
+    except DiagnosisCancelled:
+        stop_zap_scans(zap)
+        stats["cancelled"] = True
+        findings = unified_findings + native_findings
+        stats["unified_findings"] = len(unified_findings)
+        stats["native_findings"] = len(native_findings)
+        stats["alerts"] = len(findings)
+        stats["findings"] = len(findings)
     finally:
         try:
             stats["workspace_reset_after"] = reset_zap_workspace(zap, session_name="argus-g61-done")
         except Exception as exc:
             stats["workspace_reset_after"] = {"error": str(exc)}
 
-    return unified_findings + native_findings, stats
+    findings = unified_findings + native_findings
+    stats["unified_findings"] = len(unified_findings)
+    stats["native_findings"] = len(native_findings)
+    stats["alerts"] = len(findings)
+    stats["findings"] = len(findings)
+    return findings, stats
 
 
 configure_61_scanners = configure_61_supplemental_scanners

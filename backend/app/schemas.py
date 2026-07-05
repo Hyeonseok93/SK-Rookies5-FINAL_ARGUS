@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any, Literal
 
@@ -289,9 +289,32 @@ class DiagnosisSectionReportResponse(BaseModel):
     findings: list[DiagnosisFindingSummary] = Field(default_factory=list)
 
 
+class DiagnosisArtifactSummary(BaseModel):
+    path: str
+    name: str
+    size: int = 0
+    modified_at: str | None = None
+
+
+class DiagnosisArtifactContentResponse(BaseModel):
+    section_id: str
+    path: str
+    name: str
+    size: int = 0
+    truncated: bool = False
+    content: str = ""
+
+
+class DiagnosisArtifactsResponse(BaseModel):
+    section_id: str
+    artifacts: list[DiagnosisArtifactSummary] = Field(default_factory=list)
+
+
 class DiagnosisRunSectionResponse(BaseModel):
     ok: bool
-    report: DiagnosisSectionReportResponse
+    accepted: bool = False
+    async_run: bool = False
+    report: DiagnosisSectionReportResponse | None = None
 
 
 class DiagnosisRunAllResponse(BaseModel):
@@ -329,6 +352,30 @@ class DiagnosisG15RunOptions(BaseModel):
     redirect_sink_base: str | None = None
     max_phase_a_jobs: int | None = Field(default=None, ge=20, le=5000)
     max_phase_b_jobs: int | None = Field(default=None, ge=20, le=10000)
+
+
+class DiagnosisG16RunOptions(BaseModel):
+    """Per-run overrides for guideline 1-6 input size/integrity scan."""
+
+    w16_root: str | None = None
+    python: str | None = None
+    target: str | None = None
+    api_spec: str | None = None
+    roles: list[str] | None = None
+    ui_target: str | None = None
+    login_spec: str | None = None
+    login_target: str | None = None
+    login_path: str | None = None
+    zap_host: str | None = None
+    zap_key: str | None = None
+    skip_zap: bool | None = None
+    skip_spider: bool | None = None
+    skip_selenium: bool | None = None
+    max_requests: int | None = Field(default=None, ge=0, le=500000)
+    max_requests_per_endpoint: int | None = Field(default=None, ge=0, le=50000)
+    max_workers: int | None = Field(default=None, ge=1, le=32)
+    timeout_sec: int | None = Field(default=None, ge=60, le=86400)
+    max_report_findings: int | None = Field(default=None, ge=0, le=5000)
 
 
 class DiagnosisG12RunOptions(BaseModel):
@@ -508,9 +555,22 @@ class DiagnosisG42RunOptions(BaseModel):
     probe_account_email: str | None = None
 
 
+class DiagnosisG21RunOptions(BaseModel):
+    """Per-run credentials for guideline 2-1 malicious file upload scan."""
+
+    seller_email: str = ""
+    seller_password: str = ""
+    seller_id: int = Field(default=0, ge=0)
+    user_email: str = ""
+    user_password: str = ""
+    timeout: float | None = Field(default=None, ge=3.0, le=60.0)
+
+
 class DiagnosisRunSectionRequest(BaseModel):
     g12: DiagnosisG12RunOptions | None = None
     g15: DiagnosisG15RunOptions | None = None
+    g16: DiagnosisG16RunOptions | None = None
+    g21: DiagnosisG21RunOptions | None = None
     g41: DiagnosisG41RunOptions | None = None
     g22: DiagnosisG22RunOptions | None = None
     g32: DiagnosisG32RunOptions | None = None
@@ -565,3 +625,5 @@ class ReplayRunSectionResponse(BaseModel):
     ok: bool
     section_id: str
     results: list[ReplayRunResultResponse] = Field(default_factory=list)
+
+

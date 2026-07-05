@@ -133,7 +133,7 @@ class BaseInjector:
             return ProbeResponse(-1.0, "ERROR", "", {}, str(exc))
 
     def _normalize_param_name(self, value: str) -> str:
-        return (value or "").strip().strip("짬쨩").casefold()
+        return (value or "").strip().strip("{}<>:«»").casefold()
 
     def _param_matches(self, candidate: str, target: str) -> bool:
         return self._normalize_param_name(candidate) == self._normalize_param_name(target)

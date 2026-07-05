@@ -54,7 +54,7 @@ def load_login_report(data_dir: Path, raw_config: dict[str, Any] | None) -> dict
 def load_sessions(
     raw_config: dict[str, Any] | None, data_dir: Path | None = None
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    return all_account_auths_with_meta(raw_config, data_dir=data_dir)
+    return all_account_auths_with_meta(raw_config, data_dir=data_dir, refresh=True)
 
 
 def _refresh_base_score(ep: Endpoint, preferred_bases: set[str]) -> int:
@@ -247,7 +247,17 @@ def pick_probe_account(
     *,
     raw_config: dict[str, Any] | None = None,
     override_email: str | None,
+    probe_path: str = "/api/v1/members/me",
 ) -> tuple[dict[str, str] | None, dict[str, Any] | None]:
+    from diagnosis.endpoint_auth_passes import filter_sessions_for_probe, primary_session_for_probe
+
+    probe_base = resolve_probe_base(sessions[0] if sessions else None, None, raw_config)
+    matched = filter_sessions_for_probe(
+        base_url=probe_base,
+        path=probe_path,
+        sessions=sessions,
+        login_report=login_report,
+    )
     if override_email:
         for account in valid_login_accounts(accounts):
             if account.get("email") == override_email:
@@ -256,7 +266,14 @@ def pick_probe_account(
                         return account, session
         return None, None
 
-    for session in sessions:
+    session = primary_session_for_probe(probe_base, probe_path, sessions, login_report)
+    if session:
+        email = str(session.get("email") or "")
+        for account in valid_login_accounts(accounts):
+            if account.get("email") == email:
+                return account, session
+
+    for session in matched or sessions:
         email = str(session.get("email") or "")
         for account in valid_login_accounts(accounts):
             if account.get("email") != email:
