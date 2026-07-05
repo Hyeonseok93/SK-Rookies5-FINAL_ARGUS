@@ -33,7 +33,7 @@ def _load_local(name: str):
 @dataclass
 class ScanOptions:
     timeout: float = 10.0
-    max_attempts: int = 12
+    max_attempts: int = 6
     interval_sec: float = 0.05
     wrong_password: str = "__ARGUS_INVALID_PASSWORD__"
     probe_account_email: str | None = None
@@ -53,7 +53,8 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
     cfg = raw.get("diagnosis_3_2") or raw.get("scan_3_2") or {}
     return ScanOptions(
         timeout=float(cfg.get("timeout", 10.0)),
-        max_attempts=max(3, min(int(cfg.get("max_attempts", 12)), 25)),
+        # Five ordinary failures may be followed by the lock signal on request 6.
+        max_attempts=max(6, min(int(cfg.get("max_attempts", 6)), 25)),
         interval_sec=max(0.0, min(float(cfg.get("interval_sec", 0.05)), 2.0)),
         wrong_password=str(cfg.get("wrong_password") or "__ARGUS_INVALID_PASSWORD__"),
         probe_account_email=str(cfg["probe_account_email"]).strip()
@@ -170,12 +171,12 @@ def run_g32_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     elif status == "pass":
         message = (
             f"Auth failure limit present on {total_limit}/{total_probed} login entry(s) "
-            f"({opts.max_attempts} attempts each)"
+            f"(5-failure policy checked within {opts.max_attempts} attempts each)"
         )
     elif status == "fail":
         message = (
             f"Missing auth failure limit on {total_no_limit}/{total_probed} login entry(s) "
-            f"({opts.max_attempts} wrong-password attempts)"
+            f"(no limit after 5 consecutive failures; {opts.max_attempts} attempts each)"
         )
     else:
         message = f"Auth failure limit scan: {total_probed} login entry(s)"

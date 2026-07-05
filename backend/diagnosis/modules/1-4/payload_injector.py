@@ -389,41 +389,11 @@ class PayloadInjector:
                     )
                     failure_cause = "TARGET_PARAMETER_VALIDATION"
                 elif baseline_polluted:
-                body = baseline.text or ""
-                validation_error = bool(re.search(
-                    r"failed\s+to\s+convert|validation\s+failed|type\s+mismatch|"
-                    r"invalid\s+(?:value|format)|cannot\s+(?:deserialize|convert)",
-                    body,
-                    re.IGNORECASE,
-                ))
-                mentioned_fields = [
-                    param.name for param in getattr(hit.target, "params", [hit.param])
-                    if re.search(rf"(?<![A-Za-z0-9_]){re.escape(param.name)}(?![A-Za-z0-9_])", body, re.IGNORECASE)
-                ]
-                sibling_fields = [
-                    name for name in mentioned_fields
-                    if name.casefold() != hit.param.name.casefold()
-                ]
-                baseline_polluted = baseline.status_code in (400, 409, 422)
-                if baseline.status_code == 400 and validation_error and sibling_fields:
-                    reason = (
-                        f"형제 파라미터({', '.join(sibling_fields)})의 기본값 문제로 baseline 실패 - "
-                        "해당 파라미터 자체의 취약 여부는 판단 불가"
-                    )
-                    failure_cause = "SIBLING_PARAMETER_VALIDATION"
-                elif baseline.status_code == 400 and validation_error and mentioned_fields:
-                    reason = (
-                        f"대상 파라미터({hit.param.name})의 baseline 값이 필드 검증에서 거부되어 "
-                        "페이로드 주입을 스킵"
-                    )
-                    failure_cause = "TARGET_PARAMETER_VALIDATION"
-                elif baseline_polluted:
                     reason = (
                         f"baseline 요청 자체가 {baseline.status_code}로 응답함 - 이전 스캔에서 "
                         "생성된 잔여 테스트 데이터로 인해 오탐/미탐 판정이 부정확할 수 있음. "
                         "테스트 계정/리소스를 정리한 후 재스캔 권장"
                     )
-                    failure_cause = "POLLUTED_OR_INVALID_BASELINE"
                     failure_cause = "POLLUTED_OR_INVALID_BASELINE"
                 else:
                     reason = (
@@ -431,15 +401,11 @@ class PayloadInjector:
                         "서버 오류로 판단하여 페이로드 주입을 스킵"
                     )
                     failure_cause = "SERVER_OR_REQUIRED_FIELD_ERROR"
-                    failure_cause = "SERVER_OR_REQUIRED_FIELD_ERROR"
                 self.skipped_failed_baseline_hits.append(hit)
                 self.skipped_failed_baseline_details.append({
                     **hit.to_dict(),
                     "baseline_status": baseline.status_code,
                     "baseline_polluted": baseline_polluted,
-                    "baseline_failure_cause": failure_cause,
-                    "validation_error_detected": validation_error,
-                    "validation_fields": mentioned_fields,
                     "baseline_failure_cause": failure_cause,
                     "validation_error_detected": validation_error,
                     "validation_fields": mentioned_fields,
@@ -467,30 +433,11 @@ class PayloadInjector:
                         f"(param={hit.param.name}) -> {control_probe['reason']}"
                     )
                     continue
-                )
-                continue
-
-            control_probe = None
-            if getattr(hit, "is_soft_constrained", False):
-                control_probe = self._probe_soft_constraint(hit, baseline)
-                if not control_probe["passed"]:
-                    self.skipped_soft_constrained_details.append({
-                        **hit.to_dict(),
-                        "control_probe": control_probe,
-                    })
-                    print(
-                        f"[컨트롤 스킵] {hit.target.method} {hit.target.full_url} "
-                        f"(param={hit.param.name}) -> {control_probe['reason']}"
-                    )
-                    continue
 
             hit_result_start = len(results)
             payloads = self._select_payloads(hit.vuln_type)[: self.max_payloads_per_param]
 
             for payload in payloads:
-                result = self._inject_single(
-                    hit, payload, baseline=baseline, control_probe=control_probe
-                )
                 result = self._inject_single(
                     hit, payload, baseline=baseline, control_probe=control_probe
                 )
@@ -504,8 +451,6 @@ class PayloadInjector:
                 for template in SSRF_BYPASS_TEMPLATES:
                     bypass_payload = template.format(whitelisted_domain=self.whitelisted_domain)
                     result = self._inject_single(hit, bypass_payload, baseline=baseline,
-                                                  label="DOMAIN_BYPASS",
-                                                  control_probe=control_probe)
                                                   label="DOMAIN_BYPASS",
                                                   control_probe=control_probe)
                     if result:
@@ -1216,8 +1161,6 @@ class PayloadInjector:
                         baseline: Optional[requests.Response],
                         label: str = "",
                         control_probe: Optional[dict] = None) -> Optional[InjectionResult]:
-                        label: str = "",
-                        control_probe: Optional[dict] = None) -> Optional[InjectionResult]:
         target = hit.target
         param = hit.param
         url = self._build_url(hit, payload)
@@ -1263,10 +1206,6 @@ class PayloadInjector:
                     allow_soft_constrained=bool(control_probe and control_probe.get("passed")),
                 )
 
-                return InjectionResult(
-                    hit, payload, resp, elapsed_ms, baseline,
-                    allow_soft_constrained=bool(control_probe and control_probe.get("passed")),
-                )
                 confirmation_details.append({
                     "attempt": attempt + 1,
                     "status_code": resp.status_code,
@@ -1332,7 +1271,6 @@ class PayloadInjector:
                     request_body=request_body,
                     request_headers=request_headers,
                     request_content_type=request_content_type,
-                    control_probe=control_probe,
                     control_probe=control_probe,
                     confirmation_rounds=confirmation_details,
                     baseline_summary=self._response_summary(baseline),
@@ -1400,7 +1338,6 @@ class PayloadInjector:
                 request_headers=request_headers,
                 request_content_type=request_content_type,
                 control_probe=control_probe,
-                control_probe=control_probe,
                 confirmation_rounds=confirmation_details,
                 baseline_summary=self._response_summary(baseline),
                 payload_summary={"status": None, "length": None,
@@ -1458,10 +1395,7 @@ class PayloadInjector:
                            resp: requests.Response, elapsed_ms: float,
                            baseline: Optional[requests.Response],
                            allow_soft_constrained: bool = False):
-                           baseline: Optional[requests.Response],
-                           allow_soft_constrained: bool = False):
         """
-        응답 본문/상태/시간 + baseline 비교를 종합하여 취약점 확정 여부를 판정
         응답 본문/상태/시간 + baseline 비교를 종합하여 취약점 확정 여부를 판정
         반환: (confirmed: bool, evidence: str, detection_method: str)
         """
@@ -1491,7 +1425,6 @@ class PayloadInjector:
                 return True, "클라우드 메타데이터 엔드포인트 응답 탐지 (자격증명 노출 위험)", "IN_BAND"
 
         # enum/구조화 포맷은 자유 문자열 입력이 아니므로 응답 차이만으로 확정하지 않습니다.
-        if _is_constrained_param(hit.param) and not allow_soft_constrained:
         if _is_constrained_param(hit.param) and not allow_soft_constrained:
             return False, "", ""
 
