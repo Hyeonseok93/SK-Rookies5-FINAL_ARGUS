@@ -1,4 +1,4 @@
-"""Orchestrate guideline 6-1 error-page information disclosure scan."""
+"""Orchestrate guideline 6-1 error-page information disclosure scan (httpx only)."""
 
 from __future__ import annotations
 
@@ -7,18 +7,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from app.services.zap_util import ZapNotAvailableError
 from diagnosis.auth_session_pool import DiagnosisAuthPool
 from diagnosis.context import DiagnosisContext
 from diagnosis.endpoint_auth_passes import (
     build_probe_passes_headers_only,
     load_login_report,
-    primary_session_for_endpoint,
 )
 from diagnosis.exceptions import DiagnosisCancelled
 from diagnosis.probe_transport import HttpxTransport
 from diagnosis.result import DiagnosisFinding
-from inventory.schema import Endpoint
 
 _MODULE_DIR = Path(__file__).resolve().parent
 
@@ -37,8 +34,6 @@ def _load_local(name: str):
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot load {path}")
     mod = importlib.util.module_from_spec(spec)
-    import sys
-
     sys.modules[mod_name] = mod
     spec.loader.exec_module(mod)
     return mod
@@ -59,12 +54,6 @@ class ScanOptions:
     enable_header: bool = True
     enable_auth_modes: bool = True
     httpx_enabled: bool = True
-    zap_enabled: bool = True
-    zap_unified_enabled: bool = True
-    zap_supplemental_enabled: bool = True
-    zap_max_requests: int = 8000
-    zap_max_minutes: int = 15
-    zap_seed_cap: int = 200
 
 
 @dataclass
@@ -86,31 +75,18 @@ def _request_cap(raw_value: Any, default: int) -> int:
     return max(100, value)
 
 
-def _seed_cap(raw_value: Any, default: int) -> int:
-    """0 or negative = seed all probe URLs; positive = minimum 20."""
-    try:
-        value = int(raw_value if raw_value is not None else default)
-    except (TypeError, ValueError):
-        value = default
-    if value <= 0:
-        return 0
-    return max(20, value)
-
-
 def _scan_options(raw: dict[str, Any]) -> ScanOptions:
     cfg = raw.get("diagnosis_6_1") or raw.get("scan_6_1") or {}
     mode = str(cfg.get("probe_mode", "sample")).strip().lower()
     if mode not in ("sample", "full"):
         mode = "sample"
-    max_requests = _request_cap(cfg.get("max_requests"), 8000)
-    zap_default = max_requests if max_requests > 0 else 0
     return ScanOptions(
         timeout=float(cfg.get("timeout", 10.0)),
         interval_sec=max(0.0, min(float(cfg.get("interval_sec", 0.02)), 2.0)),
         probe_mode=mode,  # type: ignore[arg-type]
         sample_size=max(5, min(int(cfg.get("sample_size", 40)), 500)),
         max_endpoints=max(0, int(cfg.get("max_endpoints", 80))),
-        max_requests=max_requests,
+        max_requests=_request_cap(cfg.get("max_requests"), 8000),
         enable_param=bool(cfg.get("enable_param_fuzz", True)),
         enable_body=bool(cfg.get("enable_body_fuzz", True)),
         enable_path=bool(cfg.get("enable_path_fuzz", True)),
@@ -118,12 +94,6 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
         enable_header=bool(cfg.get("enable_header_fuzz", True)),
         enable_auth_modes=bool(cfg.get("enable_auth_modes", True)),
         httpx_enabled=bool(cfg.get("httpx_enabled", True)),
-        zap_enabled=bool(cfg.get("zap_enabled", True)),
-        zap_unified_enabled=bool(cfg.get("zap_unified_enabled", True)),
-        zap_supplemental_enabled=bool(cfg.get("zap_supplemental_enabled", True)),
-        zap_max_requests=_request_cap(cfg.get("zap_max_requests"), zap_default),
-        zap_max_minutes=max(1, min(int(cfg.get("zap_max_minutes", 15)), 480)),
-        zap_seed_cap=_seed_cap(cfg.get("zap_seed_cap"), 200),
     )
 
 
@@ -146,10 +116,6 @@ def _build_scan_result(
     collapsed_count: int,
     collapse_stats: dict[str, Any],
     enable: dict[str, bool],
-    zap_ran: bool,
-    zap_unified_count: int,
-    zap_native_count: int,
-    zap_stats: dict[str, Any],
     passes: list[tuple[str, dict[str, str]]],
     auth_meta: dict[str, Any],
     payloads: list[Any],
@@ -177,13 +143,10 @@ def _build_scan_result(
         "requests_by_family": budget.by_family,
         "http_errors": total_errors,
         "httpx_leaks": collapsed_count,
-        "zap_unified_leaks": zap_unified_count,
-        "zap_native_alerts": zap_native_count,
         "leaks": len(all_findings),
         "by_severity": by_severity,
         **collapse_stats,
         "triggers_enabled": enable,
-        "zap": zap_stats,
     }
     if cancelled:
         stats["cancelled"] = True
@@ -196,11 +159,7 @@ def _build_scan_result(
         message = f"Probed {endpoints_done} endpoint(s)"
 
     if opts.httpx_enabled:
-        message += f", {budget.sent} httpx request(s), {collapsed_count} httpx leak(s)"
-    if zap_ran:
-        message += f", ZAP unified {zap_unified_count} + native {zap_native_count}"
-    elif opts.zap_enabled and not cancelled:
-        message += " (ZAP skipped/unavailable)"
+        message += f", {budget.sent} httpx request(s), {collapsed_count} leak(s)"
     if cancelled:
         message += f" — {len(all_findings)} finding(s) collected before stop"
     return ScanResult(findings=all_findings, stats=stats, status=status, message=message)
@@ -251,13 +210,12 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     }
 
     auth_pool = DiagnosisAuthPool(ctx.raw_config, data_dir=ctx.data_dir)
-    auth_meta = auth_pool.meta
     login_report = load_login_report(ctx.data_dir, ctx.raw_config)
 
     def _snapshot_auth_meta() -> dict[str, Any]:
         return {**auth_pool.meta, "refresh_count": auth_pool.refresh_count}
 
-    def _passes_for_ep(ep: Endpoint, sessions: list[dict[str, Any]]) -> list[tuple[str, dict[str, str]]]:
+    def _passes_for_ep(ep, sessions: list[dict[str, Any]]) -> list[tuple[str, dict[str, str]]]:
         return build_probe_passes_headers_only(
             ep,
             sessions,
@@ -297,110 +255,34 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     collapsed: list[DiagnosisFinding] = []
     collapse_stats: dict[str, Any] = {}
     all_findings: list[DiagnosisFinding] = []
-    zap_ran = False
-    zap_unified_count = 0
-    zap_native_count = 0
-    zap_stats: dict[str, Any] = {"zap": "skipped", "reason": "zap_enabled=false"}
 
     try:
-        if opts.httpx_enabled:
-            dp.update(phase="httpx", message=f"httpx Phase A — {total_eps} API")
-            with HttpxTransport(timeout=opts.timeout) as transport:
-                raw_findings, total_errors, endpoints_done = probes_mod.run_endpoints_probes(
-                    endpoints,
-                    transport=transport,
-                    engine="httpx",
-                    payloads=payloads,
-                    timeout=opts.timeout,
-                    interval_sec=opts.interval_sec,
-                    budget=budget,
-                    passes=sample_passes,
-                    enable=enable,
-                    on_progress=_probe_progress,
-                    auth_pool=auth_pool,
-                    build_passes=_passes_for_ep,
-                )
+        if not opts.httpx_enabled:
+            return ScanResult(
+                status="skipped",
+                message="httpx disabled — nothing to run",
+                stats={"reason": "httpx_enabled=false", **target_meta},
+            )
+
+        dp.update(phase="httpx", message=f"httpx — {total_eps} API")
+        with HttpxTransport(timeout=opts.timeout) as transport:
+            raw_findings, total_errors, endpoints_done = probes_mod.run_endpoints_probes(
+                endpoints,
+                transport=transport,
+                engine="httpx",
+                payloads=payloads,
+                timeout=opts.timeout,
+                interval_sec=opts.interval_sec,
+                budget=budget,
+                passes=sample_passes,
+                enable=enable,
+                on_progress=_probe_progress,
+                auth_pool=auth_pool,
+                build_passes=_passes_for_ep,
+            )
 
         collapsed, collapse_stats = probes_mod.collapse_auth_findings(raw_findings)
         all_findings = list(collapsed)
-        priority_seed_urls: list[str] = []
-        for finding in all_findings:
-            url = str((finding.evidence or {}).get("url") or "").strip()
-            if url:
-                priority_seed_urls.append(url)
-
-        if opts.zap_enabled:
-            from diagnosis.replay.normalize import collect_probe_base_urls
-
-            auth_pool.ensure_valid()
-            zap_primary = (
-                primary_session_for_endpoint(
-                    endpoints[0], auth_pool.sessions(), login_report
-                )
-                if endpoints
-                else auth_pool.primary()
-            )
-            passes = sample_passes
-            base_urls = collect_probe_base_urls(ctx.raw_config)
-            try:
-                dp.update(
-                    phase="zap",
-                    message="ZAP Phase B/C — unified fuzz + supplemental",
-                    endpoints_done=endpoints_done,
-                    endpoints_total=total_eps,
-                )
-                zap_mod = _load_local("zap_scan")
-                zap_findings, zap_stats = zap_mod.run_zap_phase(
-                    ctx.raw_config,
-                    endpoints,
-                    base_urls,
-                    auth_pool.primary() if zap_primary is None else zap_primary,
-                    probes_mod,
-                    payloads=payloads,
-                passes=sample_passes,
-                timeout=opts.timeout,
-                interval_sec=opts.interval_sec,
-                max_requests=opts.zap_max_requests,
-                enable=enable,
-                max_minutes=opts.zap_max_minutes,
-                seed_cap=opts.zap_seed_cap,
-                priority_seed_urls=priority_seed_urls,
-                zap_unified_enabled=opts.zap_unified_enabled,
-                zap_supplemental_enabled=opts.zap_supplemental_enabled,
-                auth_pool=auth_pool,
-                build_passes=_passes_for_ep,
-                    on_progress=_probe_progress,
-                )
-                zap_unified_count = int(zap_stats.get("unified_findings") or 0)
-                zap_native_count = int(zap_stats.get("native_findings") or 0)
-                all_findings.extend(zap_findings)
-                zap_ran = True
-                if zap_stats.get("cancelled"):
-                    return _build_scan_result(
-                        all_findings=all_findings,
-                        target_meta=target_meta,
-                        opts=opts,
-                        endpoints_done=endpoints_done,
-                        budget=budget,
-                        total_errors=total_errors,
-                        collapsed_count=len(collapsed),
-                        collapse_stats=collapse_stats,
-                        enable=enable,
-                        zap_ran=zap_ran,
-                        zap_unified_count=zap_unified_count,
-                        zap_native_count=zap_native_count,
-                        zap_stats=zap_stats,
-                        passes=sample_passes,
-                        auth_meta=_snapshot_auth_meta(),
-                        payloads=payloads,
-                        cancelled=True,
-                    )
-            except DiagnosisCancelled:
-                raise
-            except ZapNotAvailableError as exc:
-                zap_stats = {"error": str(exc)}
-            except Exception as exc:
-                zap_stats = {"error": str(exc)[:300]}
     except DiagnosisCancelled:
         if not collapsed and raw_findings:
             collapsed, collapse_stats = probes_mod.collapse_auth_findings(raw_findings)
@@ -415,10 +297,6 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             collapsed_count=len(collapsed),
             collapse_stats=collapse_stats,
             enable=enable,
-            zap_ran=zap_ran,
-            zap_unified_count=zap_unified_count,
-            zap_native_count=zap_native_count,
-            zap_stats=zap_stats,
             passes=sample_passes,
             auth_meta=_snapshot_auth_meta(),
             payloads=payloads,
@@ -435,10 +313,6 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         collapsed_count=len(collapsed),
         collapse_stats=collapse_stats,
         enable=enable,
-        zap_ran=zap_ran,
-        zap_unified_count=zap_unified_count,
-        zap_native_count=zap_native_count,
-        zap_stats=zap_stats,
         passes=sample_passes,
         auth_meta=_snapshot_auth_meta(),
         payloads=payloads,

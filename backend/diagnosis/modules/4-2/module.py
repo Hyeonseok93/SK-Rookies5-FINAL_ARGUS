@@ -30,8 +30,10 @@ class G42Module(DiagnosisModule):
     section_id = "4-2"
     title = "인증(세션 및 토큰) 값 안전성 설정 여부"
     chapter = 4
-    implemented = True
-    engine = "httpx"
+    implemented = False
+    diagnosable = False
+    status_label = "수동 진단"
+    engine = "pending"
 
     def __init__(self, module_dir: Path) -> None:
         self.module_dir = module_dir
@@ -41,6 +43,12 @@ class G42Module(DiagnosisModule):
             if isinstance(raw, dict):
                 self.title = str(raw.get("title", self.title))
                 self.chapter = int(raw.get("chapter", self.chapter))
+                self.implemented = bool(raw.get("implemented", self.implemented))
+                self.diagnosable = bool(raw.get("diagnosable", self.diagnosable))
+                self.review_later = bool(raw.get("review_later", False))
+                self.status_label = (
+                    str(raw["status_label"]).strip() if raw.get("status_label") else None
+                )
                 self.engine = str(raw.get("engine", self.engine))
 
     def run(self, ctx: DiagnosisContext) -> SectionReport:

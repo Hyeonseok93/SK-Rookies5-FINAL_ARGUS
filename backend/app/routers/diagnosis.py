@@ -68,6 +68,14 @@ def get_diagnosis_progress() -> DiagnosisProgressResponse:
     return DiagnosisProgressResponse(**diagnosis_progress.snapshot())
 
 
+@router.get("/modules/6-1/report/summary", response_model=DiagnosisSectionReportResponse)
+def get_g61_module_report_summary() -> DiagnosisSectionReportResponse:
+    payload = diagnosis_service.get_g61_report_summary()
+    if payload is None:
+        raise HTTPException(status_code=404, detail="No report for module 6-1")
+    return DiagnosisSectionReportResponse.model_validate(payload)
+
+
 @router.get("/modules/{section_id}/report", response_model=DiagnosisSectionReportResponse)
 def get_module_report(section_id: str) -> DiagnosisSectionReportResponse:
     report = diagnosis_service.get_report(section_id)

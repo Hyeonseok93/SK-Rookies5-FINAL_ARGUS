@@ -106,12 +106,6 @@ diagnosis_6_1:
   enable_header_fuzz: true
   enable_auth_modes: true
   httpx_enabled: true
-  zap_enabled: true
-  zap_unified_enabled: true
-  zap_supplemental_enabled: true
-  zap_max_requests: 8000
-  zap_max_minutes: 15
-  zap_seed_cap: 200
 
 diagnosis_4_2:
   timeout: 10.0

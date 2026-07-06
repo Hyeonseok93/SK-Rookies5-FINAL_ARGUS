@@ -59,14 +59,52 @@ def test_analyze_java_stack():
     assert any(h.rule_id in ("java_stack", "java_caused") for h in hits)
 
 
-def test_analyze_ignores_clean_404():
+def test_analyze_flags_404_with_message():
     rules = _load("error_rules")
     hits = rules.analyze_error_response(
         status_code=404,
         headers={"content-type": "application/json"},
         body='{"error":"not_found","message":"resource missing"}',
     )
-    assert not hits
+    assert any(h.rule_id == "server_error_message" for h in hits)
+
+
+def test_analyze_flags_onde_style_api_error():
+    rules = _load("error_rules")
+    hits = rules.analyze_error_response(
+        status_code=401,
+        headers={"content-type": "application/json"},
+        body='{"success":false,"message":"인증에 실패하였습니다.","error":{"code":"AUTH-001","systemMessage":"인증에 실패하였습니다."}}',
+    )
+    assert any(h.rule_id == "json_system_message" for h in hits)
+    assert any(h.rule_id == "server_error_message" for h in hits)
+
+
+def test_analyze_skips_php_pattern_on_json():
+    rules = _load("error_rules")
+    hits = rules.analyze_error_response(
+        status_code=500,
+        headers={"content-type": "application/json"},
+        body='{"message":"parse error: syntax error in /var/www/x.php"}',
+    )
+    assert not any(h.rule_id.startswith("php_") for h in hits)
+    assert any(h.rule_id == "server_error_message" for h in hits)
+
+
+def test_classify_sk_buckets():
+    rules = _load("error_rules")
+    assert rules.classify_sk(category="database", rule_id="sql_exception") == "dbms"
+    assert rules.classify_sk(category="stack_trace", rule_id="java_stack") == "exception"
+    assert rules.classify_sk(category="verbose_error", rule_id="verbose_500") == "http"
+    assert rules.classify_sk(category="zap_error_disclosure", rule_id="6-1-zap-90022") == "http"
+
+
+def test_analyze_java_stack_has_sk_exception():
+    rules = _load("error_rules")
+    body = "Error\n\tat com.example.app.Foo.bar(Foo.java:42)\nCaused by: java.lang.RuntimeException"
+    hits = rules.analyze_error_response(status_code=500, headers={}, body=body)
+    assert hits
+    assert hits[0].sk_class == "exception"
 
 
 def test_collapse_auth_findings_merges_sessions():
@@ -139,4 +177,4 @@ def test_g61_module_implemented():
 
     row = next(r for r in diagnosis_service.catalog() if r["id"] == "6-1")
     assert row["implemented"] is True
-    assert row["engine"] == "httpx+zap"
+    assert row["engine"] == "httpx"

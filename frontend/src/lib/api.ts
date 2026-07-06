@@ -19,6 +19,9 @@ import type {
   LoginEndpointEntry,
   LoginEndpointsResponse,
   LoginEntryReportResponse,
+  TransferEndpointEntry,
+  TransferEndpointsResponse,
+  SaveTransferEndpointsResponse,
   DiagnosisCatalogResponse,
   DiagnosisSectionReport,
   DiagnosisRunSectionResponse,
@@ -210,11 +213,42 @@ export function saveLoginEndpoints(
   });
 }
 
+export function fetchUploadEndpoints(): Promise<TransferEndpointsResponse> {
+  return request("/upload-endpoints");
+}
+
+export function saveUploadEndpoints(
+  endpoints: TransferEndpointEntry[],
+): Promise<SaveTransferEndpointsResponse> {
+  return request("/upload-endpoints", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoints }),
+  });
+}
+
+export function fetchDownloadEndpoints(): Promise<TransferEndpointsResponse> {
+  return request("/download-endpoints");
+}
+
+export function saveDownloadEndpoints(
+  endpoints: TransferEndpointEntry[],
+): Promise<SaveTransferEndpointsResponse> {
+  return request("/download-endpoints", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoints }),
+  });
+}
+
 export function fetchDiagnosisCatalog(): Promise<DiagnosisCatalogResponse> {
   return request("/diagnosis/catalog");
 }
 
 export function fetchDiagnosisReport(sectionId: string): Promise<DiagnosisSectionReport> {
+  if (sectionId === "6-1") {
+    return request("/diagnosis/modules/6-1/report/summary");
+  }
   return request(`/diagnosis/modules/${encodeURIComponent(sectionId)}/report`);
 }
 

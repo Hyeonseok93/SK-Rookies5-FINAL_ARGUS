@@ -13,6 +13,7 @@ import { G61DiagnosisStartDialog } from "./G61DiagnosisStartDialog";
 import { G62DiagnosisStartDialog } from "./G62DiagnosisStartDialog";
 import { G71DiagnosisStartDialog } from "./G71DiagnosisStartDialog";
 import { G22DiagnosisStartDialog } from "./G22DiagnosisStartDialog";
+import { G22SectionInfoPopover } from "./diagnosis/G22SectionInfoPopover";
 import { G21DiagnosisStartDialog } from "./G21DiagnosisStartDialog";
 import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
@@ -38,7 +39,6 @@ import {
 } from "../lib/g41DiagnosisOptions";
 import {
   DEFAULT_G22_OPTIONS,
-  g22OptionsSummary,
   g22OptionsToPayload,
   type G22DiagnosisOptions,
 } from "../lib/g22DiagnosisOptions";
@@ -121,6 +121,7 @@ import {
   type G74DiagnosisOptions,
 } from "../lib/g74DiagnosisOptions";
 import { GUIDELINE_SECTIONS } from "../lib/guidelineSections";
+import { isManualDiagnosisSection } from "../lib/diagnosisRegistry";
 import type { DiagnosisCatalogModule, DiagnosisProgressResponse, DiagnosisSectionReport } from "../types";
 import { useProgressPoll } from "../hooks/useProgressPoll";
 import { DiagnosisReportPanel, StatusBadge } from "./diagnosis/DiagnosisReportPanel";
@@ -181,20 +182,6 @@ function DiagnosisStartButton({
   );
 }
 
-function DiagnosisReviewLaterButton({ compact = false }: { compact?: boolean }) {
-  return (
-    <button
-      type="button"
-      disabled
-      title="추후 검토 항목"
-      className={`${START_BTN} ${UNAVAILABLE_BTN} ${compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"}`}
-    >
-      <AlertCircle className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
-      추후 검토
-    </button>
-  );
-}
-
 function DiagnosisManualCheckButton({
   label,
   compact = false,
@@ -216,14 +203,13 @@ function DiagnosisManualCheckButton({
 }
 
 function moduleBadgeLabel(mod: {
+  sectionId: string;
   implemented: boolean;
   diagnosable: boolean;
-  review_later: boolean;
-  status_label: string | null;
   engine: string;
 }): string | null {
+  if (isManualDiagnosisSection(mod.sectionId)) return null;
   if (mod.implemented) return mod.engine;
-  if (mod.status_label || mod.review_later) return null;
   if (!mod.diagnosable) return "미구현";
   return mod.engine !== "pending" ? mod.engine : "미구현";
 }
@@ -379,7 +365,7 @@ export function DiagnosisPage() {
       } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
         setRunningSummary(g42OptionsSummary(options as G42DiagnosisOptions));
       } else if (sectionId === "2-2" && options && "useHttpx" in options) {
-        setRunningSummary(g22OptionsSummary(options as G22DiagnosisOptions));
+        setRunningSummary(null);
       } else if (sectionId === "2-1" && options && "sellerEmail" in options) {
         setRunningSummary(g21OptionsSummary(options as G21DiagnosisOptions));
       } else if (sectionId === "7-1" && options && "strictRisky" in options) {
@@ -739,16 +725,14 @@ export function DiagnosisPage() {
                 const mod = catalogById[section.id];
                 const implemented = mod?.implemented ?? false;
                 const diagnosable = mod?.diagnosable ?? true;
-                const reviewLater = mod?.review_later ?? false;
-                const statusLabel = mod?.status_label ?? null;
+                const manualSection = isManualDiagnosisSection(section.id);
                 const running = busySectionId === section.id;
                 const report = reports[section.id];
                 const badgeLabel = mod
                   ? moduleBadgeLabel({
+                      sectionId: section.id,
                       implemented,
                       diagnosable,
-                      review_later: reviewLater,
-                      status_label: statusLabel,
                       engine: mod.engine,
                     })
                   : null;
@@ -763,7 +747,18 @@ export function DiagnosisPage() {
                         <span className="shrink-0 rounded border border-cyber-border/60 bg-cyber-bg px-2 py-0.5 font-mono text-[11px] text-cyber-accent">
                           {section.id}
                         </span>
-                        <span className="flex-1 text-sm text-white">{section.title}</span>
+                        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                          <span className="text-sm text-white">{section.title}</span>
+                          {section.id === "2-2" ? (
+                            <span
+                              className="shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              <G22SectionInfoPopover />
+                            </span>
+                          ) : null}
+                        </span>
                         {badgeLabel ? (
                           <span
                             className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] ${
@@ -777,12 +772,8 @@ export function DiagnosisPage() {
                         ) : null}
                         {report ? <StatusBadge status={report.status} /> : null}
                       </button>
-                      {reviewLater || (!diagnosable && !statusLabel) ? (
-                        <DiagnosisReviewLaterButton compact />
-                      ) : statusLabel ? (
-                        <DiagnosisManualCheckButton label={statusLabel} compact />
-                      ) : !diagnosable ? (
-                        <DiagnosisReviewLaterButton compact />
+                      {manualSection ? (
+                        <DiagnosisManualCheckButton label="수동 진단" compact />
                       ) : (
                         <DiagnosisStartButton
                           compact
@@ -805,18 +796,13 @@ export function DiagnosisPage() {
                       </button>
                     </div>
                     {open && report ? <DiagnosisReportPanel report={report} /> : null}
-                    {open && !report && !running && reviewLater ? (
+                    {open && !report && !running && manualSection ? (
                       <div className="border-t border-amber-400/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200/90">
-                        추후 검토 — 자동 진단 범위에 포함되지 않습니다.
-                      </div>
-                    ) : null}
-                    {open && !report && !running && statusLabel ? (
-                      <div className="border-t border-amber-400/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200/90">
-                        {statusLabel} — 회원가입 화면에서 패스워드 정책(길이·복잡도 등)을 직접
+                        수동 진단 — 자동 진단 범위에 포함되지 않습니다. 점검 가이드에 따라 수동으로
                         확인하세요.
                       </div>
                     ) : null}
-                    {open && !report && !running && diagnosable ? (
+                    {open && !report && !running && !manualSection && diagnosable ? (
                       <div className="border-t border-cyber-border/40 px-4 py-3 text-xs text-cyber-muted">
                         저장된 리포트 없음 — 「진단 시작」을 눌러 실행하세요.
                       </div>
