@@ -86,11 +86,15 @@ def _finding_from_hit(
     snippet: str,
     engine: str,
 ) -> DiagnosisFinding:
+    confidence = getattr(hit, "confidence", "high")
+    needs_review = confidence == "review"
     ev: dict[str, Any] = {
         "rule_id": hit.rule_id,
         "category": hit.category,
         "marker": hit.marker,
         "hint": hit.hint,
+        "confidence": confidence,
+        "needs_review": needs_review,
         "endpoint_id": ep.endpoint_id,
         "method": job.method,
         "url": job.url,
@@ -111,6 +115,8 @@ def _finding_from_hit(
         f"[6-1][{engine}][{auth_mode}][{job.family}] {hit.hint} on "
         f"{ep.method.upper()} {ep.path} ({hit.rule_id})"
     )
+    if needs_review:
+        msg += " — 진단자 확인 필요"
     return DiagnosisFinding(severity=hit.severity, message=msg, evidence=ev)
 
 

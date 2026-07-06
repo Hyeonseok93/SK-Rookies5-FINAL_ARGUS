@@ -127,12 +127,39 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
     )
 
 
-def _overall_status(findings: list[DiagnosisFinding]) -> str:
-    if any(f.severity in ("high", "medium") for f in findings):
-        return "fail"
-    if any(f.severity == "low" for f in findings):
-        return "warn"
-    return "pass"
+def _overall_status(findings: list[DiagnosisFinding]) -> tuple[str, bool, list[str]]:
+    """Derive pass/warn/fail from finding severity, gated by evidence confidence.
+
+    High-confidence hits (deterministic signatures like SQL exception text or
+    Java stack frames) can never false-positive in practice, so they still
+    drive a hard "fail". Lower-confidence heuristic hits (path_disclosure,
+    verbose_error / verbose_500_body — generic substring/keyword matches that
+    can legitimately appear in clean responses) never fail the scan on their
+    own; they instead push the status to "warn" and are surfaced as items a
+    diagnostician needs to manually confirm, mirroring the pattern already
+    used by module 3-5's needs_review handling.
+    """
+    review_counts: dict[str, int] = {}
+    has_high_confidence_fail = False
+    for f in findings:
+        ev = f.evidence or {}
+        confidence = ev.get("confidence", "high")
+        rule_id = str(ev.get("rule_id") or "unknown")
+        if confidence == "review":
+            review_counts[rule_id] = review_counts.get(rule_id, 0) + 1
+        elif f.severity in ("high", "medium"):
+            has_high_confidence_fail = True
+
+    parts = [f"{rule_id} x{count}" for rule_id, count in review_counts.items()]
+    needs_review = bool(parts)
+
+    if has_high_confidence_fail:
+        status = "fail"
+    elif parts:
+        status = "warn"
+    else:
+        status = "pass"
+    return status, needs_review, parts
 
 
 def _build_scan_result(
@@ -159,6 +186,9 @@ def _build_scan_result(
     for f in all_findings:
         by_severity[f.severity] = by_severity.get(f.severity, 0) + 1
 
+    status_from_findings, needs_review, review_parts = _overall_status(all_findings)
+    review_items = sum(int(p.rsplit(" x", 1)[1]) for p in review_parts) if review_parts else 0
+
     stats: dict[str, Any] = {
         **target_meta,
         "probe_mode": opts.probe_mode,
@@ -181,6 +211,9 @@ def _build_scan_result(
         "zap_native_alerts": zap_native_count,
         "leaks": len(all_findings),
         "by_severity": by_severity,
+        "needs_review": needs_review,
+        "review_items": review_items,
+        "review_parts": review_parts,
         **collapse_stats,
         "triggers_enabled": enable,
         "zap": zap_stats,
@@ -192,7 +225,7 @@ def _build_scan_result(
         status = "cancelled"
         message = f"Cancelled after {endpoints_done} endpoint(s)"
     else:
-        status = _overall_status(all_findings)
+        status = status_from_findings
         message = f"Probed {endpoints_done} endpoint(s)"
 
     if opts.httpx_enabled:
@@ -203,6 +236,8 @@ def _build_scan_result(
         message += " (ZAP skipped/unavailable)"
     if cancelled:
         message += f" — {len(all_findings)} finding(s) collected before stop"
+    if not cancelled and needs_review:
+        message += f" — 진단자 확인 필요: {', '.join(review_parts)}"
     return ScanResult(findings=all_findings, stats=stats, status=status, message=message)
 
 

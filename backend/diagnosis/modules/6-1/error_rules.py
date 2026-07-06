@@ -15,6 +15,7 @@ class LeakHit:
     category: str
     marker: str
     hint: str
+    confidence: str = "high"
 
 
 _RE_FLAGS = re.IGNORECASE | re.MULTILINE
@@ -34,6 +35,36 @@ _STACK_PATTERNS: list[tuple[str, str, str]] = [
     (r"fatal error:|parse error:|warning:.* in /", "php_error", "PHP error with path"),
     (r"at microsoft\.|at system\.|system\.\w+exception", "dotnet_stack", ".NET exception"),
     (r"nested exception is", "nested_exception", "Nested exception chain"),
+    (
+        r"server error in '/' application|"
+        r"microsoft vbscript runtime error|"
+        r"microsoft ole db provider for|"
+        r"compilation error|"
+        r"an unhandled exception occurred while processing the request",
+        "aspnet_debug",
+        "ASP.NET / classic ASP debug page",
+    ),
+    (
+        r"django version:|you're seeing this error because you have debug = true|"
+        r"disallowedhost at |exception type:.*exception value:",
+        "django_debug",
+        "Django debug error page",
+    ),
+    (r"werkzeug debugger|traceback \(most recent call last\).*flask", "flask_debug", "Flask/Werkzeug debug page"),
+    (
+        r"at object\.<anonymous>|internal/modules/cjs/loader\.js|unhandledpromiserejection|"
+        r"throw err;\s*\^",
+        "node_stack",
+        "Node.js/Express stack trace",
+    ),
+    (
+        r"actioncontroller::routingerror|app/controllers/.*\.rb:\d+|"
+        r"activerecord::\w*error",
+        "rails_stack",
+        "Ruby on Rails stack trace",
+    ),
+    (r"weblogic\.\w+\.\w+exception|weblogic\.servlet", "weblogic_stack", "WebLogic exception leak"),
+    (r"jeus\.\w+\.\w+exception|tmax jeus", "jeus_stack", "Jeus exception leak"),
 ]
 
 _PATH_PATTERNS: list[tuple[str, str, str]] = [
@@ -49,6 +80,15 @@ _FRAMEWORK_PATTERNS: list[tuple[str, str, str]] = [
     (r"org\.hibernate\.|hibernate exception", "hibernate", "Hibernate leak"),
     (r"tomcat\.|apache tomcat|error report", "tomcat", "Tomcat default error"),
     (r"nginx/\d|apache/\d", "web_server_banner", "Web server version in body"),
+    (
+        r"iis (detailed error|10\.0 detailed error)|the page cannot be displayed|"
+        r"http error 500\.19|http error 500\.0|internet information services",
+        "iis_default",
+        "IIS default error page",
+    ),
+    (r"webtob|tmaxsoft webtob", "webtob_default", "WebToB default error page"),
+    (r"jeus error page|jeus web server", "jeus_default", "Jeus default error page"),
+    (r"iplanet-web-server", "iplanet_banner", "iPlanet web server banner"),
 ]
 
 _VERBOSE_PATTERNS: list[tuple[str, str, str]] = [
@@ -66,6 +106,17 @@ _ALL_RULES: list[tuple[str, str, list[tuple[str, str, str]]]] = [
     ("medium", "framework", _FRAMEWORK_PATTERNS),
     ("low", "verbose_error", _VERBOSE_PATTERNS),
 ]
+
+# Categories whose patterns key off generic substrings / keyword co-occurrence
+# rather than an unambiguous exception/stack signature. These can plausibly
+# false-positive (e.g. a legitimate page mentioning "/opt/" or a long verbose
+# 200 body), so hits here are downgraded to "review" instead of "high"
+# confidence — a diagnostician should confirm before treating them as a fail.
+_REVIEW_CATEGORIES = {"path_disclosure", "verbose_error"}
+
+
+def _confidence_for_category(category: str) -> str:
+    return "review" if category in _REVIEW_CATEGORIES else "high"
 
 
 def _response_text(body: str | bytes | None, content_type: str | None) -> str:
@@ -99,6 +150,7 @@ def _match_patterns(
 ) -> list[LeakHit]:
     hits: list[LeakHit] = []
     lower = text.lower()
+    confidence = _confidence_for_category(category)
     for pattern, rule_id, hint in patterns:
         if re.search(pattern, text, _RE_FLAGS) or re.search(pattern, lower, _RE_FLAGS):
             m = re.search(pattern, text, _RE_FLAGS) or re.search(pattern, lower, _RE_FLAGS)
@@ -110,6 +162,7 @@ def _match_patterns(
                     category=category,
                     marker=marker,
                     hint=hint,
+                    confidence=confidence,
                 )
             )
     return hits
@@ -149,6 +202,7 @@ def analyze_error_response(
                     category="verbose_error",
                     marker=text[:80].replace("\n", " "),
                     hint="Large 5xx body with exception-like content",
+                    confidence="review",
                 )
             )
     return hits
@@ -163,5 +217,16 @@ def remediation_hint(rule_id: str) -> str:
         "json_trace_field": "Remove trace/stack fields from JSON error payloads (e.g. Spring error attributes).",
         "unix_home_path": "Strip filesystem paths from error messages.",
         "verbose_500_body": "Return minimal 5xx JSON/HTML without internal exception text.",
+        "aspnet_debug": "Set customErrors mode=On in web.config; disable IIS/ASP.NET debug pages in production.",
+        "django_debug": "Set DEBUG=False in Django settings and configure ALLOWED_HOSTS / custom 500 handler.",
+        "flask_debug": "Disable Werkzeug debugger (debug=False) in production Flask/WSGI config.",
+        "node_stack": "Add a generic error-handling middleware; never send err.stack to the client.",
+        "rails_stack": "Set config.consider_all_requests_local = false and config.action_dispatch.show_exceptions = false.",
+        "weblogic_stack": "Configure WebLogic error-page mapping (web.xml) for all HTTP codes; disable verbose faults.",
+        "jeus_stack": "Set print-error-to-browser=false in WEBMain.xml and configure Jeus error documents.",
+        "iis_default": "Configure IIS custom error pages (Error Pages panel) for 400/401/403/404/405/500.",
+        "webtob_default": "Configure ErrorDocument mapping in WebToB's http.m for all error codes.",
+        "jeus_default": "Configure Jeus admin console error-document settings per node/engine.",
+        "iplanet_banner": "Configure obj.conf Error fn=\"send-error\" for each error reason with a custom page.",
     }
     return hints.get(rule_id, "Return generic error pages without internal implementation details.")
