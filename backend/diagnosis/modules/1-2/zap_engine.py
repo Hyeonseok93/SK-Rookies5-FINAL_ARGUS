@@ -131,15 +131,37 @@ class ZapEngine:
 
         self.log("Using imported OpenAPI spec as fixed ZAP scan targets.")
 
-    def run_active_scan(self, target_url: str, *, max_minutes: int = 30) -> List[DetectionResult]:
+    def run_active_scan(self, target_url: str, *, max_minutes: int = 30, progress_cb=None) -> List[DetectionResult]:
         self.log(f"Active Scan (Injection) start: {target_url}")
         scan_id = self.zap.ascan.scan(url=target_url, recurse=True, scanpolicyname=self.policy_name)
+        self.log(f"Active Scan id: {scan_id}")
         deadline = time.time() + max(1, max_minutes) * 60
-        while int(self.zap.ascan.status(scan_id)) < 100:
+        last_status = -1
+        unavailable_reads = 0
+        while True:
+            raw_status = self.zap.ascan.status(scan_id)
+            try:
+                status = int(raw_status)
+            except (TypeError, ValueError):
+                unavailable_reads += 1
+                self.log(f"Active scan status unavailable for id={scan_id}: {raw_status}")
+                if unavailable_reads >= 5:
+                    self.log("Active scan status stayed unavailable; continuing with collected alerts only.")
+                    break
+                time.sleep(2)
+                continue
+            unavailable_reads = 0
+            if status != last_status and progress_cb:
+                progress_cb(status, target_url)
+                last_status = status
+            if status >= 100:
+                break
             if time.time() >= deadline:
                 self.log(f"Active scan deadline ({max_minutes}m) reached.")
                 break
             time.sleep(2)
+        if progress_cb:
+            progress_cb(100, target_url)
         self.log("Active Scan complete. Collecting results.")
         return self._collect_results(target_url)
 

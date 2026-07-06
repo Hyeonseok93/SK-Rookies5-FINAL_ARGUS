@@ -43,14 +43,14 @@ def _bootstrap_locals():
 
 @dataclass
 class ScanOptions:
-    max_targets: int = 60
-    scan_all_inventory: bool = False
+    max_targets: int = 500
+    scan_all_inventory: bool = True
     injector_enabled: bool = True
     direct_enabled: bool = True
-    zap_enabled: bool = False
+    zap_enabled: bool = True
     zap_max_minutes: int = 20
-    verification_mode: str = "balanced"
-    injection_types: list[str] = field(default_factory=lambda: ["SQL", "NOSQL", "SSTI", "COMMAND", "XPATH"])
+    verification_mode: str = "strict"
+    injection_types: list[str] = field(default_factory=lambda: ["SQL"])
     include_unsafe_methods: bool = False
     keep_all_results: bool = False
 
@@ -65,24 +65,19 @@ class ScanResult:
 
 def _scan_options(raw: dict[str, Any]) -> ScanOptions:
     cfg = raw.get("diagnosis_1_2") or raw.get("scan_1_2") or {}
-    types_raw = cfg.get("injection_types")
-    types: list[str] = []
-    if isinstance(types_raw, list):
-        types = [str(t) for t in types_raw if str(t).strip()]
-    elif isinstance(types_raw, str) and types_raw.strip():
-        types = [t.strip() for t in types_raw.split(",") if t.strip()]
-    injector_on = bool(cfg.get("injector_enabled", True))
+    # G12 must be deterministic in CI/local re-runs: fixed OpenAPI/ZAP phase,
+    # then strict ARGUS Direct SQL verification over the same api-tree scope.
     return ScanOptions(
-        max_targets=max(5, min(int(cfg.get("max_targets", 60)), 500)),
-        scan_all_inventory=bool(cfg.get("scan_all_inventory", False)),
-        injector_enabled=injector_on,
-        direct_enabled=bool(cfg.get("direct_enabled", injector_on)),
-        zap_enabled=bool(cfg.get("zap_enabled", False)),
+        max_targets=500,
+        scan_all_inventory=True,
+        injector_enabled=True,
+        direct_enabled=True,
+        zap_enabled=True,
         zap_max_minutes=max(1, min(int(cfg.get("zap_max_minutes", 20)), 120)),
-        verification_mode=str(cfg.get("verification_mode", "balanced")),
-        injection_types=types or ["SQL", "NOSQL", "SSTI", "COMMAND", "XPATH"],
-        include_unsafe_methods=bool(cfg.get("include_unsafe_methods", False)),
-        keep_all_results=bool(cfg.get("keep_all_results", False)),
+        verification_mode="strict",
+        injection_types=["SQL"],
+        include_unsafe_methods=False,
+        keep_all_results=False,
     )
 
 
@@ -194,7 +189,17 @@ def run_g12_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     # Phase 1–2: ZAP → injector verify (branch default pipeline)
     if opts.zap_enabled:
-        zap_phase("1-2 ZAP injection scan…")
+        zap_phase("1-2 ZAP injection scan…", done=0, total=100, percent=0)
+
+        def _zap_progress(done: int, total: int, current_url: str, status: int) -> None:
+            percent = int(done * 100 / max(total, 1))
+            zap_phase(
+                f"1-2 ZAP active scan {percent}% · {current_url} ({status}%)",
+                done=done,
+                total=total,
+                percent=percent,
+            )
+
         try:
             zap_raw, zap_stats = zap_scan_mod.run_zap_injection_phase(
                 raw,
@@ -202,6 +207,7 @@ def run_g12_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                 jwt_token=jwt_token,
                 session_headers=session_headers,
                 max_minutes=opts.zap_max_minutes,
+                progress_cb=_zap_progress,
             )
             stats["zap"] = zap_stats
             if zap_stats.get("error"):

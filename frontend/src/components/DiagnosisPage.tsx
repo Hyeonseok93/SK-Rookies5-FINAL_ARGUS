@@ -130,6 +130,42 @@ const START_BTN_IDLE =
 const UNAVAILABLE_BTN =
   "border-amber-400/50 bg-amber-500/15 text-amber-300 cursor-not-allowed";
 
+function progressRatio(progress: DiagnosisProgressResponse): number {
+  if (progress.endpoints_total > 0) {
+    return Math.min(
+      100,
+      Math.max(0, Math.round((progress.endpoints_done * 100) / progress.endpoints_total)),
+    );
+  }
+  return Math.min(100, Math.max(0, progress.percent));
+}
+
+function progressLabel(progress: DiagnosisProgressResponse): string {
+  const ratio = progressRatio(progress);
+  if (progress.phase === "zap") {
+    const count =
+      progress.endpoints_total > 0
+        ? ` · ${progress.endpoints_done}/${progress.endpoints_total}`
+        : "";
+    return `ZAP ${ratio}%${count}`;
+  }
+  if (progress.phase === "zap_verify") {
+    const count =
+      progress.endpoints_total > 0
+        ? ` · alert ${progress.endpoints_done}/${progress.endpoints_total}`
+        : "";
+    return `ZAP 검증 ${ratio}%${count}`;
+  }
+  if (progress.phase === "injector") {
+    const count =
+      progress.endpoints_total > 0
+        ? ` · Direct ${progress.endpoints_done}/${progress.endpoints_total}`
+        : "";
+    return `Direct ${ratio}%${count}`;
+  }
+  return `${ratio}%`;
+}
+
 function DiagnosisStartButton({
   compact = false,
   disabled,
@@ -257,17 +293,6 @@ export function DiagnosisPage() {
   const [runningSummary, setRunningSummary] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState<DiagnosisProgressResponse | null>(null);
 
-  useProgressPoll(
-    runningId !== null,
-    fetchDiagnosisProgress,
-    (p) => {
-      if (p.section_id === runningId || p.running) {
-        setRunProgress(p);
-      }
-    },
-    1200,
-  );
-
   useEffect(() => {
     fetchDiagnosisCatalog()
       .then((res) => {
@@ -288,6 +313,29 @@ export function DiagnosisPage() {
       /* no saved report yet */
     }
   }, []);
+
+  const handleProgressUpdate = useCallback(
+    (p: DiagnosisProgressResponse) => {
+      if (p.running && p.section_id) {
+        setRunningId(p.section_id);
+        setOpenId(p.section_id);
+        setRunProgress(p);
+        return;
+      }
+      setRunProgress(p);
+      setRunningId(null);
+      setRunningSummary(null);
+      if (p.section_id) void loadReport(p.section_id);
+    },
+    [loadReport],
+  );
+
+  useProgressPoll(
+    true,
+    fetchDiagnosisProgress,
+    handleProgressUpdate,
+    1200,
+  );
 
   const handleToggle = useCallback(
     (sectionId: string) => {
@@ -710,23 +758,6 @@ export function DiagnosisPage() {
                         />
                       </button>
                     </div>
-                    {open && report ? <DiagnosisReportPanel report={report} /> : null}
-                    {open && !report && !running && reviewLater ? (
-                      <div className="border-t border-amber-400/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200/90">
-                        추후 검토 — 자동 진단 범위에 포함되지 않습니다.
-                      </div>
-                    ) : null}
-                    {open && !report && !running && statusLabel ? (
-                      <div className="border-t border-amber-400/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200/90">
-                        {statusLabel} — 회원가입 화면에서 패스워드 정책(길이·복잡도 등)을 직접
-                        확인하세요.
-                      </div>
-                    ) : null}
-                    {open && !report && !running && diagnosable ? (
-                      <div className="border-t border-cyber-border/40 px-4 py-3 text-xs text-cyber-muted">
-                        저장된 리포트 없음 — 「진단 시작」을 눌러 실행하세요.
-                      </div>
-                    ) : null}
                     {open && running ? (
                       <div className="space-y-2 border-t border-cyber-border/40 px-4 py-3 text-xs text-cyan-300/90">
                         <div className="flex items-center gap-2">
@@ -741,18 +772,11 @@ export function DiagnosisPage() {
                             <div className="h-1.5 overflow-hidden rounded-full bg-cyber-border/40">
                               <div
                                 className="h-full rounded-full bg-cyan-400/80 transition-all duration-500"
-                                style={{ width: `${Math.max(2, runProgress.percent)}%` }}
+                                style={{ width: `${Math.max(2, progressRatio(runProgress))}%` }}
                               />
                             </div>
                             <p className="font-mono text-[10px] text-cyber-muted">
-                              {runProgress.phase === "zap"
-                                ? `ZAP ${runProgress.percent > 0 ? runProgress.percent : 0}%`
-                                : runProgress.percent > 0
-                                  ? `${runProgress.percent}%`
-                                  : "0%"}
-                              {runProgress.phase !== "zap" && runProgress.endpoints_total > 0
-                                ? ` · API ${runProgress.endpoints_done}/${runProgress.endpoints_total}`
-                                : null}
+                              {progressLabel(runProgress)}
                               {runProgress.requests_sent > 0
                                 ? ` · 요청 ${runProgress.requests_sent.toLocaleString()}`
                                 : null}
@@ -771,6 +795,23 @@ export function DiagnosisPage() {
                             ZAP은 수십 분 걸릴 수 있습니다
                           </p>
                         ) : null}
+                      </div>
+                    ) : null}
+                    {open && !running && report ? <DiagnosisReportPanel report={report} /> : null}
+                    {open && !report && !running && reviewLater ? (
+                      <div className="border-t border-amber-400/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200/90">
+                        추후 검토 — 자동 진단 범위에 포함되지 않습니다.
+                      </div>
+                    ) : null}
+                    {open && !report && !running && statusLabel ? (
+                      <div className="border-t border-amber-400/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200/90">
+                        {statusLabel} — 회원가입 화면에서 패스워드 정책(길이·복잡도 등)을 직접
+                        확인하세요.
+                      </div>
+                    ) : null}
+                    {open && !report && !running && diagnosable ? (
+                      <div className="border-t border-cyber-border/40 px-4 py-3 text-xs text-cyber-muted">
+                        저장된 리포트 없음 — 「진단 시작」을 눌러 실행하세요.
                       </div>
                     ) : null}
                   </div>

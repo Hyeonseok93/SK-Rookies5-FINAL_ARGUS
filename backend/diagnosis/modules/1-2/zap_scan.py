@@ -45,6 +45,7 @@ def run_zap_injection_phase(
     jwt_token: str = "",
     session_headers: dict[str, str] | None = None,
     max_minutes: int = 20,
+    progress_cb: Any | None = None,
 ) -> tuple[list[Any], dict[str, Any]]:
     """Run Spider + Active Scan (injection policy) on each API base. Returns DetectionResult list."""
     from zap_engine import ZapEngine
@@ -77,10 +78,21 @@ def run_zap_injection_phase(
     all_results: list[Any] = []
     scanned_targets: list[str] = []
     per_base_minutes = max(5, int(max_minutes / max(len(bases), 1)))
-    for base in bases:
+    zap_total = max(len(bases) * 100, 1)
+    for idx, base in enumerate(bases):
         target_url = probe_url(base.rstrip("/"))
         scanned_targets.append(target_url)
-        zap_results = engine.run_active_scan(target_url=target_url, max_minutes=per_base_minutes)
+
+        def _zap_progress(status: int, current_url: str, base_idx: int = idx) -> None:
+            done = min(zap_total, base_idx * 100 + max(0, min(int(status), 100)))
+            if progress_cb:
+                progress_cb(done, zap_total, current_url, int(status))
+
+        zap_results = engine.run_active_scan(
+            target_url=target_url,
+            max_minutes=per_base_minutes,
+            progress_cb=_zap_progress,
+        )
         all_results.extend(zap_results)
 
     deduped: list[Any] = []
