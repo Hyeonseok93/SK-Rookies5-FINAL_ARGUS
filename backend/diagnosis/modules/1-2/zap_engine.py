@@ -10,6 +10,7 @@ import time
 from typing import Dict, List, Tuple
 from urllib.parse import urlparse
 
+import requests
 from zapv2 import ZAPv2
 
 from models import DetectionResult, InjectionType
@@ -69,6 +70,34 @@ class ZapEngine:
     def log(self, message: str) -> None:
         print(f"[ZAP] {message}")
 
+    def _openapi_import(self, swagger_url: str, target_url: str) -> None:
+        action = "importUrl" if swagger_url.startswith(("http://", "https://")) else "importFile"
+        spec_key = "url" if action == "importUrl" else "file"
+        spec_value = swagger_url if action == "importUrl" else os.path.abspath(swagger_url)
+        endpoint = f"http://{self.proxy_address}/JSON/openapi/action/{action}/"
+        params = {
+            "apikey": self.api_key,
+            spec_key: spec_value,
+            "target": target_url,
+        }
+        last_error: Exception | None = None
+        for attempt in range(1, 3):
+            try:
+                session = requests.Session()
+                session.trust_env = False
+                response = session.get(endpoint, params=params, timeout=60)
+                response.raise_for_status()
+                payload = response.json()
+                if payload.get("Result") == "OK":
+                    return
+                self.log(f"OpenAPI import response: {payload}")
+                return
+            except requests.RequestException as exc:
+                last_error = exc
+                self.log(f"OpenAPI import attempt {attempt}/2 failed: {exc}")
+                time.sleep(2)
+        raise RuntimeError(f"OpenAPI import failed: {last_error}")
+
     def configure_scan(
         self,
         target_url: str,
@@ -123,10 +152,7 @@ class ZapEngine:
 
         if swagger_url:
             self.log(f"Importing OpenAPI spec: {swagger_url}")
-            if swagger_url.startswith(("http://", "https://")):
-                self.zap.openapi.import_url(swagger_url, target_url)
-            else:
-                self.zap.openapi.import_file(os.path.abspath(swagger_url), target_url)
+            self._openapi_import(swagger_url, target_url)
             time.sleep(2)
 
         self.log("Using imported OpenAPI spec as fixed ZAP scan targets.")
