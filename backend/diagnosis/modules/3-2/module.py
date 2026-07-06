@@ -1,4 +1,4 @@
-"""Diagnosis module 3-2: 인증 실패 횟수 제한."""
+"""3-2: 인증 실패 횟수 제한"""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ _MODULE_DIR = Path(__file__).resolve().parent
 def _load_scanner():
     spec = importlib.util.spec_from_file_location("diag_g32_scanner", _MODULE_DIR / "scanner.py")
     if spec is None or spec.loader is None:
-        raise ImportError("Cannot load 3-2 scanner")
+        raise ImportError("3-2 scanner를 불러올 수 없습니다")
     mod = importlib.util.module_from_spec(spec)
     import sys
 
@@ -62,7 +62,7 @@ class G32Module(DiagnosisModule):
                 0,
                 DiagnosisFinding(
                     severity="info",
-                    message="3-2 scan statistics",
+                    message="3-2 검사 통계",
                     evidence={"stats": result.stats},
                 ),
             )
