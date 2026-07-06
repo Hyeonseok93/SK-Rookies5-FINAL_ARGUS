@@ -80,6 +80,12 @@ def parse_args():
                         help="Maximum requests per role/method/endpoint/payload stage; 0 means unlimited")
     parser.add_argument("--circuit-breaker-failures", default=None, type=int,
                         help="Consecutive timeout/5xx count before blocking an endpoint")
+    parser.add_argument("--resume-dir", default="",
+                        help="Resume a previously interrupted run by pointing at its "
+                             "existing W16_* output directory (e.g. "
+                             "./output/W16_20260706_045927_6f9138c6). Reuses that folder's "
+                             "temp_progress.txt / temp_findings.jsonl instead of starting a "
+                             "brand-new run directory, so already-completed test cases are skipped.")
     return parser.parse_args()
 
 
@@ -136,10 +142,30 @@ def main():
     cfg.validate()
 
     output_base_dir = cfg.OUTPUT_DIR
-    os.makedirs(output_base_dir, exist_ok=True)
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + str(uuid.uuid4())[:8]
-    run_output_dir = os.path.join(output_base_dir, f"W16_{run_id}")
-    os.makedirs(run_output_dir, exist_ok=True)
+    if args.resume_dir:
+        # ← ADDED: Task Resume - reuse an existing run directory instead of
+        # always minting a fresh W16_{timestamp}_{uuid} folder. Without this,
+        # the skip-completed-tasks logic in fuzzer.py._run_payload_set()
+        # (temp_progress.txt / temp_findings.jsonl) never had a chance to
+        # fire, because every run looked in a brand-new, empty directory.
+        run_output_dir = os.path.abspath(args.resume_dir)
+        if not os.path.isdir(run_output_dir):
+            logger.error(f"[MAIN] --resume-dir does not exist: {run_output_dir}")
+            sys.exit(1)
+        output_base_dir = os.path.dirname(run_output_dir)
+        run_id = os.path.basename(run_output_dir.rstrip("/\\")).replace("W16_", "", 1)
+        existing_progress = os.path.join(run_output_dir, "temp_progress.txt")
+        existing_findings = os.path.join(run_output_dir, "temp_findings.jsonl")
+        logger.info(f"[MAIN] --resume-dir given: {run_output_dir}")
+        logger.info(
+            f"[MAIN] progress file present: {os.path.exists(existing_progress)}, "
+            f"findings file present: {os.path.exists(existing_findings)}"
+        )
+    else:
+        os.makedirs(output_base_dir, exist_ok=True)
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + str(uuid.uuid4())[:8]
+        run_output_dir = os.path.join(output_base_dir, f"W16_{run_id}")
+        os.makedirs(run_output_dir, exist_ok=True)
     cfg.OUTPUT_BASE_DIR = output_base_dir
     cfg.OUTPUT_DIR = run_output_dir
     cfg.REQUEST_TEMPLATES = os.path.join(run_output_dir, "request_templates.json")

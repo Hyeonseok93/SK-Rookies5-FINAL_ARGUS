@@ -64,6 +64,7 @@ class MassiveDataFuzzer:
         # 토큰 문자열 캐시 — 읽기는 GIL로 원자적, 쓰기는 _auth_lock 하에서만
         self._current_tokens: dict = {}
         self._last_refresh_time: dict = {}              # 토큰 중복 갱신 방지용 타임스탬프
+        self._last_refresh_attempt_time: dict = {}       # ← ADDED: 실패했을 때도 재시도 쿨다운 적용
         self._request_count = 0
         self._request_lock = threading.Lock()
         self._endpoint_failures: dict = {}
@@ -328,8 +329,11 @@ class MassiveDataFuzzer:
         logger.info("=" * 60)
         logger.info(f"[Fuzzer {FUZZER_VERSION}] CWE v4.20 payloads start")
         logger.info("=" * 60)
-        self._run_payload_set(target, fuzz_targets, roles,
-                              self.cwe_pg.get_all_payloads(), "cwe")
+        # ← TEMP: 시간 관계상 CWE 페이로드셋 임시 비활성화. 나중에 시간 여유
+        # 생기면 아래 두 줄 주석 풀어서 다시 켜면 됨. (2026-07-06)
+        # self._run_payload_set(target, fuzz_targets, roles,
+        #                       self.cwe_pg.get_all_payloads(), "cwe")
+        logger.warning(f"[Fuzzer {FUZZER_VERSION}] CWE payload set temporarily disabled (commented out in code).")
         if self._stop_event.is_set():
             logger.warning(f"[Fuzzer {FUZZER_VERSION}] safety stop triggered; skipping remaining payload sets.")
             return self.findings
@@ -337,8 +341,11 @@ class MassiveDataFuzzer:
         logger.info("=" * 60)
         logger.info(f"[Fuzzer {FUZZER_VERSION}] OWASP Top 10 2021 payloads start")
         logger.info("=" * 60)
-        self._run_payload_set(target, fuzz_targets, roles,
-                              self.owasp_pg.get_all_payloads(), "owasp")
+        # ← TEMP: 시간 관계상 OWASP 페이로드셋 임시 비활성화. 나중에 시간 여유
+        # 생기면 아래 두 줄 주석 풀어서 다시 켜면 됨. (2026-07-06)
+        # self._run_payload_set(target, fuzz_targets, roles,
+        #                       self.owasp_pg.get_all_payloads(), "owasp")
+        logger.warning(f"[Fuzzer {FUZZER_VERSION}] OWASP payload set temporarily disabled (commented out in code).")
 
         logger.info(f"[Fuzzer {FUZZER_VERSION}] complete - total findings: {len(self.findings)}")
         return self.findings
@@ -1001,6 +1008,22 @@ class MassiveDataFuzzer:
         logger.debug(f"[Fuzzer] [{role}] 인증 오류 {status} "
                      f"(연속 {self._auth_error_counts[role]}회)")
         if self._auth_error_counts[role] >= self.cfg.JWT_REFRESH_THRESHOLD:
+            # ← ADDED: 재로그인이 실패해도 최소 10초 간격을 두어 재시도 폭주를 방지.
+            # 기존 코드는 성공했을 때만 _last_refresh_time을 갱신했기 때문에,
+            # 계정이 실제로 로그인 불가 상태(백엔드 브루트포스 방어 등)에 빠지면
+            # 매 요청마다 초당 여러 번씩 로그인 엔드포인트를 계속 두들겨서
+            # 오히려 그 방어 로직을 계속 재발동시키는 악순환이 발생했다.
+            last_attempt = self._last_refresh_attempt_time.get(role, 0)
+            retry_cooldown = max(1.0, float(getattr(self.cfg, "JWT_REFRESH_RETRY_COOLDOWN", 10.0)))
+            if now - last_attempt < retry_cooldown:
+                logger.debug(
+                    f"[Fuzzer] [{role}] 재로그인 쿨다운 중 "
+                    f"({retry_cooldown - (now - last_attempt):.1f}s 남음); 재시도 스킵"
+                )
+                self._auth_error_counts[role] = 0
+                return
+            self._last_refresh_attempt_time[role] = now
+
             if self.role_manager:
                 password = self.cfg.ROLE_PASSWORDS.get(role, "")
                 success = self.role_manager.refresh_token(role, password)
@@ -1012,6 +1035,10 @@ class MassiveDataFuzzer:
                     if self.zap_engine:
                         self.zap_engine.update_auth(self.role_manager.get_token(role))
                     self._last_refresh_time[role] = now
+                else:
+                    logger.warning(
+                        f"[Fuzzer] [{role}] 재로그인 실패 - {retry_cooldown:.0f}초 후 재시도"
+                    )
             self._auth_error_counts[role] = 0
 
     # =========================================================================

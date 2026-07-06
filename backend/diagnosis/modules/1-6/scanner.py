@@ -103,9 +103,16 @@ def run_g16_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     cfg = _cfg(ctx)
     engine_target = resolve_engine_target(cfg, ctx.raw_config, module_dir, data_dir=ctx.data_dir)
     if not engine_target.main_py.is_file():
+        hint = ""
+        if cfg.get("w16_root"):
+            hint = (
+                " (요청에 g16.w16_root가 지정되어 있습니다 - Swagger 'Try it out'의 "
+                "placeholder 값('string')을 지우지 않고 그대로 보낸 건 아닌지 확인하세요. "
+                "기본 엔진 경로를 쓰려면 w16_root를 비워두거나 생략하세요.)"
+            )
         return ScanResult(
             status="skipped",
-            message=f"Embedded W16 engine not found: {engine_target.main_py}",
+            message=f"Embedded W16 engine not found: {engine_target.main_py}{hint}",
             stats={
                 "reason": "w16_engine_missing",
                 "engine_root": str(engine_target.engine_root),

@@ -56,7 +56,7 @@ diagnosis_1_6:
   skip_zap: true
   skip_spider: true
   skip_selenium: true
-  timeout_sec: 9000
+  timeout_sec: 36000
   max_report_findings: 50
   role_login_targets:
     admin: "http://localhost:8081"

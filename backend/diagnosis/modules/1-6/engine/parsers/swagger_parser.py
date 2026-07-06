@@ -135,6 +135,11 @@ class SwaggerParser:
                     "summary":       operation.get("summary", ""),
                     "tags":          operation.get("tags", []),
                     "operation_id":  operation.get("operationId", ""),
+                    # operation별로 자기 서버가 지정돼 있으면(admin API 등 서로
+                    # 다른 base_url을 가진 endpoint가 하나의 스펙에 섞여 있는
+                    # 경우) 여기서 보존해서 get_fuzz_targets가 override_host
+                    # 대신 이 값을 쓸 수 있게 한다.
+                    "base_url":      str(operation.get("x-argus-base-url") or "").rstrip("/"),
                 })
 
         logger.info(f"[Parser] 엔드포인트 추출 완료: {len(endpoints)} 개")
@@ -387,11 +392,15 @@ class SwaggerParser:
         fuzzer에 넘길 때, 각 endpoint가 자기 서버로 요청을 보내도록 하기
         위함입니다 (예: admin 스펙만 포트가 다른 경우).
         """
-        base_url = self.get_base_url(override_host)
+        default_base_url = self.get_base_url(override_host)
         targets = []
         for ep in self.get_endpoints():
             # W-1-6 은 데이터 주입이 목적이므로 body 가 있는 엔드포인트 우선
             body = ep["params"].get("body", {})
+            # endpoint 자신의 base_url(예: api-tree에서 넘어온 admin API 등
+            # override_host와 다른 서버)이 있으면 그걸 우선 쓰고, 없으면
+            # 기존 동작대로 override_host/스펙 기본 서버를 그대로 쓴다.
+            endpoint_base_url = ep.get("base_url") or default_base_url
             targets.append({
                 "path":         ep["path"],
                 "method":       ep["method"],
@@ -400,7 +409,7 @@ class SwaggerParser:
                 "path_params":  list(ep["params"].get("path", {}).keys()),
                 "requires_auth": ep["requires_auth"],
                 "summary":      ep["summary"],
-                "base_url":     base_url,
+                "base_url":     endpoint_base_url,
             })
         logger.info(f"[Parser] 퍼징 대상 정리 완료: {len(targets)} 개")
         return targets
