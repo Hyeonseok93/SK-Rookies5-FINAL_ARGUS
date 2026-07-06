@@ -1,4 +1,4 @@
-"""Detect account lockout / rate limiting from repeated failed login attempts (3-2)."""
+"""반복 로그인 실패로부터 계정 잠금/요청 제한(rate limit)을 탐지"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def _load_g62_login_rules():
     mod_name = "diag_g62_login_rules_for_g32"
     spec = importlib.util.spec_from_file_location(mod_name, path)
     if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load {path}")
+        raise ImportError(f"{path}를 불러올 수 없습니다")
     mod = importlib.util.module_from_spec(spec)
     import sys
 
@@ -85,14 +85,14 @@ def analyze_lockout_sequence(
     retry_after_headers: list[str | None],
     strict: bool = True,
 ) -> LockoutAnalysis:
-    """Compare repeated failure responses against the first attempt(s)."""
+    """반복 실패 응답을 첫 시도(들)와 비교한다."""
     if not snapshots:
-        return LockoutAnalysis(detected=False, reason="no attempts")
+        return LockoutAnalysis(detected=False, reason="시도 없음")
 
     if snapshots[0].error:
         return LockoutAnalysis(
             detected=False,
-            reason=f"baseline unreachable: {snapshots[0].error}",
+            reason=f"기준(baseline) 응답 도달 불가: {snapshots[0].error}",
             baseline=snapshots[0].to_dict(),
         )
 
@@ -117,7 +117,7 @@ def analyze_lockout_sequence(
                 detected=True,
                 limit_type=limit_type,
                 detected_at_attempt=idx,
-                reason=f"HTTP {snap.http_status} after {idx - 1} baseline failure(s)",
+                reason=f"기준 실패 {idx - 1}회 후 HTTP {snap.http_status}",
                 baseline=baseline.to_dict(),
                 trigger_snapshot=snap.to_dict(),
             )
@@ -127,7 +127,7 @@ def analyze_lockout_sequence(
                 detected=True,
                 limit_type="rate_limit",
                 detected_at_attempt=idx,
-                reason=f"Retry-After header present at attempt {idx}",
+                reason=f"{idx}회차에서 Retry-After 헤더 발견",
                 baseline=baseline.to_dict(),
                 trigger_snapshot=snap.to_dict(),
             )
@@ -153,7 +153,7 @@ def analyze_lockout_sequence(
                 detected=True,
                 limit_type=limit_type,
                 detected_at_attempt=idx,
-                reason="; ".join(comparison.differences) or "response changed after repeated failures",
+                reason="; ".join(comparison.differences) or "반복 실패 후 응답 변경됨",
                 differences=comparison.differences,
                 baseline=baseline.to_dict(),
                 trigger_snapshot=snap.to_dict(),
@@ -164,7 +164,7 @@ def analyze_lockout_sequence(
                 detected=True,
                 limit_type="response_change",
                 detected_at_attempt=idx,
-                reason="; ".join(comparison.differences) or "failure response changed",
+                reason="; ".join(comparison.differences) or "실패 응답이 변경됨",
                 differences=comparison.differences,
                 baseline=baseline.to_dict(),
                 trigger_snapshot=snap.to_dict(),
@@ -172,6 +172,6 @@ def analyze_lockout_sequence(
 
     return LockoutAnalysis(
         detected=False,
-        reason=f"no lockout signal within {len(snapshots)} attempt(s)",
+        reason=f"{len(snapshots)}회 시도 내 잠금 신호 없음",
         baseline=baseline.to_dict(),
     )
