@@ -101,6 +101,14 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
   add("Param", "param");
   add("Param in", "param_in");
   add("Payload", "payload");
+  add("Attack", "attack");
+  add("Affected Parameters", "affected_parameters");
+  add("Writer Role", "cross_account_writer_role");
+  add("Reader Role", "cross_account_reader_role");
+  add("Description", "vuln_description");
+  add("Validation Reason", "validation_reason");
+  add("Remediation Guide", "remediation_guide");
+  add("Remediation Cause", "remediation_cause");
   add("Payloads tried", "payloads_tried_count");
   add("HTTP", "http_status");
   add("Baseline HTTP", "baseline_http_status");

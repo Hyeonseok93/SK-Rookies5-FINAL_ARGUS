@@ -59,12 +59,20 @@ class _Tee:
 
     def write(self, data):
         for stream in self.streams:
-            stream.write(data)
-            stream.flush()
+            try:
+                if not getattr(stream, "closed", False):
+                    stream.write(data)
+                    stream.flush()
+            except (ValueError, OSError):
+                pass
 
     def flush(self):
         for stream in self.streams:
-            stream.flush()
+            try:
+                if not getattr(stream, "closed", False):
+                    stream.flush()
+            except (ValueError, OSError):
+                pass
 
 
 @dataclass
