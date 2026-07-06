@@ -79,9 +79,16 @@ def run_traversal_probes(
         baseline_status: int | None = None
         baseline_body: bytes = b""
         baseline_headers: dict[str, str] = {}
-        baseline_body_obj = tf.build_body_object(ep) if tf.file_like_targets(ep) else {}
-        if tf.file_like_targets(ep):
-            baseline_probe = build_probe_request(ep, probe_base_fn=probe_url, account_auth=current_auth)
+        targets = tf.traversal_targets(ep)
+        baseline_body_obj = tf.build_body_object(ep) if targets else {}
+        baseline_path_defaults = tf.path_param_defaults(ep) if targets else {}
+        if targets:
+            baseline_probe = build_probe_request(
+                ep,
+                probe_base_fn=probe_url,
+                account_auth=current_auth,
+                path_param_defaults=baseline_path_defaults or None,
+            )
             if baseline_body_obj and ep.method.upper() in ("POST", "PUT", "PATCH"):
                 baseline_probe = dict(baseline_probe)
                 baseline_probe["body"] = json.dumps(baseline_body_obj, ensure_ascii=False)
@@ -98,7 +105,7 @@ def run_traversal_probes(
                 baseline_body = baseline_resp.body
                 baseline_headers = baseline_resp.headers
 
-        for param_in, pname in tf.file_like_targets(ep):
+        for param_in, pname in targets:
             payloads_tried: list[dict[str, Any]] = []
             path_traversal_hits: list[dict[str, Any]] = []
             input_validation_hits: list[dict[str, Any]] = []
@@ -111,12 +118,17 @@ def run_traversal_probes(
                     payload=payload,
                     auth=current_auth,
                     baseline_body=baseline_body_obj,
+                    baseline_path_defaults=baseline_path_defaults,
                 )
                 req_url = injected["url"]
+                req_method = str(injected.get("method") or method)
+                req_headers = dict(injected.get("headers") or headers)
                 req_body = injected.get("body") or ""
                 req_body_bytes = req_body.encode("utf-8") if req_body else None
 
-                resp = transport.request(method, req_url, headers, req_body_bytes, follow_redirects=True)
+                resp = transport.request(
+                    req_method, req_url, req_headers, req_body_bytes, follow_redirects=True
+                )
                 if resp.error or resp.status is None:
                     continue
                 resp_body = resp.body
@@ -212,7 +224,10 @@ def run_traversal_probes(
                     rec.set_auth(auth_mode, account_email=email)
                     rec.append_ui_flow(method=ep.method, path=ep.path)
                     baseline_probe = build_probe_request(
-                        ep, probe_base_fn=probe_url, account_auth=current_auth
+                        ep,
+                        probe_base_fn=probe_url,
+                        account_auth=current_auth,
+                        path_param_defaults=baseline_path_defaults or None,
                     )
                     if baseline_body_obj:
                         baseline_probe = dict(baseline_probe)
@@ -234,6 +249,7 @@ def run_traversal_probes(
                         payload=str(primary.get("payload") or ""),
                         auth=current_auth,
                         baseline_body=baseline_body_obj,
+                        baseline_path_defaults=baseline_path_defaults,
                     )
                     leak_markers: list[str] = []
                     meta = primary.get("meta") or {}
@@ -294,7 +310,10 @@ def run_traversal_probes(
                     rec.set_auth(auth_mode, account_email=email)
                     rec.append_ui_flow(method=ep.method, path=ep.path)
                     baseline_probe = build_probe_request(
-                        ep, probe_base_fn=probe_url, account_auth=current_auth
+                        ep,
+                        probe_base_fn=probe_url,
+                        account_auth=current_auth,
+                        path_param_defaults=baseline_path_defaults or None,
                     )
                     s_base = rec.record_http_from_probe(
                         "baseline",
@@ -313,6 +332,7 @@ def run_traversal_probes(
                         payload=str(primary.get("payload") or ""),
                         auth=current_auth,
                         baseline_body=baseline_body_obj,
+                        baseline_path_defaults=baseline_path_defaults,
                     )
                     s_payload = rec.record_http_from_probe(
                         "payload",

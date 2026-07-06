@@ -136,6 +136,14 @@ def run_g21_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         phase("렌터카 썸네일 업로드 probe…", done=step, total=total_steps)
         all_results.extend(upload_seller.run_car_probes(seller_ctx))
 
+        upload_dashboard = _load_local("upload_dashboard")
+        dashboard_rows = upload_dashboard.run_dashboard_upload_probes(seller_ctx, raw)
+        if dashboard_rows:
+            step += 1
+            total_steps += 1
+            phase("대시보드 업로드 엔드포인트 probe…", done=step, total=total_steps)
+            all_results.extend(dashboard_rows)
+
         user_ctx = None
         if opts.user_email and opts.user_password.strip():
             try:
@@ -179,6 +187,9 @@ def run_g21_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     stats["seller_email"] = opts.seller_email
     stats["seller_id"] = opts.seller_id
     stats["user_probed"] = bool(opts.user_email and opts.user_password.strip())
+    stats["dashboard_upload_probes"] = sum(
+        1 for r in all_results if getattr(r, "suite", "") == "dashboard_upload"
+    )
 
     vuln_count = stats.get("vulnerable", 0)
     if vuln_count:

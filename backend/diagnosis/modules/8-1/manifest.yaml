@@ -3,5 +3,5 @@ title: "취약점 진단 항목에 정의되지 않은 취약점"
 chapter: 8
 implemented: false
 diagnosable: false
-review_later: true
+status_label: "수동 진단"
 engine: n/a

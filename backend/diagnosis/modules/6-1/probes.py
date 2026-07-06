@@ -91,6 +91,7 @@ def _finding_from_hit(
     ev: dict[str, Any] = {
         "rule_id": hit.rule_id,
         "category": hit.category,
+        "sk_class": hit.sk_class,
         "marker": hit.marker,
         "hint": hit.hint,
         "confidence": confidence,

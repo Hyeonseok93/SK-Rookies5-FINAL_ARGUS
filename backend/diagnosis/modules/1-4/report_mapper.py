@@ -39,6 +39,9 @@ def confirmed_result_to_finding(
             "response_body_snippet": result.get("response_body_snippet"),
             "stored_ssrf_probe": result.get("stored_ssrf_probe"),
             "control_probe": result.get("control_probe"),
+            "confirmation_rounds": result.get("confirmation_rounds"),
+            "baseline_summary": result.get("baseline_summary"),
+            "payload_summary": result.get("payload_summary"),
             "confirmed_by_roles": sorted(set(confirmed_by_roles or [])),
         },
     )

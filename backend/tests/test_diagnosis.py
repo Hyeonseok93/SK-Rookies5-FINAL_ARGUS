@@ -10,6 +10,10 @@ from diagnosis.registry import list_registered_ids, module_dir
 
 SHELL_ONLY_SECTIONS = frozenset()
 
+MANUAL_DIAGNOSIS_SECTIONS = frozenset(
+    {"1-3", "1-4", "3-1", "3-3", "4-1", "4-2", "4-3", "5-1", "8-1"}
+)
+
 
 def test_all_modules_registered():
     assert len(list_registered_ids()) == len(SECTIONS) - len(SHELL_ONLY_SECTIONS)
@@ -27,42 +31,40 @@ def test_catalog_matches_modules():
 
 
 def test_run_module_stub():
-    from diagnosis.paths import diagnosis_report_path
+    import pytest
 
-    report = diagnosis_service.run_section("1-3")
-    assert report.section_id == "1-3"
-    assert report.status == "not_implemented"
-    assert report.implemented is False
-    data_dir = Path(__file__).resolve().parents[1] / "data"
-    assert diagnosis_report_path(data_dir, "1-3").is_file()
+    with pytest.raises(ValueError, match="not diagnosable"):
+        diagnosis_service.run_section("1-3")
 
 
 def test_not_diagnosable_sections():
     catalog = diagnosis_service.catalog()
-    for section_id in ("3-1", "3-3", "4-1", "4-3", "4-4", "4-5", "5-1", "8-1"):
+    for section_id in MANUAL_DIAGNOSIS_SECTIONS:
         row = next(r for r in catalog if r["id"] == section_id)
         assert row["diagnosable"] is False
         assert row["implemented"] is False
 
 
-def test_review_later_sections():
+def test_no_review_later_sections():
     catalog = diagnosis_service.catalog()
-    for section_id in ("1-3", "3-3", "4-1", "4-3", "4-4", "4-5", "5-1", "8-1"):
+    for row in catalog:
+        assert row["review_later"] is False
+
+
+def test_manual_diagnosis_sections():
+    catalog = diagnosis_service.catalog()
+    for section_id in MANUAL_DIAGNOSIS_SECTIONS:
         row = next(r for r in catalog if r["id"] == section_id)
-        assert row["review_later"] is True
-
-
-def test_g31_manual_status_label():
-    catalog = diagnosis_service.catalog()
-    row = next(r for r in catalog if r["id"] == "3-1")
-    assert row["status_label"] == "회원가입에서 직접 확인"
-    assert row["review_later"] is False
+        assert row["status_label"] == "수동 진단"
+        assert row["review_later"] is False
+        assert row["diagnosable"] is False
+        assert row["implemented"] is False
 
 
 def test_run_not_diagnosable_raises():
     import pytest
 
-    for section_id in ("3-1", "3-3", "4-1", "4-3", "4-4", "4-5", "5-1", "8-1"):
+    for section_id in MANUAL_DIAGNOSIS_SECTIONS:
         with pytest.raises(ValueError, match="not diagnosable"):
             diagnosis_service.run_section(section_id)
 
@@ -113,7 +115,7 @@ def test_g61_module_implemented():
     mod = diagnosis_service.catalog()
     row = next(r for r in mod if r["id"] == "6-1")
     assert row["implemented"] is True
-    assert row["engine"] == "httpx+zap"
+    assert row["engine"] == "httpx"
 
 
 def test_g35_module_implemented():
@@ -160,19 +162,30 @@ def test_g15_module_implemented():
     assert row["engine"] == "httpx+zap"
 
 
-def test_g41_module_review_later():
+def test_g41_module_manual_diagnosis():
     mod = diagnosis_service.catalog()
     row = next(r for r in mod if r["id"] == "4-1")
     assert row["implemented"] is False
-    assert row["review_later"] is True
+    assert row["status_label"] == "수동 진단"
+    assert row["review_later"] is False
     assert row["diagnosable"] is False
 
 
-def test_g42_module_implemented():
+def test_g42_module_manual_diagnosis():
     mod = diagnosis_service.catalog()
     row = next(r for r in mod if r["id"] == "4-2")
-    assert row["implemented"] is True
-    assert row["engine"] == "httpx"
+    assert row["implemented"] is False
+    assert row["status_label"] == "수동 진단"
+    assert row["review_later"] is False
+    assert row["diagnosable"] is False
+
+
+def test_g44_module_has_start_button_catalog():
+    mod = diagnosis_service.catalog()
+    row = next(r for r in mod if r["id"] == "4-4")
+    assert row["review_later"] is False
+    assert row["diagnosable"] is True
+    assert row["status_label"] is None
 
 
 def test_run_g15_with_options(tmp_path, monkeypatch):

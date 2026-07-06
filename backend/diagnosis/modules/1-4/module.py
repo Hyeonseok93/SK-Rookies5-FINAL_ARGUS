@@ -72,8 +72,10 @@ class G14Module(DiagnosisModule):
     section_id = "1-4"
     title = "SSRF / File Inclusion 공격 가능성"
     chapter = 1
-    implemented = True
-    engine = "custom-injector+zap"
+    implemented = False
+    diagnosable = False
+    status_label = "수동 진단"
+    engine = "pending"
 
     def __init__(self, module_dir: Path) -> None:
         self.module_dir = module_dir
@@ -83,6 +85,12 @@ class G14Module(DiagnosisModule):
             if isinstance(raw, dict):
                 self.title = str(raw.get("title", self.title))
                 self.chapter = int(raw.get("chapter", self.chapter))
+                self.implemented = bool(raw.get("implemented", self.implemented))
+                self.diagnosable = bool(raw.get("diagnosable", self.diagnosable))
+                self.review_later = bool(raw.get("review_later", False))
+                self.status_label = (
+                    str(raw["status_label"]).strip() if raw.get("status_label") else None
+                )
                 self.engine = str(raw.get("engine", self.engine))
 
     def _error_report(self, ctx: DiagnosisContext, message: str) -> SectionReport:

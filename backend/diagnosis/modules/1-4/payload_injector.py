@@ -2,7 +2,9 @@
 ARGUS - SSRF / File Inclusion 진단 모듈
 
 search_engine.py가 식별한 의심 파라미터(SearchHit)에 실제 페이로드를 주입하여 "진짜로 취약점이 존재하는지"를 검증하는 모듈
+search_engine.py가 식별한 의심 파라미터(SearchHit)에 실제 페이로드를 주입하여 "진짜로 취약점이 존재하는지"를 검증하는 모듈
 
+  1) WAF/필터 우회를 위한 인코딩 변형 페이로드 자동 생성 (URL 인코딩, 더블 인코딩, 슬래시/점 개별 인코딩, null byte, 대소문자 혼용)
   1) WAF/필터 우회를 위한 인코딩 변형 페이로드 자동 생성 (URL 인코딩, 더블 인코딩, 슬래시/점 개별 인코딩, null byte, 대소문자 혼용)
   2) Baseline 응답과의 diff 비교로 오탐(False Positive) 감소
      (페이로드 없는 정상 요청 vs 페이로드 요청의 길이/상태코드 차이 분석)
@@ -29,6 +31,7 @@ from requests.exceptions import RequestException, Timeout, ConnectionError
 from models import ScanTarget, ScanParam, VulnType, RiskLevel, ParamLocation, DetectionSource
 from search_engine import SearchHit, _is_constrained_param
 from input_parser import _schema_sample_value
+from input_parser import _schema_sample_value
 
 
 # ==========================================================================
@@ -37,6 +40,8 @@ from input_parser import _schema_sample_value
 
 def _generate_encoding_variants(base_payload: str) -> List[str]:
     """
+    하나의 base 페이로드로부터 WAF/필터 우회 가능성이 있는 인코딩 변형을 생성
+    단순 문자열 매칭 기반 필터를 우회하기 위한 변형들
     하나의 base 페이로드로부터 WAF/필터 우회 가능성이 있는 인코딩 변형을 생성
     단순 문자열 매칭 기반 필터를 우회하기 위한 변형들
     """
@@ -109,6 +114,7 @@ _SSRF_BASE_PAYLOADS = [
 
 SSRF_PAYLOADS = list(_SSRF_BASE_PAYLOADS) + list(CLOUD_METADATA_PAYLOADS.values())
 
+# --- SSRF: 도메인 검증 우회 ---
 # --- SSRF: 도메인 검증 우회 ---
 #   "http://skshieldus.com@http://192.168.x.x/security : 도메인 검증 우회"
 #   "http://skshieldus.com/?url=https://bit.ly/kalskj3Ed : 단축 URL을 통한 우회"
@@ -193,6 +199,10 @@ class InjectionResult:
     request_content_type: str = ""
     stored_ssrf_probe: Optional[dict] = None
     control_probe: Optional[dict] = None
+    control_probe: Optional[dict] = None
+    confirmation_rounds: Optional[List[dict]] = None
+    baseline_summary: Optional[dict] = None
+    payload_summary: Optional[dict] = None
     _response_body_preview: Optional[str] = field(default=None, repr=False)
 
     def to_dict(self) -> dict:
@@ -218,6 +228,10 @@ class InjectionResult:
             "request_content_type": self.request_content_type,
             "stored_ssrf_probe": self.stored_ssrf_probe,
             "control_probe": self.control_probe,
+            "control_probe": self.control_probe,
+            "confirmation_rounds": self.confirmation_rounds,
+            "baseline_summary": self.baseline_summary,
+            "payload_summary": self.payload_summary,
         }
 
 
@@ -242,6 +256,7 @@ class BaselineProbe:
 class OobCallbackProvider:
     """
     Out-of-Band 콜백 검증을 위한 인터페이스
+    Out-of-Band 콜백 검증을 위한 인터페이스
     """
 
     def __init__(self, enabled: bool = False, base_callback_domain: str = ""):
@@ -252,6 +267,8 @@ class OobCallbackProvider:
         """
         이 요청 전용 고유 콜백 URL을 발급
         예: https://<random>.oast.fun  형태
+        이 요청 전용 고유 콜백 URL을 발급
+        예: https://<random>.oast.fun  형태
         """
         if not self.enabled or not self.base_callback_domain:
             return None
@@ -260,6 +277,7 @@ class OobCallbackProvider:
 
     def check_callback_received(self, callback_url: str, wait_seconds: int = 3) -> bool:
         """
+        발급한 콜백 URL로 실제 요청이 들어왔는지 확인
         발급한 콜백 URL로 실제 요청이 들어왔는지 확인
         """
         if not self.enabled:
@@ -272,8 +290,10 @@ class OobCallbackProvider:
 class PayloadInjector:
     """
     SearchHit 목록을 받아 실제 HTTP 요청으로 페이로드를 주입하고, 응답을 분석해 취약점 존재 여부를 판정
+    SearchHit 목록을 받아 실제 HTTP 요청으로 페이로드를 주입하고, 응답을 분석해 취약점 존재 여부를 판정
       - baseline 요청(안전한 더미 값)과 페이로드 요청을 비교해 오탐을 줄임
       - 인코딩 변형 페이로드까지 자동으로 시도
+      - OOB 콜백 검증 지원
       - OOB 콜백 검증 지원
     """
 
@@ -281,7 +301,7 @@ class PayloadInjector:
                  whitelisted_domain_for_bypass: str = "example.com",
                  max_payloads_per_param: int = 8,
                   oob_provider: Optional[OobCallbackProvider] = None,
-                  retry_count: int = 1,
+                  retry_count: int = 2,
                   auth_headers: Optional[Dict[str, str]] = None,
                    resource_ids: Optional[Dict[str, List[str]]] = None,
                    auth_refresh_callback: Optional[Callable[[], Optional[Dict[str, str]]]] = None,
@@ -311,6 +331,7 @@ class PayloadInjector:
         self.skipped_unauthorized_details: List[dict] = []
         self.skipped_failed_baseline_hits: List[SearchHit] = []
         self.skipped_failed_baseline_details: List[dict] = []
+        self.skipped_soft_constrained_details: List[dict] = []
         self.skipped_soft_constrained_details: List[dict] = []
 
     # ----------------------------------------------------------------
@@ -521,6 +542,66 @@ class PayloadInjector:
             "reason": reason,
         }
 
+    def _probe_soft_constraint(
+        self,
+        hit: SearchHit,
+        baseline: Optional[requests.Response],
+    ) -> dict:
+        """Check whether a nominally structured field actually rejects free text."""
+        control_value = "not-a-date-xyz"
+        url = self._build_url(hit, control_value)
+        kwargs = self._build_request_kwargs(hit, control_value)
+        started = time.time()
+        try:
+            response = self.session.request(hit.target.method, url, **kwargs)
+            elapsed_ms = round((time.time() - started) * 1000, 1)
+        except RequestException as exc:
+            return {
+                "value": control_value,
+                "status_code": None,
+                "elapsed_ms": round((time.time() - started) * 1000, 1),
+                "passed": False,
+                "reason": f"control probe failed: {str(exc)[:200]}",
+            }
+
+        baseline_status = baseline.status_code if baseline is not None else None
+        baseline_length = len(baseline.text or "") if baseline is not None else None
+        response_length = len(response.text or "")
+        length_diff_ratio = None
+        if baseline_length is not None:
+            length_diff_ratio = abs(response_length - baseline_length) / max(baseline_length, 1)
+
+        # The baseline has already established that this endpoint is reachable.
+        # Any client-error response to only the malformed value is therefore a
+        # useful signal that the declared constraint is enforced (not just
+        # 400/422; frameworks also commonly use 404, 406, or 415 here).
+        rejected = 400 <= response.status_code < 500
+        normal_response = 200 <= response.status_code < 400
+        baseline_similar = (
+            baseline is not None
+            and response.status_code == baseline.status_code
+            and length_diff_ratio is not None
+            and length_diff_ratio <= 0.30
+        )
+        passed = not rejected and (normal_response or baseline_similar)
+        reason = (
+            "server accepted malformed structured value"
+            if passed
+            else f"server enforced structured format (HTTP {response.status_code})"
+        )
+        return {
+            "value": control_value,
+            "status_code": response.status_code,
+            "baseline_status": baseline_status,
+            "baseline_length": baseline_length,
+            "response_length": response_length,
+            "length_diff_ratio": round(length_diff_ratio, 4)
+            if length_diff_ratio is not None else None,
+            "elapsed_ms": elapsed_ms,
+            "passed": passed,
+            "reason": reason,
+        }
+
     # ----------------------------------------------------------------
     def _sample_for_param(self, param: ScanParam) -> Any:
         schema = param.schema or {}
@@ -536,6 +617,7 @@ class PayloadInjector:
         elif schema.get("enum"):
             value = schema["enum"][0]
         else:
+            value = _schema_sample_value(param.name, schema)
             value = _schema_sample_value(param.name, schema)
 
         return self._coerce_value(value, schema)
@@ -556,6 +638,7 @@ class PayloadInjector:
         if schema.get("enum"):
             return schema["enum"][0]
         return self._coerce_value(_schema_sample_value(name, schema), schema)
+        return self._coerce_value(_schema_sample_value(name, schema), schema)
 
     # ----------------------------------------------------------------
     @staticmethod
@@ -567,6 +650,7 @@ class PayloadInjector:
     def _apply_response_size_anomalies(
         hit_results: List[InjectionResult], baseline: Optional[requests.Response]
     ) -> None:
+        """한 탐지 항목의 시도 중 특정 포트의 내부 URL 응답 크기가 유독 다른지 확인"""
         """한 탐지 항목의 시도 중 특정 포트의 내부 URL 응답 크기가 유독 다른지 확인"""
         if baseline is None or len(hit_results) < 5:
             return
@@ -630,6 +714,7 @@ class PayloadInjector:
         hit_results: List[InjectionResult], baseline: Optional[requests.Response]
     ) -> None:
         """페이로드 응답이 거의 같으면 baseline 차이에만 근거한 SSRF 증거의 신뢰도를 낮춤"""
+        """페이로드 응답이 거의 같으면 baseline 차이에만 근거한 SSRF 증거의 신뢰도를 낮춤"""
         if baseline is None:
             return
 
@@ -642,6 +727,7 @@ class PayloadInjector:
         if len(comparable) < 3:
             return
 
+        # JSON 오류 본문은 동일한 비즈니스 로직 응답이어도 ID 등의 문자 한두 개가 달라지는 경우가 많음
         # JSON 오류 본문은 동일한 비즈니스 로직 응답이어도 ID 등의 문자 한두 개가 달라지는 경우가 많음
         groups: List[List[InjectionResult]] = []
         for result in comparable:
@@ -678,6 +764,7 @@ class PayloadInjector:
 
     def _verify_stored_ssrf(self, result: InjectionResult, payload: str) -> None:
         """플랫폼별 명칭에 의존하지 않고 저장에 성공한 URL을 다시 조회합니다."""
+        """플랫폼별 명칭에 의존하지 않고 저장에 성공한 URL을 다시 조회합니다."""
         if result.hit.target.method.upper() not in {"POST", "PUT", "PATCH"}:
             return
         if result.response_status not in {200, 201, 202, 204}:
@@ -692,6 +779,9 @@ class PayloadInjector:
             return
 
         try:
+            # Swagger의 GET 작업을 바탕으로 요청을 구성
+            # write_target.full_url을 GET으로 호출하면 지원하지 않는 메서드 오류가 잡음으로 섞이고,
+            # 상세 경로에는 치환되지 않은 {id}가 남아 있을 수 있음
             # Swagger의 GET 작업을 바탕으로 요청을 구성
             # write_target.full_url을 GET으로 호출하면 지원하지 않는 메서드 오류가 잡음으로 섞이고,
             # 상세 경로에는 치환되지 않은 {id}가 남아 있을 수 있음
@@ -728,6 +818,7 @@ class PayloadInjector:
 
     def _find_stored_read_target(self, write_target: ScanTarget) -> Optional[ScanTarget]:
         """저장된 리소스를 조회할 Swagger 선언 GET 엔드포인트를 선택"""
+        """저장된 리소스를 조회할 Swagger 선언 GET 엔드포인트를 선택"""
         write_parts = [part for part in write_target.path.strip("/").split("/") if part]
         generic_parts = {"api", "v1", "v2", "v3", "admin", "seller", "user", "users"}
         write_resource_parts = {
@@ -745,6 +836,8 @@ class PayloadInjector:
             }
             # /api/v1 접두사가 같다는 이유만으로 동일한 리소스는 아님
             # 의미 있는 리소스 경로 구간이 없으면 탐색을 완전히 건너뜀
+            # /api/v1 접두사가 같다는 이유만으로 동일한 리소스는 아님
+            # 의미 있는 리소스 경로 구간이 없으면 탐색을 완전히 건너뜀
             if not write_resource_parts.intersection(read_resource_parts):
                 continue
             common = 0
@@ -758,6 +851,9 @@ class PayloadInjector:
             # 리소스 식별자를 추측할 필요가 없는 컬렉션/목록 GET을 우선
             # Swagger에 컬렉션 조회가 없으면 상세 GET을 대안으로 사용하며,
             # probe_target_access가 해당 경로의 ID를 결정
+            # 리소스 식별자를 추측할 필요가 없는 컬렉션/목록 GET을 우선
+            # Swagger에 컬렉션 조회가 없으면 상세 GET을 대안으로 사용하며,
+            # probe_target_access가 해당 경로의 ID를 결정
             path_param_count = sum(part.startswith("{") for part in read_parts)
             length_penalty = abs(len(read_parts) - len(write_parts))
             candidates.append((-path_param_count, common, -length_penalty, target))
@@ -767,6 +863,7 @@ class PayloadInjector:
 
     @staticmethod
     def _sanitize_snippet(body: str, max_len: int = 200) -> str:
+        """짧은 응답 미리보기를 보관하기 전에 일반적인 비밀 값을 마스킹"""
         """짧은 응답 미리보기를 보관하기 전에 일반적인 비밀 값을 마스킹"""
         sensitive = "password|token|secret|key|credential|auth"
         sanitized = re.sub(
@@ -866,6 +963,7 @@ class PayloadInjector:
 
     # ----------------------------------------------------------------
     def probe_target_access(self, target: ScanTarget, force: bool = False) -> BaselineProbe:
+        """인증을 탐색한 뒤 거부된 경로 대상을 호출자/JWT의 리소스 ID로 다시 시도"""
         """인증을 탐색한 뒤 거부된 경로 대상을 호출자/JWT의 리소스 ID로 다시 시도"""
         cache_key = self._target_cache_key(target)
         if not force and cache_key in self._baseline_probes:
@@ -1028,6 +1126,7 @@ class PayloadInjector:
     def _get_baseline(self, hit: SearchHit) -> Optional[requests.Response]:
         """
         페이로드 없이(안전한 더미 값으로) 보낸 baseline 응답을 캐싱하여 이후 모든 페이로드 응답과 비교할 기준점으로 사용
+        페이로드 없이(안전한 더미 값으로) 보낸 baseline 응답을 캐싱하여 이후 모든 페이로드 응답과 비교할 기준점으로 사용
         """
         cache_key = self._target_cache_key(hit.target)
         if cache_key in self._baseline_cache:
@@ -1093,6 +1192,9 @@ class PayloadInjector:
         last_exception = None
         timeout_count = 0
         connection_error_count = 0
+        confirmation_details = []
+        confirmed_count = 0
+        last_result = None
         for attempt in range(self.retry_count + 1):
             start = time.time()
             try:
@@ -1104,10 +1206,53 @@ class PayloadInjector:
                     allow_soft_constrained=bool(control_probe and control_probe.get("passed")),
                 )
 
-                return InjectionResult(
+                confirmation_details.append({
+                    "attempt": attempt + 1,
+                    "status_code": resp.status_code,
+                    "response_length": len(resp.text or ""),
+                    "elapsed_ms": round(elapsed_ms, 1),
+                    "confirmed": confirmed,
+                    "detection_method": detection_method,
+                })
+                last_result = (confirmed, evidence, detection_method, resp, elapsed_ms)
+                if confirmed:
+                    confirmed_count += 1
+                    continue
+                break
+
+            except Timeout:
+                elapsed_ms = (time.time() - start) * 1000
+                timeout_count += 1
+                last_exception = "Timeout"
+                confirmation_details.append({
+                    "attempt": attempt + 1, "status_code": None,
+                    "response_length": None, "elapsed_ms": round(elapsed_ms, 1),
+                    "confirmed": False, "detection_method": "TIMEOUT",
+                })
+                continue
+
+            except ConnectionError as e:
+                connection_error_count += 1
+                last_exception = str(e)
+                continue
+            except RequestException as e:
+                last_exception = str(e)
+                continue
+
+        attempts = self.retry_count + 1
+        if last_result is not None:
+            confirmed, evidence, detection_method, resp, elapsed_ms = last_result
+            fully_reproduced = confirmed_count == attempts
+            if confirmed and not fully_reproduced:
+                evidence = (
+                    f"{evidence} ({confirmed_count}/{attempts}회만 재현되어 확정 보류)"
+                )
+            elif fully_reproduced:
+                evidence = f"{evidence} ({confirmed_count}/{attempts}회 재현 확인)"
+            return InjectionResult(
                     hit=hit,
                     payload=f"{label}:{payload}" if label else payload,
-                    confirmed=confirmed,
+                    confirmed=fully_reproduced,
                     evidence=evidence,
                     response_status=resp.status_code,
                     response_time_ms=round(elapsed_ms, 1),
@@ -1127,40 +1272,77 @@ class PayloadInjector:
                     request_headers=request_headers,
                     request_content_type=request_content_type,
                     control_probe=control_probe,
+                    confirmation_rounds=confirmation_details,
+                    baseline_summary=self._response_summary(baseline),
+                    payload_summary=self._response_summary(resp, elapsed_ms),
                     _response_body_preview=(resp.text or "")[:500]
                     if not _is_binary_response(resp) else None,
                 )
 
-            except Timeout:
-                elapsed_ms = (time.time() - start) * 1000
-                timeout_count += 1
-                last_exception = "Timeout"
-                continue
-
-            except ConnectionError as e:
-                connection_error_count += 1
-                last_exception = str(e)
-                continue
-
-            except RequestException as e:
-                last_exception = str(e)
-                continue
-
-        attempts = self.retry_count + 1
         baseline_is_valid = baseline is not None and baseline.status_code not in (401, 403)
         if hit.vuln_type == VulnType.SSRF and baseline_is_valid and timeout_count == attempts:
+            control_url = "http://example.com"
+            control_kwargs = self._build_request_kwargs(hit, control_url)
+            control_started = time.time()
+            control_timed_out = False
+            control_resp = None
+            try:
+                control_resp = self.session.request(
+                    target.method, self._build_url(hit, control_url), **control_kwargs
+                )
+                control_elapsed_ms = (time.time() - control_started) * 1000
+            except Timeout:
+                control_elapsed_ms = (time.time() - control_started) * 1000
+                control_timed_out = True
+            except RequestException:
+                control_elapsed_ms = (time.time() - control_started) * 1000
+                control_timed_out = True
+            confirmation_details.append({
+                "attempt": "control",
+                "payload": control_url,
+                "status_code": control_resp.status_code if control_resp is not None else None,
+                "response_length": len(control_resp.text or "") if control_resp is not None else None,
+                "elapsed_ms": round(control_elapsed_ms, 1),
+                "confirmed": not control_timed_out,
+                "detection_method": "CONTROL_TIMING",
+            })
+            baseline_elapsed_ms = self._response_elapsed_ms(baseline)
+            control_slow = (
+                not control_timed_out and baseline_elapsed_ms is not None
+                and baseline_elapsed_ms > 0
+                and control_elapsed_ms >= baseline_elapsed_ms * 5
+            )
+            if control_timed_out:
+                return InjectionResult(
+                    hit=hit, payload=payload, confirmed=False,
+                    evidence="대조 URL도 타임아웃 - 네트워크/서버 부하 가능성으로 SSRF 판정 보류",
+                    detection_method="REPEATED_TIMING", confidence="LOW",
+                    baseline_status=baseline.status_code, baseline_length=len(baseline.text or ""),
+                    request_body=request_body, request_headers=request_headers,
+                    request_content_type=request_content_type, control_probe=control_probe,
+                    confirmation_rounds=confirmation_details,
+                    baseline_summary=self._response_summary(baseline),
+                    payload_summary={"status": None, "length": None,
+                                     "elapsed_ms": round(self.timeout * 1000, 1),
+                                     "body_preview": ""},
+                )
             return InjectionResult(
                 hit=hit, payload=payload, confirmed=True,
                 evidence=f"정상 기준 요청은 응답했지만 SSRF 페이로드는 {attempts}회 연속 타임아웃 - 서버 측 URL 요청 가능성",
                 response_time_ms=round(self.timeout * 1000, 1),
                 detection_method="REPEATED_TIMING",
-                confidence="HIGH",
+                confidence="MEDIUM" if control_slow else "HIGH",
                 baseline_status=baseline.status_code,
                 baseline_length=len(baseline.text),
                 request_body=request_body,
                 request_headers=request_headers,
                 request_content_type=request_content_type,
                 control_probe=control_probe,
+                confirmation_rounds=confirmation_details,
+                baseline_summary=self._response_summary(baseline),
+                payload_summary={"status": None, "length": None,
+                                 "elapsed_ms": round(self.timeout * 1000, 1),
+                                 "body_preview": ""},
             )
 
         if last_exception:
@@ -1168,9 +1350,29 @@ class PayloadInjector:
         return None
 
     @staticmethod
+    def _response_elapsed_ms(resp: Optional[requests.Response]) -> Optional[float]:
+        if resp is None or getattr(resp, "elapsed", None) is None:
+            return None
+        return resp.elapsed.total_seconds() * 1000
+
+    def _response_summary(self, resp: Optional[requests.Response],
+                          elapsed_ms: Optional[float] = None) -> Optional[dict]:
+        if resp is None:
+            return None
+        body = resp.text or ""
+        measured = elapsed_ms if elapsed_ms is not None else self._response_elapsed_ms(resp)
+        return {
+            "status": resp.status_code,
+            "length": len(body),
+            "elapsed_ms": round(measured, 1) if measured is not None else None,
+            "body_preview": self._sanitize_snippet(body[:200]),
+        }
+
+    @staticmethod
     def _response_body_snippet(hit: SearchHit, confirmed: bool,
                                resp: requests.Response,
                                baseline: Optional[requests.Response]) -> Optional[str]:
+        """응답이 유의미하게 커졌거나 LFI가 미확정된 경우의 증거를 보존"""
         """응답이 유의미하게 커졌거나 LFI가 미확정된 경우의 증거를 보존"""
         body = resp.text or ""
         if not body:

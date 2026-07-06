@@ -3,5 +3,5 @@ title: "접근제어 우회 가능성 확인"
 chapter: 4
 implemented: false
 diagnosable: false
-review_later: true
+status_label: "수동 진단"
 engine: pending

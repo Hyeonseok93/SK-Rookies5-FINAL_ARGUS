@@ -3,5 +3,5 @@ title: "패스워드 정책 유무 및 반영 여부"
 chapter: 3
 implemented: false
 diagnosable: false
-status_label: "회원가입에서 직접 확인"
+status_label: "수동 진단"
 engine: pending

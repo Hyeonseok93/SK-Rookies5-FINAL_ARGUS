@@ -8,17 +8,36 @@ from pathlib import Path
 from inventory.schema import ApiTree
 
 BEST_TREE_FILES = ("api-tree-verified.json", "api-tree-ready.json", "api-tree.json")
+PARAM_DISCOVERY_TREE_FILES = ("api-tree-verified.json", "api-tree-ready.json")
 
 
 def load_best_api_tree(data_dir: Path | None) -> ApiTree | None:
     """Prefer verified tree, then ready, then legacy api-tree.json."""
+    tree, _source = load_param_discovery_api_tree(data_dir, include_legacy=True)
+    return tree
+
+
+def load_param_discovery_api_tree(
+    data_dir: Path | None,
+    *,
+    include_legacy: bool = False,
+) -> tuple[ApiTree | None, str | None]:
+    """
+    Load api-tree for download param discovery.
+
+    Default order: verified → ready.
+    When ``include_legacy`` is True, also tries ``api-tree.json`` (general diagnosis).
+    """
     if data_dir is None:
-        return None
-    for name in BEST_TREE_FILES:
+        return None, None
+    names = PARAM_DISCOVERY_TREE_FILES
+    if include_legacy:
+        names = BEST_TREE_FILES
+    for name in names:
         path = data_dir / name
         if path.is_file():
-            return ApiTree.load(path)
-    return None
+            return ApiTree.load(path), name
+    return None, None
 
 
 # Alias used across diagnosis modules

@@ -1,4 +1,4 @@
-"""Diagnosis module 4-1: 쿠키(Cookie) 및 웹 스토리지(Web Storage) 조작 가능성 — 추후 검토."""
+"""Diagnosis module 4-1: 쿠키(Cookie) 및 웹 스토리지(Web Storage) 조작 가능성 — 수동 진단."""
 
 from pathlib import Path
 

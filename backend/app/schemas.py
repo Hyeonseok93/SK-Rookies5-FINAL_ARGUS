@@ -242,6 +242,37 @@ class SaveLoginEndpointsResponse(BaseModel):
     message: str = ""
 
 
+class TransferEndpointEntry(BaseModel):
+    id: str
+    url: str = ""
+    method: str = ""
+
+
+class TransferEndpointResolved(BaseModel):
+    url: str
+    label: str
+    source: str
+    method: str
+    path: str = ""
+    base_url: str = ""
+
+
+class TransferEndpointsResponse(BaseModel):
+    endpoints: list[TransferEndpointEntry]
+    resolved: list[TransferEndpointResolved] = Field(default_factory=list)
+
+
+class SaveTransferEndpointsRequest(BaseModel):
+    endpoints: list[TransferEndpointEntry]
+
+
+class SaveTransferEndpointsResponse(BaseModel):
+    ok: bool
+    endpoints: list[TransferEndpointEntry]
+    resolved: list[TransferEndpointResolved] = Field(default_factory=list)
+    message: str = ""
+
+
 class DiagnosisCatalogModule(BaseModel):
     id: str
     title: str
@@ -287,6 +318,41 @@ class DiagnosisSectionReportResponse(BaseModel):
     message: str = ""
     checked_at: str | None = None
     findings: list[DiagnosisFindingSummary] = Field(default_factory=list)
+    g61_summary: dict[str, Any] | None = None
+
+
+class G61SummaryTriggerFamily(BaseModel):
+    family: str
+    count: int
+
+
+class G61SummaryGroup(BaseModel):
+    group_key: str
+    severity: str
+    category: str
+    rule_id: str
+    category_label: str
+    rule_label: str
+    explanation: str = ""
+    origin: str
+    engine: str
+    count: int
+    sample_urls: list[str] = Field(default_factory=list)
+    sample_methods: list[str] = Field(default_factory=list)
+    sample_snippets: list[str] = Field(default_factory=list)
+    remediation: str | None = None
+    trigger_families: list[G61SummaryTriggerFamily] = Field(default_factory=list)
+    top_status_codes: list[str] = Field(default_factory=list)
+
+
+class G61ReportSummaryPayload(BaseModel):
+    total_issues: int = 0
+    by_severity: dict[str, int] = Field(default_factory=dict)
+    by_category: dict[str, int] = Field(default_factory=dict)
+    by_trigger_family: dict[str, int] = Field(default_factory=dict)
+    by_origin: list[dict[str, Any]] = Field(default_factory=list)
+    groups: list[G61SummaryGroup] = Field(default_factory=list)
+    stats: dict[str, Any] | None = None
 
 
 class DiagnosisArtifactSummary(BaseModel):
@@ -402,6 +468,7 @@ class DiagnosisG22RunOptions(BaseModel):
     max_candidates: int | None = Field(default=None, ge=0, le=500)
     zap_max_minutes: int | None = Field(default=None, ge=1, le=120)
     scan_all_inventory: bool | None = None
+    dashboard_download_only: bool | None = None
     idor_probe_enabled: bool | None = None
 
 
@@ -469,16 +536,6 @@ class DiagnosisG61RunOptions(BaseModel):
     timeout: float | None = Field(default=None, ge=1.0, le=60.0)
     interval_sec: float | None = Field(default=None, ge=0.0, le=2.0)
     httpx_enabled: bool | None = None
-    zap_enabled: bool | None = None
-    zap_unified_enabled: bool | None = None
-    zap_supplemental_enabled: bool | None = None
-    zap_max_requests: int | None = Field(default=None, ge=0, description="0 = unlimited")
-    zap_max_minutes: int | None = Field(default=None, ge=1, le=480)
-    zap_seed_cap: int | None = Field(
-        default=None,
-        ge=0,
-        description="0 = seed every probe URL for ZAP supplemental",
-    )
 
 
 class DiagnosisG52RunOptions(BaseModel):
@@ -528,7 +585,7 @@ class DiagnosisG36RunOptions(BaseModel):
 class DiagnosisG32RunOptions(BaseModel):
     """Per-run overrides for guideline 3-2 auth failure count limit scan."""
 
-    max_attempts: int | None = Field(default=None, ge=3, le=25)
+    max_attempts: int | None = Field(default=None, ge=6, le=25)
     timeout: float | None = Field(default=None, ge=1.0, le=60.0)
     interval_sec: float | None = Field(default=None, ge=0.0, le=2.0)
     wrong_password: str | None = None

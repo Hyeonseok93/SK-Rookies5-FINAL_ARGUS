@@ -3,7 +3,16 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import base_urls, diagnosis, inventory, login_endpoints, redirect_sink, test_accounts
+from app.routers import (
+    base_urls,
+    diagnosis,
+    download_endpoints,
+    inventory,
+    login_endpoints,
+    redirect_sink,
+    test_accounts,
+    upload_endpoints,
+)
 
 app = FastAPI(
     title="ARGUS API",
@@ -29,6 +38,8 @@ app.include_router(inventory.router, prefix="/api")
 app.include_router(test_accounts.router, prefix="/api")
 app.include_router(base_urls.router, prefix="/api")
 app.include_router(login_endpoints.router, prefix="/api")
+app.include_router(upload_endpoints.router, prefix="/api")
+app.include_router(download_endpoints.router, prefix="/api")
 app.include_router(diagnosis.router, prefix="/api")
 app.include_router(redirect_sink.router)
 

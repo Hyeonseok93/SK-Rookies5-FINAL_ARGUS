@@ -9,6 +9,7 @@ import { G35FindingsPanel } from "./G35FindingsPanel";
 import { G36FindingsPanel } from "./G36FindingsPanel";
 import { G42FindingsPanel } from "./G42FindingsPanel";
 import { G52FindingsPanel } from "./G52FindingsPanel";
+import { G61FindingsPanel } from "./G61FindingsPanel";
 import { G62FindingsPanel } from "./G62FindingsPanel";
 import { G71FindingsPanel } from "./G71FindingsPanel";
 import { G72FindingsPanel } from "./G72FindingsPanel";
@@ -100,6 +101,14 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
   add("Param", "param");
   add("Param in", "param_in");
   add("Payload", "payload");
+  add("Attack", "attack");
+  add("Affected Parameters", "affected_parameters");
+  add("Writer Role", "cross_account_writer_role");
+  add("Reader Role", "cross_account_reader_role");
+  add("Description", "vuln_description");
+  add("Validation Reason", "validation_reason");
+  add("Remediation Guide", "remediation_guide");
+  add("Remediation Cause", "remediation_cause");
   add("Payloads tried", "payloads_tried_count");
   add("HTTP", "http_status");
   add("Baseline HTTP", "baseline_http_status");
@@ -974,7 +983,8 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
       report.section_id !== "3-2" &&
       report.section_id !== "3-4" &&
       report.section_id !== "3-5" &&
-      report.section_id !== "3-6" ? (
+      report.section_id !== "3-6" &&
+      report.section_id !== "6-1" ? (
         <p className="text-xs text-cyber-muted">finding 없음</p>
       ) : report.section_id === "1-5" ? (
         <G15FindingsPanel findings={findings} />
@@ -992,6 +1002,8 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
         <G42FindingsPanel findings={findings} />
       ) : report.section_id === "5-2" ? (
         <G52FindingsPanel findings={findings} stats={stats} />
+      ) : report.section_id === "6-1" && report.g61_summary ? (
+        <G61FindingsPanel summary={report.g61_summary} status={report.status} />
       ) : report.section_id === "6-2" ? (
         <G62FindingsPanel findings={findings} />
       ) : report.section_id === "7-1" ? (

@@ -48,7 +48,7 @@ function G22DetailCard({ row }: { row: G22SummaryRow }) {
   return (
     <li className="rounded-lg border border-cyber-border/30 bg-cyber-panel/20 px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
-        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${badge}`}>
+        <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${badge}`}>
           {row.severityLabel}
         </span>
         <span className="text-[10px] text-cyan-300/85">{row.typeLabel}</span>
@@ -60,7 +60,6 @@ function G22DetailCard({ row }: { row: G22SummaryRow }) {
       <p className="mt-1.5 font-mono text-xs text-white/95">{row.endpointHint}</p>
       <p className="mt-1 text-xs font-medium text-white/90">{row.issueLabel}</p>
       <p className="mt-0.5 text-[10px] leading-relaxed text-white/70">{row.headline}</p>
-      <p className="mt-1 text-[10px] text-cyber-muted">{row.scaleSummary}</p>
 
       <button
         type="button"
@@ -115,11 +114,10 @@ function G22IssueSummaryTable({ rows }: { rows: G22SummaryRow[] }) {
       </div>
       <table className="w-full min-w-[40rem] table-fixed text-left text-[10px]">
         <colgroup>
-          <col style={{ width: "16%" }} />
-          <col style={{ width: "28%" }} />
-          <col style={{ width: "12%" }} />
-          <col style={{ width: "26%" }} />
-          <col style={{ width: "12%" }} />
+          <col style={{ width: "18%" }} />
+          <col style={{ width: "32%" }} />
+          <col style={{ width: "14%" }} />
+          <col style={{ width: "30%" }} />
           <col style={{ width: "6%" }} />
         </colgroup>
         <thead>
@@ -128,7 +126,6 @@ function G22IssueSummaryTable({ rows }: { rows: G22SummaryRow[] }) {
             <th className="px-2 py-1.5 font-normal">API</th>
             <th className="px-2 py-1.5 font-normal">서버</th>
             <th className="px-2 py-1.5 font-normal">문제</th>
-            <th className="px-2 py-1.5 font-normal">규모</th>
             <th className="px-2 py-1.5 text-center font-normal">Sev</th>
           </tr>
         </thead>
@@ -145,12 +142,9 @@ function G22IssueSummaryTable({ rows }: { rows: G22SummaryRow[] }) {
               <td className="min-w-0 overflow-hidden px-2 py-1.5 align-middle text-white/85">
                 <G22EllipsisCell value={row.issueLabel} />
               </td>
-              <td className="min-w-0 overflow-hidden px-2 py-1.5 align-middle text-white/70">
-                <G22EllipsisCell value={row.scaleSummary} />
-              </td>
               <td className="px-2 py-1.5 text-center align-middle">
                 <span
-                  className={`font-mono text-[9px] uppercase ${SEVERITY_STYLES[row.severity] ?? ""}`}
+                  className={`inline-flex items-center font-mono text-[9px] leading-none uppercase ${SEVERITY_STYLES[row.severity] ?? ""}`}
                 >
                   {row.severityLabel}
                 </span>

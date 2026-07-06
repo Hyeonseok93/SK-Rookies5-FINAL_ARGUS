@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -138,6 +139,67 @@ def get_report(section_id: str) -> SectionReport | None:
         return None
     ctx = _context()
     return mod.load_report(ctx)
+
+
+def get_g61_report_summary() -> dict[str, Any] | None:
+    """Compact 6-1 report for UI (aggregated groups, no raw 70k findings)."""
+    import importlib.util
+
+    mod = get_module("6-1")
+    if mod is None:
+        return None
+    ctx = _context()
+    report_path = mod.report_path(ctx)
+    if not report_path.is_file():
+        return None
+
+    spec = importlib.util.spec_from_file_location(
+        "diag_g61_report_summary",
+        mod.module_dir / "report_summary.py",
+    )
+    if spec is None or spec.loader is None:
+        return None
+    rs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rs)
+    summary = rs.load_or_build_summary(report_path)
+
+    raw = report_path.read_text(encoding="utf-8", errors="replace").split("\nfindings:\n", 1)[0]
+    meta: dict[str, Any] = {}
+    for key in ("section_id", "title", "status", "message", "checked_at"):
+        m = re.search(rf"^{key}: (.+)$", raw, re.M)
+        if not m:
+            continue
+        meta[key] = m.group(1).strip().strip("'\"")
+    m = re.search(r"^chapter: (\d+)$", raw, re.M)
+    if m:
+        meta["chapter"] = int(m.group(1))
+
+    stats = summary.get("stats") or {}
+    stats_finding = {
+        "severity": "info",
+        "message": "6-1 scan statistics",
+        "evidence": {"stats": stats},
+    }
+    return {
+        "section_id": meta.get("section_id", "6-1"),
+        "title": meta.get("title", "오류페이지를 통한 정보 노출 여부"),
+        "chapter": meta.get("chapter", 6),
+        "status": meta.get("status", "pending"),
+        "implemented": True,
+        "message": meta.get("message", ""),
+        "checked_at": meta.get("checked_at"),
+        "findings": [stats_finding],
+        "g61_summary": {
+            "total_issues": summary.get("total_issues", 0),
+            "by_severity": summary.get("by_severity", {}),
+            "by_sk": summary.get("by_sk", {}),
+            "by_category": summary.get("by_category", {}),
+            "by_trigger_family": summary.get("by_trigger_family", {}),
+            "by_origin": summary.get("by_origin", []),
+            "groups": summary.get("groups", []),
+            "stats": stats,
+        },
+    }
 
 
 def _build_overrides(

@@ -40,6 +40,7 @@ def run_2_2_probes(
     account_auths: list[dict[str, Any]] | None = None,
     unauth_probe_enabled: bool = True,
     idor_probe_enabled: bool = True,
+    forced_browse_enabled: bool = True,
     idor_seeds: dict[str, Any] | None = None,
     replay_session: ReplaySession | None = None,
     auth_pool: Any | None = None,
@@ -113,17 +114,19 @@ def run_2_2_probes(
             on_progress=on_progress,
         )
     )
-    findings.extend(
-        probes.run_forced_browse(
-            base_urls,
-            browse_paths,
-            transport=transport,
-            engine=engine,
-            auth=auth,
-            timeout=timeout,
-            replay_session=record_replay,
-            auth_pool=auth_pool,
+    if forced_browse_enabled and browse_paths:
+        findings.extend(
+            probes.run_forced_browse(
+                base_urls,
+                browse_paths,
+                transport=transport,
+                engine=engine,
+                auth=auth,
+                timeout=timeout,
+                replay_session=record_replay,
+                auth_pool=auth_pool,
+            )
         )
-    )
+    stats["forced_browse_enabled"] = forced_browse_enabled
     stats["findings"] = len(findings)
     return findings, stats
