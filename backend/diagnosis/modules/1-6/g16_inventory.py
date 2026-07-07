@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from inventory.net import probe_base_url
+
 
 def _load_json(path: Path) -> dict[str, Any]:
     if not path.is_file():
@@ -117,7 +119,8 @@ def login_override(data_dir: Path, target: str) -> dict[str, str]:
         if not parsed.scheme or not parsed.netloc:
             continue
         item = {
-            "login_target": f"{parsed.scheme}://{parsed.netloc}",
+            # Docker: log in against host.docker.internal, not the container itself.
+            "login_target": probe_base_url(f"{parsed.scheme}://{parsed.netloc}"),
             "login_path": parsed.path or "/",
         }
         if not fallback:
@@ -196,6 +199,10 @@ def api_tree_to_openapi_spec(data_dir: Path, target: str | None = None) -> tuple
     if not source_path:
         return None, {"reason": "api_tree_missing"}
 
+    # Fallback host for endpoints without their own base_url; keep it on the
+    # probe host under Docker (idempotent when already rewritten upstream).
+    target = probe_base_url(target) if target else target
+
     paths: dict[str, Any] = {}
     used = 0
     skipped = 0
@@ -217,6 +224,9 @@ def api_tree_to_openapi_spec(data_dir: Path, target: str | None = None) -> tuple
             path = "/" + path
 
         endpoint_base = str(ep.get("base_url") or "").rstrip("/") or (target or "")
+        # Docker: rewrite localhost -> host.docker.internal per endpoint so the
+        # engine reaches each backend on the host. No-op without ARGUS_PROBE_HOST.
+        endpoint_base = probe_base_url(endpoint_base) if endpoint_base else endpoint_base
         if endpoint_base:
             base_urls_used.add(endpoint_base)
 

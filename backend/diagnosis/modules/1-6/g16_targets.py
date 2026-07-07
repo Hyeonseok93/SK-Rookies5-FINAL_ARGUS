@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from g16_inventory import api_tree_to_openapi_spec, latest_openapi_spec, preferred_api_tree_base_url, resolve_target
+from inventory.net import probe_base_url
 
 # Swagger UI "Try it out"이 채워주는 기본 placeholder 값들.
 # 사용자가 실제 값으로 바꾸지 않고 그대로 Execute하면 이 문자열들이 그대로 넘어온다.
@@ -54,6 +55,12 @@ def resolve_engine_target(
             if data_dir is not None
             else str(explicit_target or first_target(raw_config)).rstrip("/")
         )
+
+    # Under Docker (ARGUS_PROBE_HOST set) rewrite localhost -> host.docker.internal
+    # so the embedded W16 engine reaches the target on the host, not inside its
+    # own container. No-op for native runs. Applied before the spec is generated
+    # so servers[0].url and per-endpoint bases inherit the probe host too.
+    target = probe_base_url(target)
 
     explicit_spec = _real_value(cfg.get("api_spec"))
     api_tree_spec = None
