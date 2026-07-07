@@ -127,6 +127,10 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
   add("Header value", "header_value");
   add("Affected count", "affected_count");
   add("ZAP plugin", "plugin_id");
+  add("Target Role", "target_role");
+  add("Bypassed Role", "bypassed_role");
+  add("Attack Payload", "attack_payload");
+  add("Description", "description");
 
   const patterns = evidence.matched_patterns;
   if (Array.isArray(patterns) && patterns.length > 0) {
@@ -177,7 +181,7 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
       {rows.map(({ label, value }) => (
         <div key={label} className="grid grid-cols-[7rem_1fr] gap-2">
           <dt className="text-cyber-muted">{label}</dt>
-          <dd className="break-all font-mono text-cyan-300/80">{value}</dd>
+          <dd className="break-all font-mono text-cyan-300/80 whitespace-pre-wrap">{value}</dd>
         </div>
       ))}
     </dl>
@@ -350,6 +354,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
     "1-5 scan statistics",
     "4-1 scan statistics",
     "4-2 scan statistics",
+    "4-5 scan statistics",
     "2-2 scan statistics",
     "3-2 scan statistics",
     "3-4 scan statistics",

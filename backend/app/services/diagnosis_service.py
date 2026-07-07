@@ -1,4 +1,4 @@
-﻿"""Orchestrate guideline diagnosis modules (1-1 ??8-1)."""
+"""Orchestrate guideline diagnosis modules (1-1 ??8-1)."""
 
 from __future__ import annotations
 
@@ -25,6 +25,15 @@ def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
     raw: dict = {}
     if config_path.is_file():
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+
+    # Load test-accounts.json if raw doesn't have auth accounts explicitly
+    from app.services.test_accounts_service import load_test_accounts
+    test_accs = load_test_accounts().get("accounts")
+    if test_accs:
+        if "auth" not in raw:
+            raw["auth"] = {}
+        if not raw["auth"].get("accounts"):
+            raw["auth"]["accounts"] = test_accs
 
     if raw_overrides:
         if "diagnosis_2_2" in raw_overrides:
