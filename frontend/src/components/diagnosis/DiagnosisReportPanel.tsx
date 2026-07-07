@@ -30,8 +30,11 @@ export function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
+
 function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
   const rows: { label: string; value: string }[] = [];
+  const blocks: { label: string; value: string }[] = [];
+
   const add = (label: string, key: string) => {
     const v = evidence[key];
     if (v !== undefined && v !== null && v !== "") {
@@ -39,11 +42,22 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
     }
   };
 
+  const addBlock = (label: string, key: string) => {
+    const v = evidence[key];
+    if (v !== undefined && v !== null && v !== "") {
+      blocks.push({ label, value: String(v) });
+    }
+  };
+
   add("Login URL", "login_url");
   add("Login label", "login_label");
   add("Probe mode", "probe_mode");
   add("Reason", "reason");
-  add("Remediation", "remediation");
+  add("Matched regex", "matched_regex");
+  add("Found param", "found_param");
+  add("Value prefix", "value_prefix");
+  add("Param format", "param_format");
+  add("Action URL", "action_url");
 
   const scenarioA = evidence.scenario_a as Record<string, unknown> | undefined;
   if (scenarioA) {
@@ -89,10 +103,19 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
   add("Affected Parameters", "affected_parameters");
   add("Writer Role", "cross_account_writer_role");
   add("Reader Role", "cross_account_reader_role");
-  add("Description", "vuln_description");
-  add("Validation Reason", "validation_reason");
-  add("Remediation Guide", "remediation_guide");
-  add("Remediation Cause", "remediation_cause");
+  
+  // Specific blocks for 1-1 from latest.yaml
+  addBlock("Vulnerability Description", "vuln_description");
+  addBlock("Validation Reason", "validation_reason");
+  addBlock("Description", "description");
+  addBlock("Remediation Summary", "remediation_summary");
+  addBlock("Remediation Cause", "remediation_cause");
+  addBlock("Remediation Guide", "remediation_guide");
+  addBlock("Remediation Code", "remediation_code");
+  addBlock("Evidence Request", "evidence_request");
+  addBlock("Evidence Response", "evidence_response");
+  addBlock("Evidence", "evidence");
+
   add("Payloads tried", "payloads_tried_count");
   add("HTTP", "http_status");
   add("Baseline HTTP", "baseline_http_status");
@@ -153,8 +176,6 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
     });
   }
 
-  if (rows.length === 0) return null;
-
   const leak = evidence.payload_leak_markers;
   if (Array.isArray(leak) && leak.length > 0) {
     rows.push({ label: "Payload leak markers", value: leak.map(String).join("; ") });
@@ -164,15 +185,33 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
     rows.push({ label: "Sensitive markers", value: sensitive.map(String).join("; ") });
   }
 
+  if (rows.length === 0 && blocks.length === 0) return null;
+
   return (
-    <dl className="mt-2 space-y-1 border-t border-cyber-border/20 pt-2 text-[10px]">
-      {rows.map(({ label, value }) => (
-        <div key={label} className="grid grid-cols-[7rem_1fr] gap-2">
-          <dt className="text-cyber-muted">{label}</dt>
-          <dd className="break-all font-mono text-cyan-300/80">{value}</dd>
+    <div className="mt-2 space-y-3 border-t border-cyber-border/20 pt-2 text-[10px]">
+      {rows.length > 0 && (
+        <dl className="space-y-1">
+          {rows.map(({ label, value }) => (
+            <div key={label} className="grid grid-cols-[7rem_1fr] gap-2">
+              <dt className="text-cyber-muted font-medium">{label}</dt>
+              <dd className="break-all font-mono text-cyan-300/80">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {blocks.length > 0 && (
+        <div className="space-y-3 mt-4 border-t border-cyber-border/10 pt-3">
+          {blocks.map(({ label, value }) => (
+            <div key={label} className="flex flex-col gap-1.5">
+              <span className="text-cyber-muted font-semibold border-b border-cyber-border/20 pb-0.5">{label}</span>
+              <pre className="whitespace-pre-wrap break-all font-mono text-[10.5px] text-cyan-200/90 bg-cyber-bg/50 p-2.5 rounded border border-cyber-border/30 overflow-x-auto max-h-80 overflow-y-auto">
+                {value}
+              </pre>
+            </div>
+          ))}
         </div>
-      ))}
-    </dl>
+      )}
+    </div>
   );
 }
 

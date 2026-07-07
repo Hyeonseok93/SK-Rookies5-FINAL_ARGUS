@@ -94,6 +94,11 @@ class Endpoint:
     auth: list[str] = field(default_factory=list)
     kind: str = "api"  # api | frontend
 
+    def __post_init__(self) -> None:
+        import os
+        if os.path.exists("/.dockerenv") and isinstance(self.base_url, str):
+            self.base_url = self.base_url.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
+
     @property
     def inputs(self) -> list[InputParam]:
         """Legacy aggregate used by stats/export."""
