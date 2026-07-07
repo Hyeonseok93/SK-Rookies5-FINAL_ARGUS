@@ -135,6 +135,11 @@ class SwaggerParser:
                     "summary":       operation.get("summary", ""),
                     "tags":          operation.get("tags", []),
                     "operation_id":  operation.get("operationId", ""),
+                    # operation별로 자기 서버가 지정돼 있으면(admin API 등 서로
+                    # 다른 base_url을 가진 endpoint가 하나의 스펙에 섞여 있는
+                    # 경우) 여기서 보존해서 get_fuzz_targets가 override_host
+                    # 대신 이 값을 쓸 수 있게 한다.
+                    "base_url":      str(operation.get("x-argus-base-url") or "").rstrip("/"),
                 })
 
         logger.info(f"[Parser] 엔드포인트 추출 완료: {len(endpoints)} 개")
@@ -368,24 +373,43 @@ class SwaggerParser:
     # -------------------------------------------------------------------------
     # 퍼징에 바로 쓸 수 있는 형태로 정리
     # -------------------------------------------------------------------------
-    def get_fuzz_targets(self) -> list:
+    def get_fuzz_targets(self, override_host: str = "") -> list:
         """
         퍼저가 바로 사용할 수 있는 형태로 엔드포인트 + 파라미터를 정리합니다.
         인증이 필요한 엔드포인트와 POST/PUT/PATCH 위주로 반환합니다.
 
+        Args:
+            override_host: 주어지면 스펙의 servers[0].url 대신 이 값을
+                           base_url로 사용 (예: CLI --target). 기존 동작
+                           (항상 --target 우선)을 그대로 유지하려면
+                           호출부에서 이 값을 넘겨야 한다.
+
         Returns:
-            [{"path": "/api/v1/users", "method": "post", "body_schema": {...}}, ...]
+            [{"path": "/api/v1/users", "method": "post", "body_schema": {...},
+              "base_url": "http://localhost:8080"}, ...]
+
+        base_url은 여러 스펙(예: 일반 API + admin 전용 스펙)을 합쳐서
+        fuzzer에 넘길 때, 각 endpoint가 자기 서버로 요청을 보내도록 하기
+        위함입니다 (예: admin 스펙만 포트가 다른 경우).
         """
+        default_base_url = self.get_base_url(override_host)
         targets = []
         for ep in self.get_endpoints():
             # W-1-6 은 데이터 주입이 목적이므로 body 가 있는 엔드포인트 우선
             body = ep["params"].get("body", {})
+            # endpoint 자신의 base_url(예: api-tree에서 넘어온 admin API 등
+            # override_host와 다른 서버)이 있으면 그걸 우선 쓰고, 없으면
+            # 기존 동작대로 override_host/스펙 기본 서버를 그대로 쓴다.
+            endpoint_base_url = ep.get("base_url") or default_base_url
             targets.append({
                 "path":         ep["path"],
                 "method":       ep["method"],
                 "body_schema":  body,
+                "params":       ep["params"],
+                "path_params":  list(ep["params"].get("path", {}).keys()),
                 "requires_auth": ep["requires_auth"],
                 "summary":      ep["summary"],
+                "base_url":     endpoint_base_url,
             })
         logger.info(f"[Parser] 퍼징 대상 정리 완료: {len(targets)} 개")
         return targets

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import asyncio
+import importlib.util
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,13 +52,67 @@ def _load_json(path: Path, default: Any) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _run_screenshot_capture(ctx: DiagnosisContext, cfg: dict[str, Any], run_dir: Path) -> dict[str, Any]:
+    if cfg.get("screenshot_enabled") is False:
+        return {"enabled": False, "reason": "disabled_by_config"}
+
+    screenshot_dir = ctx.data_dir.parent / "screenshot" / "modules" / "1-6"
+    runner_path = screenshot_dir / "runner.py"
+    if not runner_path.is_file():
+        return {
+            "enabled": False,
+            "reason": "runner_missing",
+            "runner": str(runner_path),
+        }
+
+    if str(screenshot_dir) not in sys.path:
+        sys.path.insert(0, str(screenshot_dir))
+
+    spec = importlib.util.spec_from_file_location("w16_screenshot_runner", runner_path)
+    if spec is None or spec.loader is None:
+        return {
+            "enabled": False,
+            "reason": "runner_load_failed",
+            "runner": str(runner_path),
+        }
+
+    try:
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["w16_screenshot_runner"] = module
+        spec.loader.exec_module(module)
+        no_capture = bool(cfg.get("screenshot_plan_only", False))
+        manifest = asyncio.run(module.run_capture(run_dir, no_capture=no_capture))
+        return {
+            "enabled": True,
+            "status": manifest.get("status"),
+            "plan": str(run_dir / "screenshot_plan.json"),
+            "manifest": str(run_dir / "screenshot_manifest.json"),
+            "stats": manifest.get("stats", {}),
+            "error": manifest.get("error"),
+        }
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "status": "error",
+            "runner": str(runner_path),
+            "error": str(exc),
+        }
+
+
 def run_g16_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     cfg = _cfg(ctx)
     engine_target = resolve_engine_target(cfg, ctx.raw_config, module_dir, data_dir=ctx.data_dir)
     if not engine_target.main_py.is_file():
+        hint = ""
+        if cfg.get("w16_root"):
+            hint = (
+                " (요청에 g16.w16_root가 지정되어 있습니다 - Swagger 'Try it out'의 "
+                "placeholder 값('string')을 지우지 않고 그대로 보낸 건 아닌지 확인하세요. "
+                "기본 엔진 경로를 쓰려면 w16_root를 비워두거나 생략하세요.)"
+            )
         return ScanResult(
             status="skipped",
-            message=f"Embedded W16 engine not found: {engine_target.main_py}",
+            message=f"Embedded W16 engine not found: {engine_target.main_py}{hint}",
             stats={
                 "reason": "w16_engine_missing",
                 "engine_root": str(engine_target.engine_root),
@@ -136,6 +192,16 @@ def run_g16_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             "raw_findings_count": len(raw_findings),
         }
     )
+
+    _progress_update(
+        {
+            "phase": "running",
+            "message": "1-6 generating evidence screenshots",
+            "percent": 96,
+        }
+    )
+    screenshot_stats = _run_screenshot_capture(ctx, cfg, run_dir)
+    stats["screenshots"] = screenshot_stats
 
     limit = max(0, int(cfg.get("max_report_findings", 50)))
     findings = convert_findings(raw_findings, limit)
