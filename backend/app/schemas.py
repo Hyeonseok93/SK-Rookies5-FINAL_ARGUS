@@ -479,6 +479,17 @@ class DiagnosisG34RunOptions(BaseModel):
     inventory_scope: Literal["login_only", "full"] | None = None
 
 
+class DiagnosisG21RunOptions(BaseModel):
+    """Per-run overrides for guideline 2-1 malicious upload scan."""
+
+    httpx_enabled: bool | None = None
+    zap_enabled: bool | None = None
+    max_targets: int | None = Field(default=None, ge=1, le=200)
+    zap_passive_wait_seconds: int | None = Field(default=None, ge=0, le=300)
+    timeout: float | None = Field(default=None, ge=1.0, le=60.0)
+    allowed_extensions: list[str] | None = None
+
+
 class DiagnosisG42RunOptions(BaseModel):
     """Per-run overrides for guideline 4-2 token/session safety scan."""
 
@@ -493,6 +504,7 @@ class DiagnosisG42RunOptions(BaseModel):
 
 class DiagnosisRunSectionRequest(BaseModel):
     g15: DiagnosisG15RunOptions | None = None
+    g21: DiagnosisG21RunOptions | None = None
     g41: DiagnosisG41RunOptions | None = None
     g22: DiagnosisG22RunOptions | None = None
     g32: DiagnosisG32RunOptions | None = None
