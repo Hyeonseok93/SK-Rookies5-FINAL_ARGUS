@@ -1351,8 +1351,6 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
         <G72FindingsPanel findings={findings} />
       ) : report.section_id === "7-3" ? (
         <G73FindingsPanel findings={findings} />
-      ) : report.section_id === "7-4" ? (
-        <G74FindingsPanel findings={findings} />
       ) : (
         <GroupedFindingsPanel findings={findings} sectionId={report.section_id} />
       )}
