@@ -21,6 +21,7 @@ def write_batch_manifest(
     url_list: str | None = None,
     api_list: str | None = None,
     openapi: list[str] | None = None,
+    gradle_deps: list[str] | None = None,
 ) -> Path:
     """Write manifest.json listing files stored in this batch (relative names)."""
     manifest: dict[str, Any] = {
@@ -30,6 +31,7 @@ def write_batch_manifest(
             "url_list": url_list,
             "api_list": api_list,
             "openapi": openapi,
+            "gradle_deps": gradle_deps,
         },
     }
     path = batch_dir / "manifest.json"
