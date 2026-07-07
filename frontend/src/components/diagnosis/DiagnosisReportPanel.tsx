@@ -127,6 +127,13 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
       value: affected.length > 8 ? `${preview}, … (+${affected.length - 8})` : preview,
     });
   }
+  const affectedExts = evidence.affected_extensions;
+  if (Array.isArray(affectedExts) && affectedExts.length > 1) {
+    rows.push({
+      label: "Affected extensions",
+      value: affectedExts.map((e) => `.${e}`).join(", "),
+    });
+  }
 
   const tried = evidence.payloads_tried;
   if (Array.isArray(tried) && tried.length > 0) {
@@ -332,6 +339,7 @@ function ZapStatsLine({ zap }: { zap: unknown }) {
 export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionReport }) {
   const statsMessages = new Set([
     "1-5 scan statistics",
+    "2-1 scan statistics",
     "4-1 scan statistics",
     "4-2 scan statistics",
     "2-2 scan statistics",
@@ -351,6 +359,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const statsFinding = report.findings.find((f) => statsMessages.has(f.message));
   const stats = statsFinding?.evidence?.stats as Record<string, unknown> | undefined;
   const isG15Stats = statsFinding?.message === "1-5 scan statistics";
+  const isG21Stats = statsFinding?.message === "2-1 scan statistics";
   const isG41Stats = statsFinding?.message === "4-1 scan statistics";
   const isG42Stats = statsFinding?.message === "4-2 scan statistics";
   const isG22Stats = statsFinding?.message === "2-2 scan statistics";
@@ -404,6 +413,43 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span className="text-amber-300/90">
                   {" "}
                   · CORS {(stats.cors as { issues?: number }).issues}
+                </span>
+              ) : null}
+            </>
+          ) : null}
+          {isG21Stats ? (
+            <>
+              <span className="font-mono text-cyan-300/90">{String(stats.source ?? "inventory")}</span>
+              {" · 대상 "}
+              <span className="font-mono text-cyan-300/90">
+                {String(stats.targets_probed ?? stats.targets ?? "—")}
+              </span>
+              {typeof stats.upload_endpoints_found === "number" ? (
+                <span> / api-tree 탐지 {stats.upload_endpoints_found}</span>
+              ) : null}
+              {stats.truncated_to ? (
+                <span className="text-amber-300/80"> · max {String(stats.truncated_to)}로 제한</span>
+              ) : null}
+              {typeof (stats.httpx as { findings?: number })?.findings === "number" ? (
+                <span> · httpx finding {(stats.httpx as { findings?: number }).findings}</span>
+              ) : null}
+              <ZapStatsLine zap={stats.zap} />
+              {typeof stats.collapsed_issues === "number" ? (
+                <span className={stats.collapsed_issues > 0 ? "text-rose-300/90" : "text-emerald-300/90"}>
+                  {" "}
+                  · unique issue {stats.collapsed_issues}
+                </span>
+              ) : null}
+              {typeof stats.raw_issues === "number" && typeof stats.collapsed_issues === "number" &&
+              stats.raw_issues > stats.collapsed_issues ? (
+                <span className="text-cyber-muted"> (raw {stats.raw_issues} → deduped)</span>
+              ) : null}
+              {stats.auth_configured === false ? (
+                <span className="text-amber-300/90"> · auth skip</span>
+              ) : typeof stats.auth_sessions === "number" && stats.auth_sessions > 0 ? (
+                <span className="text-cyan-300/80">
+                  {" "}
+                  · {1 + stats.auth_sessions} passes ({stats.auth_sessions} auth)
                 </span>
               ) : null}
             </>

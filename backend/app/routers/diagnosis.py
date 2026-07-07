@@ -72,6 +72,7 @@ def run_module(
     section_id: str,
     body: DiagnosisRunSectionRequest | None = None,
 ) -> DiagnosisRunSectionResponse:
+    g21_opts = None
     g22_opts = None
     g71_opts = None
     g72_opts = None
@@ -89,6 +90,8 @@ def run_module(
     g42_opts = None
     if body and body.g15 is not None:
         g15_opts = body.g15.model_dump(exclude_none=True)
+    if body and body.g21 is not None:
+        g21_opts = body.g21.model_dump(exclude_none=True)
     if body and body.g41 is not None:
         g41_opts = body.g41.model_dump(exclude_none=True)
     if body and body.g22 is not None:
@@ -121,6 +124,7 @@ def run_module(
         report = diagnosis_service.run_section(
             section_id,
             g15_options=g15_opts,
+            g21_options=g21_opts,
             g41_options=g41_opts,
             g22_options=g22_opts,
             g71_options=g71_opts,

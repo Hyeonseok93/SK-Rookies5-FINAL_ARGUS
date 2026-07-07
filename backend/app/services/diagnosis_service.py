@@ -23,7 +23,11 @@ def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
 
     if raw_overrides:
-        if "diagnosis_2_2" in raw_overrides:
+        if "diagnosis_2_1" in raw_overrides:
+            base_g21 = dict(raw.get("diagnosis_2_1") or {})
+            base_g21.update(raw_overrides["diagnosis_2_1"])
+            raw = {**raw, "diagnosis_2_1": base_g21}
+        elif "diagnosis_2_2" in raw_overrides:
             base_g22 = dict(raw.get("diagnosis_2_2") or {})
             base_g22.update(raw_overrides["diagnosis_2_2"])
             raw = {**raw, "diagnosis_2_2": base_g22}
@@ -128,6 +132,7 @@ def get_report(section_id: str) -> SectionReport | None:
 def run_section(
     section_id: str,
     *,
+    g21_options: dict | None = None,
     g22_options: dict | None = None,
     g71_options: dict | None = None,
     g73_options: dict | None = None,
@@ -153,7 +158,9 @@ def run_section(
         raise ValueError(f"Section {section_id} is not diagnosable automatically")
 
     overrides: dict | None = None
-    if g22_options and section_id == "2-2":
+    if g21_options and section_id == "2-1":
+        overrides = {"diagnosis_2_1": {k: v for k, v in g21_options.items() if v is not None}}
+    elif g22_options and section_id == "2-2":
         overrides = {"diagnosis_2_2": {k: v for k, v in g22_options.items() if v is not None}}
     elif g71_options and section_id == "7-1":
         overrides = {"diagnosis_7_1": {k: v for k, v in g71_options.items() if v is not None}}

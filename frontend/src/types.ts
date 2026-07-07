@@ -304,6 +304,15 @@ export interface DiagnosisG15RunOptionsPayload {
   max_phase_b_jobs?: number;
 }
 
+export interface DiagnosisG21RunOptionsPayload {
+  httpx_enabled?: boolean;
+  zap_enabled?: boolean;
+  max_targets?: number;
+  zap_passive_wait_seconds?: number;
+  timeout?: number;
+  allowed_extensions?: string[];
+}
+
 export interface DiagnosisG22RunOptionsPayload {
   httpx_enabled?: boolean;
   zap_enabled?: boolean;
@@ -442,6 +451,7 @@ export interface DiagnosisG41RunOptionsPayload {
 
 export interface DiagnosisRunSectionRequest {
   g15?: DiagnosisG15RunOptionsPayload;
+  g21?: DiagnosisG21RunOptionsPayload;
   g41?: DiagnosisG41RunOptionsPayload;
   g22?: DiagnosisG22RunOptionsPayload;
   g32?: DiagnosisG32RunOptionsPayload;

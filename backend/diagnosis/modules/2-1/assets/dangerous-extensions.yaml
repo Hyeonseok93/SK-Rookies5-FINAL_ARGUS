@@ -1,0 +1,65 @@
+# 2-1 악성코드파일 업로드 — 확장자 정책 (동적 로드, 코드 수정 없이 확장 가능)
+#
+# allowed_extensions_default:
+#   운영 정책을 알 수 없을 때 쓰는 기본 화이트리스트. endpoint 설정에서
+#   `allowed_extensions`를 지정하면 해당 값이 우선한다 (2-1은 이미지에만
+#   한정하지 않고, 엔드포인트별로 다른 화이트리스트를 가질 수 있음).
+#
+# disallowed_extensions:
+#   화이트리스트에 없어야 정상인 위험 확장자 후보 목록. 여기에 항목을
+#   추가/삭제하는 것만으로 진단 대상이 늘어나거나 줄어든다 (코드 변경 불필요).
+
+allowed_extensions_default:
+  - jpg
+  - jpeg
+  - png
+  - gif
+  - webp
+  - bmp
+
+disallowed_extensions:
+  - ext: php
+    mime: application/x-php
+    category: server_script
+  - ext: php5
+    mime: application/x-php
+    category: server_script
+  - ext: phtml
+    mime: application/x-php
+    category: server_script
+  - ext: jsp
+    mime: application/octet-stream
+    category: server_script
+  - ext: jspx
+    mime: application/octet-stream
+    category: server_script
+  - ext: asp
+    mime: application/octet-stream
+    category: server_script
+  - ext: aspx
+    mime: application/octet-stream
+    category: server_script
+  - ext: exe
+    mime: application/x-msdownload
+    category: executable
+  - ext: sh
+    mime: application/x-sh
+    category: executable
+  - ext: bat
+    mime: application/x-bat
+    category: executable
+  - ext: js
+    mime: application/javascript
+    category: active_content
+  - ext: html
+    mime: text/html
+    category: active_content
+  - ext: htm
+    mime: text/html
+    category: active_content
+  - ext: svg
+    mime: image/svg+xml
+    category: active_content
+  - ext: jar
+    mime: application/java-archive
+    category: executable
