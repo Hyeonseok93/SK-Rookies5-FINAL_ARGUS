@@ -24,7 +24,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8090/JSON/core/view/version/ || exit 1"]
+      test: [ "CMD-SHELL", "curl -sf http://127.0.0.1:8090/JSON/core/view/version/ || exit 1" ]
       interval: 5s
       timeout: 5s
       retries: 18
@@ -54,13 +54,7 @@ services:
       zap:
         condition: service_healthy
     healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)",
-        ]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)" ]
       interval: 5s
       timeout: 5s
       retries: 12

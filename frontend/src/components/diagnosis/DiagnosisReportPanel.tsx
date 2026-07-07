@@ -1,21 +1,7 @@
 import { useState } from "react";
 import { ChevronDown, Terminal, Copy } from "lucide-react"; // 💡 Terminal, Copy 추가
 import type { DiagnosisSectionReport } from "../../types";
-import { G15FindingsPanel } from "./G15FindingsPanel";
-import { G22FindingsPanel } from "./G22FindingsPanel";
-import { G32FindingsPanel } from "./G32FindingsPanel";
-import { G34FindingsPanel } from "./G34FindingsPanel";
-import { G35FindingsPanel } from "./G35FindingsPanel";
-import { G36FindingsPanel } from "./G36FindingsPanel";
-import { G42FindingsPanel } from "./G42FindingsPanel";
-import { G45FindingsPanel } from "./G45FindingsPanel";
-import { G52FindingsPanel } from "./G52FindingsPanel";
-import { G61FindingsPanel } from "./G61FindingsPanel";
-import { G62FindingsPanel } from "./G62FindingsPanel";
-import { G71FindingsPanel } from "./G71FindingsPanel";
-import { G72FindingsPanel } from "./G72FindingsPanel";
-import { G73FindingsPanel } from "./G73FindingsPanel";
-import { G74FindingsPanel } from "./G74FindingsPanel";
+
 
 const STATUS_STYLES: Record<string, string> = {
   pass: "border-emerald-400/50 bg-emerald-500/10 text-emerald-300",
@@ -129,7 +115,7 @@ function FindingEvidence({
   add("Affected Parameters", "affected_parameters");
   add("Writer Role", "cross_account_writer_role");
   add("Reader Role", "cross_account_reader_role");
-  
+
   // Specific blocks for 1-1 from latest.yaml
   addBlock("Vulnerability Description", "vuln_description");
   addBlock("Validation Reason", "validation_reason");
@@ -214,30 +200,14 @@ function FindingEvidence({
   if (rows.length === 0 && blocks.length === 0) return null;
 
   return (
-    <div className="mt-2 space-y-3 border-t border-cyber-border/20 pt-2 text-[10px]">
-      {rows.length > 0 && (
-        <dl className="space-y-1">
-          {rows.map(({ label, value }) => (
-            <div key={label} className="grid grid-cols-[7rem_1fr] gap-2">
-              <dt className="text-cyber-muted font-medium">{label}</dt>
-              <dd className="break-all font-mono text-cyan-300/80">{value}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
-      {blocks.length > 0 && (
-        <div className="space-y-3 mt-4 border-t border-cyber-border/10 pt-3">
-          {blocks.map(({ label, value }) => (
-            <div key={label} className="flex flex-col gap-1.5">
-              <span className="text-cyber-muted font-semibold border-b border-cyber-border/20 pb-0.5">{label}</span>
-              <pre className="whitespace-pre-wrap break-all font-mono text-[10.5px] text-cyan-200/90 bg-cyber-bg/50 p-2.5 rounded border border-cyber-border/30 overflow-x-auto max-h-80 overflow-y-auto">
-                {value}
-              </pre>
-            </div>
-          ))}
+    <dl className="mt-2 space-y-1 border-t border-cyber-border/20 pt-2 text-[10px]">
+      {rows.map(({ label, value }) => (
+        <div key={label} className="grid grid-cols-[7rem_1fr] gap-2">
+          <dt className="text-cyber-muted">{label}</dt>
+          <dd className="break-all font-mono text-cyan-300/80">{value}</dd>
         </div>
-      )}
-    </div>
+      ))}
+    </dl>
   );
 }
 
@@ -317,33 +287,17 @@ function FindingListItem({
 
   return (
     <li className="rounded border border-cyber-border/30 bg-cyber-panel/30 px-3 py-2">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-start gap-2">
-          <span
-            className={`shrink-0 font-mono text-[10px] uppercase ${SEVERITY_STYLES[f.severity] ?? SEVERITY_STYLES.info}`}
-          >
-            {f.severity}
-          </span>
-          {/* Staging에서 추가된 1-2 뱃지 유지 */}
-          {sectionId === "1-2" ? <G12InjectionSignalBadge evidence={f.evidence} /> : null}
-          <span className="text-xs text-white/90">{f.message}</span>
-        </div>
-        
-        {/* 우리가 만든 토글 버튼 유지 */}
-        {hasEvidence && (
-          <button
-            type="button"
-            onClick={() => setShowDetails(!showDetails)}
-            className="shrink-0 rounded border border-cyber-border/60 bg-cyber-bg px-2 py-0.5 text-[10px] text-cyber-muted hover:text-cyan-300 transition"
-          >
-            {showDetails ? "접기" : "상세 보기"}
-          </button>
-        )}
+      <div className="flex items-start gap-2">
+        <span
+          className={`shrink-0 font-mono text-[10px] uppercase ${SEVERITY_STYLES[f.severity] ?? SEVERITY_STYLES.info}`}
+        >
+          {f.severity}
+        </span>
+        {sectionId === "1-2" ? <G12InjectionSignalBadge evidence={f.evidence} /> : null}
+        <span className="text-xs text-white/90">{f.message}</span>
       </div>
-      
-      {/* 두 브랜치의 로직 통합: 토글 상태 확인 + sectionId 넘겨주기 */}
-      {showDetails && hasEvidence ? (
-        <FindingEvidence evidence={f.evidence!} sectionId={sectionId} />
+      {f.evidence && Object.keys(f.evidence).length > 0 ? (
+        <FindingEvidence evidence={f.evidence} sectionId={sectionId} />
       ) : null}
     </li>
   );
