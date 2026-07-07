@@ -181,18 +181,32 @@ function FindingListItem({
 }: {
   f: { severity: string; message: string; evidence?: Record<string, unknown> };
 }) {
+  const [showDetails, setShowDetails] = useState(false);
+  const hasEvidence = f.evidence && Object.keys(f.evidence).length > 0;
+
   return (
     <li className="rounded border border-cyber-border/30 bg-cyber-panel/30 px-3 py-2">
-      <div className="flex items-start gap-2">
-        <span
-          className={`shrink-0 font-mono text-[10px] uppercase ${SEVERITY_STYLES[f.severity] ?? SEVERITY_STYLES.info}`}
-        >
-          {f.severity}
-        </span>
-        <span className="text-xs text-white/90">{f.message}</span>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-2">
+          <span
+            className={`shrink-0 font-mono text-[10px] uppercase ${SEVERITY_STYLES[f.severity] ?? SEVERITY_STYLES.info}`}
+          >
+            {f.severity}
+          </span>
+          <span className="text-xs text-white/90">{f.message}</span>
+        </div>
+        {hasEvidence && (
+          <button
+            type="button"
+            onClick={() => setShowDetails(!showDetails)}
+            className="shrink-0 rounded border border-cyber-border/60 bg-cyber-bg px-2 py-0.5 text-[10px] text-cyber-muted hover:text-cyan-300 transition"
+          >
+            {showDetails ? "접기" : "상세 보기"}
+          </button>
+        )}
       </div>
-      {f.evidence && Object.keys(f.evidence).length > 0 ? (
-        <FindingEvidence evidence={f.evidence} />
+      {showDetails && hasEvidence ? (
+        <FindingEvidence evidence={f.evidence!} />
       ) : null}
     </li>
   );
