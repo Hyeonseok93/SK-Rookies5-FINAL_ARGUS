@@ -14,6 +14,10 @@ from typing import Any, Callable
 from g16_auth import redact_roles
 from g16_inventory import login_override
 from g16_targets import EngineTarget
+from inventory.net import probe_base_url
+
+# Config values that carry a base URL and must follow the probe host under Docker.
+_URL_OPTION_KEYS = frozenset({"ui_target", "login_target"})
 
 
 @dataclass
@@ -133,6 +137,9 @@ def build_command(
                 value_path = Path(str(value))
                 if not value_path.is_absolute():
                     value = str(engine_target.engine_root / value_path)
+            elif key in _URL_OPTION_KEYS:
+                # Docker: keep login/UI targets on the host, not the container.
+                value = probe_base_url(str(value))
             cmd.extend([flag, str(value)])
 
     for key, flag in [
@@ -169,7 +176,12 @@ def run_engine(
     stderr_file = stderr_path.open("w", encoding="utf-8", errors="replace")
     env = os.environ.copy()
     if isinstance(cfg.get("role_login_targets"), dict):
-        env["ARGUS_ROLE_LOGIN_TARGETS"] = json.dumps(cfg["role_login_targets"])
+        # Docker: each per-role login base must target the host, not the container.
+        role_login_targets = {
+            role: probe_base_url(str(base))
+            for role, base in cfg["role_login_targets"].items()
+        }
+        env["ARGUS_ROLE_LOGIN_TARGETS"] = json.dumps(role_login_targets)
     if isinstance(cfg.get("role_login_paths"), dict):
         env["ARGUS_ROLE_LOGIN_PATHS"] = json.dumps(cfg["role_login_paths"])
     proc = subprocess.Popen(
