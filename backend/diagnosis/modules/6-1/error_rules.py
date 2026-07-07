@@ -52,6 +52,7 @@ class LeakHit:
     sk_class: str
     marker: str
     hint: str
+    confidence: str = "high"
 
 
 _DB_PATTERNS: list[tuple[str, str, str]] = [
@@ -73,6 +74,43 @@ _PY_DOTNET_PATTERNS: list[tuple[str, str, str]] = [
     (r"at microsoft\.|at system\.|system\.\w+exception", "dotnet_stack", ".NET exception"),
 ]
 
+# WAS/framework-specific debug pages & stack formats not covered by the
+# generic Java/Python/.NET patterns above. Added to widen coverage to match
+# the WAS/framework examples the SK Shielders guideline calls out (IIS,
+# ASP.NET, and comparable stacks for other common runtimes).
+_WAS_STACK_PATTERNS: list[tuple[str, str, str]] = [
+    (
+        r"server error in '/' application|"
+        r"microsoft vbscript runtime error|"
+        r"microsoft ole db provider for|"
+        r"compilation error|"
+        r"an unhandled exception occurred while processing the request",
+        "aspnet_debug",
+        "ASP.NET / classic ASP debug page",
+    ),
+    (
+        r"django version:|you're seeing this error because you have debug = true|"
+        r"disallowedhost at |exception type:.*exception value:",
+        "django_debug",
+        "Django debug error page",
+    ),
+    (r"werkzeug debugger|traceback \(most recent call last\).*flask", "flask_debug", "Flask/Werkzeug debug page"),
+    (
+        r"at object\.<anonymous>|internal/modules/cjs/loader\.js|unhandledpromiserejection|"
+        r"throw err;\s*\^",
+        "node_stack",
+        "Node.js/Express stack trace",
+    ),
+    (
+        r"actioncontroller::routingerror|app/controllers/.*\.rb:\d+|"
+        r"activerecord::\w*error",
+        "rails_stack",
+        "Ruby on Rails stack trace",
+    ),
+    (r"weblogic\.\w+\.\w+exception|weblogic\.servlet", "weblogic_stack", "WebLogic exception leak"),
+    (r"jeus\.\w+\.\w+exception|tmax jeus", "jeus_stack", "Jeus exception leak"),
+]
+
 _PHP_PATTERNS: list[tuple[str, str, str]] = [
     (r"fatal error:.* in /", "php_fatal", "PHP fatal error with path"),
     (r"parse error:.* in /", "php_parse", "PHP parse error with path"),
@@ -90,6 +128,15 @@ _FRAMEWORK_PATTERNS: list[tuple[str, str, str]] = [
     (r"whitelabel error page", "spring_whitelabel", "Spring Whitelabel error page"),
     (r"org\.hibernate\.|hibernate exception", "hibernate", "Hibernate leak"),
     (r"tomcat\.|apache tomcat|error report", "tomcat", "Tomcat default error"),
+    (
+        r"iis (detailed error|10\.0 detailed error)|the page cannot be displayed|"
+        r"http error 500\.19|http error 500\.0|internet information services",
+        "iis_default",
+        "IIS default error page",
+    ),
+    (r"webtob|tmaxsoft webtob", "webtob_default", "WebToB default error page"),
+    (r"jeus error page|jeus web server", "jeus_default", "Jeus default error page"),
+    (r"iplanet-web-server", "iplanet_banner", "iPlanet web server banner"),
 ]
 
 _SPRING_STRICT_PATTERNS: list[tuple[str, str, str]] = [
@@ -109,6 +156,18 @@ _HTTP_PATTERNS: list[tuple[str, str, str]] = [
     (r'"exception"\s*:\s*"[^"]{8,}"', "json_exception_field", "JSON exception field with content"),
     (r"nginx/\d|apache/\d", "web_server_banner", "Web server version in body"),
 ]
+
+# Categories whose patterns key off generic substrings / keyword co-occurrence
+# rather than an unambiguous exception/stack signature. These can plausibly
+# false-positive (e.g. a legitimate page mentioning "/opt/" or a long verbose
+# 200 body), so hits here are downgraded to "review" instead of "high"
+# confidence — a diagnostician should confirm before treating them as a fail.
+_REVIEW_CATEGORIES = {"path_disclosure", "verbose_error"}
+
+
+def _confidence_for_category(category: str) -> str:
+    return "review" if category in _REVIEW_CATEGORIES else "high"
+
 
 _CATEGORY_SK: dict[str, str] = {
     "database": SK_DBMS,
@@ -185,13 +244,19 @@ def _walk_strings(obj: Any) -> list[tuple[str, str]]:
 
 
 def _detect_sk_api_error_json(parsed: Any, *, status_code: int) -> list[LeakHit]:
-    """Flag server-side error text returned to the client (SK Shielders 6-1)."""
+    """Flag server-side error text returned to the client (SK Shielders 6-1).
+
+    These are generic JSON-field heuristics (any "message"/"error"/"systemMessage"
+    field on an error response) rather than a deterministic exception signature,
+    so they are tagged "review" confidence — a diagnostician should confirm
+    whether the field genuinely leaks server-internal detail or is just the
+    app's normal error envelope shape.
+    """
     if status_code < 400 or not isinstance(parsed, dict):
         return []
 
     hits: list[LeakHit] = []
     fields = _walk_strings(parsed)
-
     for key, value in fields:
         key_lower = key.lower()
         if key_lower == "systemmessage":
@@ -203,6 +268,7 @@ def _detect_sk_api_error_json(parsed: Any, *, status_code: int) -> list[LeakHit]
                     sk_class=SK_HTTP,
                     marker=value[:120],
                     hint="systemMessage field exposes server error text to client",
+                    confidence="review",
                 )
             )
             break
@@ -217,6 +283,7 @@ def _detect_sk_api_error_json(parsed: Any, *, status_code: int) -> list[LeakHit]
                 sk_class=SK_HTTP,
                 marker=msg.strip()[:120],
                 hint="Error response message field exposes server/application error text",
+                confidence="review",
             )
         )
 
@@ -230,6 +297,7 @@ def _detect_sk_api_error_json(parsed: Any, *, status_code: int) -> list[LeakHit]
                 sk_class=SK_HTTP,
                 marker=err.strip()[:120],
                 hint="Error string field in JSON error response",
+                confidence="review",
             )
         )
     elif isinstance(err, dict):
@@ -243,6 +311,7 @@ def _detect_sk_api_error_json(parsed: Any, *, status_code: int) -> list[LeakHit]
                     sk_class=SK_HTTP,
                     marker=detail.strip()[:120],
                     hint="Nested error object exposes server error text",
+                    confidence="review",
                 )
             )
 
@@ -255,9 +324,9 @@ def _detect_sk_api_error_json(parsed: Any, *, status_code: int) -> list[LeakHit]
                 sk_class=SK_HTTP,
                 marker="success:false",
                 hint="API error envelope returned to client on failed request",
+                confidence="review",
             )
         )
-
     return hits
 
 
@@ -270,6 +339,7 @@ def _match_patterns(
 ) -> list[LeakHit]:
     hits: list[LeakHit] = []
     lower = text.lower()
+    confidence = _confidence_for_category(category)
     for pattern, rule_id, hint in patterns:
         if not re.search(pattern, text, _RE_FLAGS) and not re.search(pattern, lower, _RE_FLAGS):
             continue
@@ -283,6 +353,7 @@ def _match_patterns(
                 sk_class=classify_sk(category=category, rule_id=rule_id),
                 marker=marker,
                 hint=hint,
+                confidence=confidence,
             )
         )
     return hits
@@ -299,13 +370,10 @@ def _filter_hits(
     for hit in hits:
         if hit.rule_id in seen:
             continue
-
         if hit.sk_class == SK_HTTP and status_code < 400:
             continue
-
         if is_json and hit.rule_id.startswith("php_"):
             continue
-
         seen.add(hit.rule_id)
         out.append(hit)
     return out
@@ -332,9 +400,11 @@ def analyze_error_response(
         stack_patterns.extend(_PHP_PATTERNS)
     hits.extend(_match_patterns(text, stack_patterns, severity="high", category="stack_trace"))
     hits.extend(_match_patterns(text, _PY_DOTNET_PATTERNS, severity="high", category="stack_trace"))
+    hits.extend(_match_patterns(text, _WAS_STACK_PATTERNS, severity="high", category="stack_trace"))
 
     hits.extend(_match_patterns(text, _PATH_PATTERNS, severity="medium", category="path_disclosure"))
     hits.extend(_match_patterns(text, _FRAMEWORK_PATTERNS, severity="medium", category="framework"))
+
     if status_code >= 400 or _has_technical_leak(text):
         hits.extend(_match_patterns(text, _SPRING_STRICT_PATTERNS, severity="medium", category="framework"))
 
@@ -352,6 +422,7 @@ def analyze_error_response(
                 sk_class=SK_HTTP,
                 marker=text[:80].replace("\n", " "),
                 hint="Large 5xx body with exception-like content",
+                confidence="review",
             )
         )
 
@@ -371,6 +442,17 @@ def remediation_hint(rule_id: str) -> str:
         "api_error_envelope": "Use a unified generic error handler; avoid exposing server failure details in JSON.",
         "unix_home_path": "Strip filesystem paths from error messages.",
         "verbose_500_body": "Return minimal 5xx JSON/HTML without internal exception text.",
+        "aspnet_debug": "Set customErrors mode=On in web.config; disable IIS/ASP.NET debug pages in production.",
+        "django_debug": "Set DEBUG=False in Django settings and configure ALLOWED_HOSTS / custom 500 handler.",
+        "flask_debug": "Disable Werkzeug debugger (debug=False) in production Flask/WSGI config.",
+        "node_stack": "Add a generic error-handling middleware; never send err.stack to the client.",
+        "rails_stack": "Set config.consider_all_requests_local = false and config.action_dispatch.show_exceptions = false.",
+        "weblogic_stack": "Configure WebLogic error-page mapping (web.xml) for all HTTP codes; disable verbose faults.",
+        "jeus_stack": "Set print-error-to-browser=false in WEBMain.xml and configure Jeus error documents.",
+        "iis_default": "Configure IIS custom error pages (Error Pages panel) for 400/401/403/404/405/500.",
+        "webtob_default": "Configure ErrorDocument mapping in WebToB's http.m for all error codes.",
+        "jeus_default": "Configure Jeus admin console error-document settings per node/engine.",
+        "iplanet_banner": "Configure obj.conf Error fn=\"send-error\" for each error reason with a custom page.",
         "6-1-zap-90022": "Return generic 5xx responses without stack traces or debug text.",
         "6-1-zap-10023": "Disable debug error messages in production.",
     }

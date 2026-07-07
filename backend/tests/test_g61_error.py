@@ -59,6 +59,36 @@ def test_analyze_java_stack():
     assert any(h.rule_id in ("java_stack", "java_caused") for h in hits)
 
 
+def test_analyze_sql_exception_is_high_confidence():
+    rules = _load("error_rules")
+    hits = rules.analyze_error_response(
+        status_code=500,
+        headers={"content-type": "application/json"},
+        body='{"message":"java.sql.SQLException: syntax error near foo"}',
+    )
+    sql_hit = next(h for h in hits if h.rule_id == "sql_exception")
+    assert sql_hit.confidence == "high"
+
+
+def test_analyze_path_disclosure_needs_review():
+    rules = _load("error_rules")
+    hits = rules.analyze_error_response(
+        status_code=500,
+        headers={},
+        body="Error writing to /var/www/app/uploads/tmp123",
+    )
+    path_hit = next(h for h in hits if h.category == "path_disclosure")
+    assert path_hit.confidence == "review"
+
+
+def test_analyze_verbose_500_body_needs_review():
+    rules = _load("error_rules")
+    body = "Internal Server Error. " + "x" * 400 + " exception occurred while processing, caused by upstream failure"
+    hits = rules.analyze_error_response(status_code=500, headers={}, body=body)
+    verbose_hit = next(h for h in hits if h.rule_id == "verbose_500_body")
+    assert verbose_hit.confidence == "review"
+
+
 def test_analyze_flags_404_with_message():
     rules = _load("error_rules")
     hits = rules.analyze_error_response(
@@ -172,9 +202,72 @@ def test_build_url_rewrites_localhost_for_docker_probe(monkeypatch):
     assert "location=" in url
 
 
+def test_overall_status_review_only_warns_not_fails():
+    scanner = _load("scanner")
+    from diagnosis.result import DiagnosisFinding
+
+    findings = [
+        DiagnosisFinding(
+            severity="medium",
+            message="path leak",
+            evidence={"rule_id": "server_path", "confidence": "review"},
+        )
+    ]
+    status, needs_review, parts = scanner._overall_status(findings)
+    assert status == "warn"
+    assert needs_review is True
+    assert parts == ["server_path x1"]
+
+
+def test_overall_status_high_confidence_fails():
+    scanner = _load("scanner")
+    from diagnosis.result import DiagnosisFinding
+
+    findings = [
+        DiagnosisFinding(
+            severity="high",
+            message="sql leak",
+            evidence={"rule_id": "sql_exception", "confidence": "high"},
+        )
+    ]
+    status, needs_review, parts = scanner._overall_status(findings)
+    assert status == "fail"
+    assert needs_review is False
+
+
+def test_overall_status_mixed_fails_and_flags_review():
+    scanner = _load("scanner")
+    from diagnosis.result import DiagnosisFinding
+
+    findings = [
+        DiagnosisFinding(
+            severity="high",
+            message="sql leak",
+            evidence={"rule_id": "sql_exception", "confidence": "high"},
+        ),
+        DiagnosisFinding(
+            severity="low",
+            message="verbose body",
+            evidence={"rule_id": "verbose_500_body", "confidence": "review"},
+        ),
+    ]
+    status, needs_review, parts = scanner._overall_status(findings)
+    assert status == "fail"
+    assert needs_review is True
+    assert parts == ["verbose_500_body x1"]
+
+
+def test_overall_status_clean_pass():
+    scanner = _load("scanner")
+    status, needs_review, parts = scanner._overall_status([])
+    assert status == "pass"
+    assert needs_review is False
+    assert parts == []
+
+
 def test_g61_module_implemented():
     from app.services import diagnosis_service
 
     row = next(r for r in diagnosis_service.catalog() if r["id"] == "6-1")
     assert row["implemented"] is True
-    assert row["engine"] == "httpx"
+    assert row["engine"] == "httpx+zap"
