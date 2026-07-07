@@ -1,6 +1,20 @@
 import { useState } from "react";
 import { ChevronDown, Terminal, Copy } from "lucide-react"; // 💡 Terminal, Copy 추가
 import type { DiagnosisSectionReport } from "../../types";
+import { G15FindingsPanel } from "./G15FindingsPanel";
+import { G22FindingsPanel } from "./G22FindingsPanel";
+import { G32FindingsPanel } from "./G32FindingsPanel";
+import { G34FindingsPanel } from "./G34FindingsPanel";
+import { G35FindingsPanel } from "./G35FindingsPanel";
+import { G36FindingsPanel } from "./G36FindingsPanel";
+import { G42FindingsPanel } from "./G42FindingsPanel";
+import { G45FindingsPanel } from "./G45FindingsPanel";
+import { G52FindingsPanel } from "./G52FindingsPanel";
+import { G61FindingsPanel } from "./G61FindingsPanel";
+import { G62FindingsPanel } from "./G62FindingsPanel";
+import { G71FindingsPanel } from "./G71FindingsPanel";
+import { G72FindingsPanel } from "./G72FindingsPanel";
+import { G73FindingsPanel } from "./G73FindingsPanel";
 
 
 const STATUS_STYLES: Record<string, string> = {
@@ -282,9 +296,6 @@ function FindingListItem({
   f: { severity: string; message: string; evidence?: Record<string, unknown> };
   sectionId: string;
 }) {
-  const [showDetails, setShowDetails] = useState(false);
-  const hasEvidence = f.evidence && Object.keys(f.evidence).length > 0;
-
   return (
     <li className="rounded border border-cyber-border/30 bg-cyber-panel/30 px-3 py-2">
       <div className="flex items-start gap-2">
@@ -1352,7 +1363,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
       ) : report.section_id === "7-3" ? (
         <G73FindingsPanel findings={findings} />
       ) : report.section_id === "7-4" ? (
-        <G74FindingsPanel findings={findings} />
+        <GroupedFindingsPanel findings={findings} sectionId={report.section_id} />
       ) : (
         <GroupedFindingsPanel findings={findings} sectionId={report.section_id} />
       )}
