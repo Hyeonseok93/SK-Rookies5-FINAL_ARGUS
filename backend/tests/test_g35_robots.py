@@ -121,3 +121,30 @@ def test_bases_for_robots_inventory_skips_api(targets_mod):
     bases = ["http://localhost:5173", "http://localhost:8080", "http://localhost:8081"]
     robots = targets_mod.bases_for_robots_inventory(bases, {})
     assert robots == ["http://localhost:5173", "http://localhost:8081"]
+
+
+def test_g35_needs_review_when_robots_missing_or_no_meta():
+    scanner = _load_g35("scanner")
+    needs, parts = scanner._g35_needs_review(
+        {"robots_missing": 1, "robots_unreachable": 0},
+        {"without_robots_directive": 0},
+        None,
+    )
+    assert needs is True
+    assert any("robots.txt missing" in p for p in parts)
+
+    needs, parts = scanner._g35_needs_review(
+        {"robots_missing": 0, "robots_unreachable": 0},
+        {"without_robots_directive": 23},
+        {"without_robots_directive": 0},
+    )
+    assert needs is True
+    assert any("anon pages" in p for p in parts)
+
+    needs, parts = scanner._g35_needs_review(
+        {"robots_missing": 0, "robots_unreachable": 0},
+        {"without_robots_directive": 0},
+        {"without_robots_directive": 0},
+    )
+    assert needs is False
+    assert parts == []

@@ -1,9 +1,7 @@
 # 3-2 인증 실패 횟수 제한
 
-KISA Web/API Guideline **3-2**.  
-동일 계정으로 **연속 로그인 실패** 시 계정 잠금·rate limit·응답 변경 등 **제한**이 있는지 점검.
+동일 계정으로 **5회 연속 로그인 실패** 시 계정 잠금·rate limit·응답 변경 등 **제한**이 있는지 점검.
 
-6-2(실패 응답 **동일성**)와 다름 — 3-2는 **같은 이메일 + 틀린 비밀번호 N회** 반복.
 
 ## httpx lockout probe
 
@@ -12,8 +10,10 @@ KISA Web/API Guideline **3-2**.
 | 대상 | inventory + dashboard에서 수집된 **login URL** (user · admin 등) |
 | 계정 | Test Accounts — URL별 자동 선택 (admin URL → admin 이메일 우선) |
 | 비밀번호 | **틀린 비밀번호만** 사용 (기본 `__ARGUS_INVALID_PASSWORD__`) |
-| 시도 | `max_attempts` (기본 12, 최대 25) |
-| 판정 | N회 내 429/403/423, Retry-After, 메시지·코드 변경 → **pass (info)** / 변화 없음 → **fail (medium)** |
+| 시도 | `max_attempts` (기본 6, 최대 25 — 5회 실패 + 1회 잠금 확인) |
+| 판정 | 6회 안에 429/403/423, Retry-After, 메시지·코드 변경 → **pass (info)** / 변화 없음 → **fail (medium)** |
+
+5번째 요청까지 정상 실패하고 6번째에 잠기는 구현을 놓치지 않기 위해 최소 시도 횟수는 5가 아닌 6이다.
 
 ## 주의
 

@@ -7,10 +7,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from diagnosis.auth_session_pool import DiagnosisAuthPool
 from diagnosis.context import DiagnosisContext
-from diagnosis.probe_auth import all_account_auths_with_meta, probe_request_headers, session_auth_mode
+from diagnosis.endpoint_auth_passes import build_probe_passes, load_login_report
 from diagnosis.probe_transport import HttpxTransport
 from diagnosis.result import DiagnosisFinding
+from inventory.schema import Endpoint
 
 _MODULE_DIR = Path(__file__).resolve().parent
 
@@ -82,20 +84,6 @@ def _overall_status(findings: list[DiagnosisFinding]) -> str:
     return "pass"
 
 
-def _build_passes(
-    auth_sessions: list[dict[str, Any]],
-    *,
-    enable_auth_modes: bool,
-) -> list[tuple[str, dict[str, str], dict[str, Any] | None]]:
-    passes: list[tuple[str, dict[str, str], dict[str, Any] | None]] = [("anonymous", {}, None)]
-    if enable_auth_modes:
-        for session in auth_sessions:
-            passes.append(
-                (session_auth_mode(session), probe_request_headers(session), session)
-            )
-    return passes
-
-
 def run_g52_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     from app.services import diagnosis_progress as dp
 
@@ -105,12 +93,17 @@ def run_g52_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     targets_mod = _load_local("targets")
     probes_mod = _load_local("probes")
 
+    auth_pool = DiagnosisAuthPool(ctx.raw_config, data_dir=ctx.data_dir)
+    login_report = load_login_report(ctx.data_dir, ctx.raw_config)
+
     endpoints, target_meta = targets_mod.build_endpoint_targets(
         ctx.raw_config,
         data_dir=ctx.data_dir,
         probe_mode=opts.probe_mode,
         sample_size=opts.sample_size,
         max_endpoints=opts.max_endpoints,
+        sessions=auth_pool.sessions(),
+        login_report=login_report,
     )
     if not endpoints:
         reason = target_meta.get("message") or "no_targets"
@@ -130,8 +123,17 @@ def run_g52_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         endpoints_total=total_eps,
     )
 
-    auth_sessions, auth_meta = all_account_auths_with_meta(ctx.raw_config, data_dir=ctx.data_dir)
-    passes = _build_passes(auth_sessions, enable_auth_modes=opts.enable_auth_modes)
+    auth_meta = auth_pool.meta
+
+    def _passes_for_ep(ep: Endpoint, sessions: list[dict[str, Any]]) -> list[tuple[str, dict[str, str], dict[str, Any] | None]]:
+        return build_probe_passes(
+            ep,
+            sessions,
+            login_report=login_report,
+            enable_auth_modes=opts.enable_auth_modes,
+        )
+
+    sample_passes = _passes_for_ep(endpoints[0], auth_pool.sessions()) if endpoints else []
 
     def _on_progress(**kw: Any) -> None:
         done = int(kw.get("endpoints_done") or 0)
@@ -142,26 +144,31 @@ def run_g52_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             message=f"[5-2] API {done}/{total} · {eid[:80]}",
             endpoints_done=done,
             endpoints_total=total,
-            requests_sent=done * len(passes),
+            requests_sent=done * max(len(sample_passes), 1),
         )
 
     raw_findings: list[DiagnosisFinding] = []
     errors = 0
     endpoints_done = 0
 
-    dp.update(phase="httpx", message=f"httpx — {total_eps} API × {len(passes)} auth pass(es)")
+    dp.update(
+        phase="httpx",
+        message=f"httpx — {total_eps} API × origin-scoped auth pass(es)",
+    )
     with HttpxTransport(timeout=opts.timeout) as transport:
         raw_findings, errors, endpoints_done, coverage = probes_mod.run_endpoints(
             endpoints,
             transport=transport,
             timeout=opts.timeout,
             interval_sec=opts.interval_sec,
-            passes=passes,
+            passes=sample_passes,
             check_request_url=opts.check_request_url,
             check_request_body=opts.check_request_body,
             check_response_body=opts.check_response_body,
             check_http_plain=opts.check_http_plain,
             on_progress=_on_progress,
+            auth_pool=auth_pool,
+            build_passes=_passes_for_ep,
         )
 
     collapsed, collapse_stats = probes_mod.collapse_findings(raw_findings)
@@ -179,14 +186,18 @@ def run_g52_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         **target_meta,
         "probe_mode": opts.probe_mode,
         "endpoints_probed": endpoints_done,
-        "auth_passes": len(passes),
+        "auth_passes": len(sample_passes),
+        "auth_passes_scoped": True,
         "sessions": auth_meta.get("sessions", 0),
+        "auth_source": auth_meta.get("source"),
+        "auth_refresh_count": auth_pool.refresh_count,
         "http_errors": errors,
         "issues": len(collapsed),
         "coverage": coverage,
         "by_category": by_category,
         "by_direction": by_direction,
         **collapse_stats,
+        "raw_findings": probes_mod.serialize_raw_findings(raw_findings),
         "checks": {
             "request_url": opts.check_request_url,
             "request_body": opts.check_request_body,
@@ -225,13 +236,13 @@ def run_g52_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                 f"(email {emails_seen}, phone {phones_seen}) but masked or absent"
             )
         message = (
-            f"Probed {endpoints_done} endpoint(s) x {len(passes)} auth pass(es) - "
+            f"Probed {endpoints_done} endpoint(s) with origin-scoped auth - "
             f"0 unmasked PII ({detail})"
         )
     else:
         by_cat = ", ".join(f"{k} {v}" for k, v in sorted(by_category.items()))
         message = (
-            f"Probed {endpoints_done} endpoint(s) x {len(passes)} auth pass(es) - "
+            f"Probed {endpoints_done} endpoint(s) with origin-scoped auth - "
             f"{len(collapsed)} unmasked PII hit(s)"
             + (f" ({by_cat})" if by_cat else "")
             + f" · {with_body} bodies / {ok_2xx} OK"

@@ -12,11 +12,9 @@ ARGUS - SSRF / File Inclusion 진단 모듈
         -> findings.json 저장                   : Selenium 증적 캡처 단계로 전달
 
 ZAP과 자체 인젝터를 둘 다 돌리는 이유:
-  - ZAP은 범용 스캐너라 빠르고 안정적이지만, 클라우드 메타데이터 다중 프로바이더나
-    8진수/10진수 IP 우회 같은 세부 페이로드는 커버하지 못할 수 있습니다.
-  - 자체 인젝터는 가이드라인 1-4 기준에 맞춘 정밀 페이로드와 baseline diff 비교로
-    오탐을 줄이면서 ZAP이 놓칠 수 있는 케이스를 보완합니다.
-  - 두 엔진이 동일한 취약점을 함께 확인하면 신뢰도가 더 높아집니다 (교차검증).
+  - ZAP은 범용 스캐너라 빠르고 안정적이지만, 클라우드 메타데이터 다중 프로바이더나 8진수/10진수 IP 우회 같은 세부 페이로드는 커버하지 못할 수 있음
+  - 자체 인젝터는 정밀 페이로드와 baseline diff 비교로 오탐을 줄이면서 ZAP이 놓칠 수 있는 케이스를 보완
+  - 두 엔진이 동일한 취약점을 함께 확인하면 신뢰도가 더 높아짐 (교차검증)
 """
 
 import json
@@ -85,7 +83,7 @@ def _swagger_base_url(spec: dict, override: str = "", fallback: str = "") -> str
 
 
 def find_login_endpoint(swagger_spec: dict, base_url: str) -> Optional[str]:
-    """Find a POST login operation, then probe conventional login paths."""
+    """POST 로그인 작업을 찾은 뒤 일반적인 로그인 경로를 탐색"""
     import requests
     matches = []
     excluded = ("signup", "sign-up", "register", "refresh", "verify", "logout", "revoke")
@@ -112,7 +110,7 @@ def find_login_endpoint(swagger_spec: dict, base_url: str) -> Optional[str]:
 
 def login_and_get_token(login_url: str, email: str, password: str,
                         token_field_path: str = "$.data.accessToken") -> Optional[str]:
-    """Authenticate using common credential field names and discover the token."""
+    """일반적인 자격증명 필드명으로 인증하고 토큰을 찾음"""
     import requests
 
     def value_at_path(body: dict, path: str):
@@ -186,7 +184,7 @@ def resolve_auth_headers_from_credentials(credentials: List[dict], swagger_spec:
 
 def build_credential_auth_sessions(credentials: List[dict], swagger_spec: dict,
                                    base_url: str, login_url_override: str = ""):
-    """Pair each successful login with a callback that can refresh its token."""
+    """성공한 각 로그인에 토큰을 갱신할 수 있는 콜백을 연결"""
     login_url = login_url_override.strip() or find_login_endpoint(swagger_spec, base_url)
     if not login_url:
         print("[경고] 로그인 엔드포인트를 찾을 수 없습니다. 인증 없이 진단합니다.")
@@ -216,9 +214,8 @@ def build_credential_auth_sessions(credentials: List[dict], swagger_spec: dict,
             print(f"[로그인 성공] {email} → 토큰 발급 완료")
         else:
             print(f"[로그인 실패] {email} → 해당 계정 진단 스킵")
-    # Never turn an explicit credential scan into an anonymous scan.  That
-    # masks login failures and makes target/authorization diagnostics look
-    # like authenticated results.
+    # 명시적으로 자격증명을 사용한 스캔을 익명 스캔으로 바꾸지 않음
+    # 그렇게 하면 로그인 실패가 가려지고 대상 및 권한 진단이 인증된 결과처럼 보임
     return sessions
 
 
@@ -248,9 +245,8 @@ def _build_auth_headers(jwt_token: str = "",
 def _merge_results(zap_results: List[ZapAlertResult],
                     injector_results: List) -> List[dict]:
     """
-    ZAP Active Scan 결과와 자체 인젝터 결과를 하나의 리스트로 병합합니다.
-    동일 (method, url, param) 조합이 양쪽에서 모두 확인되면 cross_validated=True로 표시하여
-    신뢰도가 더 높은 항목임을 나타냅니다.
+    ZAP Active Scan 결과와 자체 인젝터 결과를 하나의 리스트로 병합
+    동일 (method, url, param) 조합이 양쪽에서 모두 확인되면 cross_validated=True로 표시하여 신뢰도가 더 높은 항목임을 나타냄
     """
     merged: Dict[tuple, dict] = {}
 
@@ -278,7 +274,7 @@ def _merge_results(zap_results: List[ZapAlertResult],
             request_details = r.to_dict()
             for field in (
                 "request_body", "request_headers", "request_content_type",
-                "stored_ssrf_probe",
+                "stored_ssrf_probe", "control_probe",
             ):
                 merged[key][field] = request_details[field]
         else:
@@ -494,7 +490,7 @@ def run_pipeline(
 
 def run_token_set_pipeline(token_values: List[str], resource_id_values: List[str],
                            raw_auth_headers: List[str], output_path: str, **pipeline_kwargs):
-    """Discover access boundaries and run an isolated scan for every supplied JWT."""
+    """접근 경계를 탐색하고 제공된 각 JWT를 격리하여 스캔"""
     identities = parse_token_sets(token_values)
     apply_explicit_resource_ids(identities, resource_id_values)
     if not identities:

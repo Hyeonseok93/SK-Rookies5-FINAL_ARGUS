@@ -14,6 +14,7 @@ from app.services.auth_probe_service import (
 )
 from app.services.test_accounts_service import load_test_accounts
 from diagnosis.context import DiagnosisContext
+from diagnosis.endpoint_auth_passes import load_login_report, pick_account_for_login_entry
 from diagnosis.result import DiagnosisFinding
 
 from app.services.zap_util import ZapNotAvailableError
@@ -68,28 +69,6 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
     )
 
 
-def _pick_account(
-    entry: dict[str, str],
-    *,
-    accounts: list[dict[str, str]],
-    override: str | None,
-) -> dict[str, str] | None:
-    if override:
-        for account in accounts:
-            if account.get("email") == override:
-                return account
-        return None
-
-    label = str(entry.get("label") or "").lower()
-    path = entry.get("url", "").lower()
-    if "admin" in label or "admin" in path:
-        for account in accounts:
-            if "admin" in account.get("email", "").lower():
-                return account
-
-    return accounts[0] if accounts else None
-
-
 def _overall_status(findings: list[DiagnosisFinding]) -> str:
     if any(f.severity in ("high", "medium") for f in findings):
         return "fail"
@@ -124,6 +103,7 @@ def run_g62_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     rules_mod = _load_local("login_rules")
     probes_mod = _load_local("probes")
+    login_report = load_login_report(ctx.data_dir, ctx.raw_config)
 
     from diagnosis.progress_reporter import prepare, step_progress, zap_phase
 
@@ -144,10 +124,11 @@ def run_g62_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     entry_idx = 0
 
     for entry in entries:
-        account = _pick_account(
+        account = pick_account_for_login_entry(
             entry,
-            accounts=accounts,
-            override=opts.probe_account_email,
+            accounts,
+            login_report,
+            override_email=opts.probe_account_email,
         )
         if not account or not str(account.get("password", "")).strip():
             continue

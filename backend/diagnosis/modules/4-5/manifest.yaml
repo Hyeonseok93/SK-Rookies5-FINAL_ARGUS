@@ -1,7 +1,7 @@
 id: "4-5"
 title: "일반계정 권한 상승 가능성"
 chapter: 4
-implemented: false
-diagnosable: false
-review_later: true
-engine: pending
+implemented: true
+diagnosable: true
+review_later: false
+engine: httpx

@@ -1,15 +1,13 @@
 """
 ARGUS - SSRF / File Inclusion 진단 모듈
 
-"Web/API 개발보안 Guideline (2022년) v3.0.0" - 1-4. SSRF / File Inclusion 공격 가능성
-항목을 기준으로, ScanTarget 목록에서 SSRF/File Inclusion 가능성이 있는
-파라미터를 1차로 선별하는 "검색 엔진"입니다.
+"Web/API 개발보안 Guideline (2022년) v3.0.0" - 1-4. SSRF / File Inclusion 공격 가능성 항목을 기준으로, 
+ ScanTarget 목록에서 SSRF/File Inclusion 가능성이 있는 파라미터를 "1차로 선별하는 검색 엔진""
 
-이 단계는 실제 공격을 수행하지 않고, 의심 파라미터를 빠르게 좁히는
-정적 분석(Static Triage) 역할을 합니다. 실제 취약점 존재 여부 검증은
-payload_injector.py가 담당합니다.
+이 단계는 실제 공격을 수행하지 않고, 의심 파라미터를 빠르게 좁히는 정적 분석(Static Triage) 역할을 함
+실제 취약점 존재 여부 검증은 payload_injector.py가 담당
 
-판단 기준 (가이드라인 본문 발췌 요약):
+판단 기준:
   - File Inclusion: 파라미터로 "파일 경로"를 받아 include/open에 사용
       예) errorPath=../../../../etc/passwd (LFI)
           errorPath=http://vulnerability.com/exploit (RFI)
@@ -29,7 +27,6 @@ from models import ScanTarget, ScanParam, VulnType, RiskLevel
 
 # --------------------------------------------------------------------------
 # 1. 파라미터명 키워드 사전
-#    가이드라인 본문의 "파라미터(경로) 값" 표현 + 실무에서 흔히 쓰이는 변형명을 포함
 # --------------------------------------------------------------------------
 SSRF_PARAM_KEYWORDS = [
     "url", "uri", "link", "src", "source", "dest", "destination",
@@ -63,7 +60,7 @@ VALUE_PATTERNS = {
         r"172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|"
         r"192\.168\.\d{1,3}\.\d{1,3})"
     ),
-    "AT_SIGN_BYPASS": re.compile(r"@https?://"),  # 도메인 검증 우회 (가이드라인 예시 패턴)
+    "AT_SIGN_BYPASS": re.compile(r"@https?://"),  # 도메인 검증 우회
 }
 
 STRUCTURED_STRING_FORMATS = {
@@ -76,15 +73,18 @@ PLACE_PARAM_NAMES = {
     "fromplace", "toplace", "fromlocation", "tolocation",
 }
 DATE_FORMATS = {"date", "date-time"}
+TEMPORAL_NAME_SUFFIXES = ("date", "time", "datetime", "timestamp")
 
 
 def _is_constrained_param(param: ScanParam) -> bool:
-    """OpenAPI상 자유 문자열 페이로드를 받을 수 없는 파라미터인지 확인합니다."""
+    """OpenAPI상 자유 문자열 페이로드를 받을 수 없는 파라미터인지 확인"""
     schema = param.schema or {}
     schema_type = schema.get("type", "").lower()
     if schema.get("enum") or schema.get("format", "").lower() in STRUCTURED_STRING_FORMATS:
         return True
     normalized_name = re.sub(r"[^a-z0-9]", "", param.name.lower())
+    if normalized_name.endswith(TEMPORAL_NAME_SUFFIXES):
+        return True
     sibling_formats = {
         str(value).lower() for value in schema.get("x-argus-sibling-formats", [])
     }
@@ -107,6 +107,7 @@ class SearchHit:
     vuln_type: VulnType
     risk_level: RiskLevel
     matched_reasons: list = field(default_factory=list)  # 어떤 규칙에 걸렸는지 기록
+    is_soft_constrained: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -117,6 +118,7 @@ class SearchHit:
             "vuln_type": self.vuln_type.value,
             "risk_level": self.risk_level.value,
             "matched_reasons": self.matched_reasons,
+            "is_soft_constrained": self.is_soft_constrained,
             "source": self.target.source.value,
         }
 
@@ -138,10 +140,6 @@ def _classify_param_name(param_name: str) -> VulnType:
     if normalized_name in file_keywords:
         return VulnType.LFI  # RFI 여부는 값 패턴 검사에서 추가 판단
 
-    # Exact matching remains the strongest signal, but plural/suffixed API field
-    # names (imageUrls, callbackEndpointValue, templateName) must not disappear.
-    # Require a meaningful keyword length to avoid tiny fragments such as "url"
-    # matching unrelated words.
     if any(len(keyword) >= 5 and keyword in normalized_name for keyword in ssrf_keywords):
         return VulnType.SSRF
     if any(len(keyword) >= 5 and keyword in normalized_name for keyword in file_keywords):
@@ -164,9 +162,9 @@ def _inspect_value(value: str) -> List[str]:
 
 def _calculate_risk(vuln_type: VulnType, name_matched: bool, value_reasons: List[str]) -> RiskLevel:
     """
-    위험도 스코어링.
+    위험도 스코어링(점수)
     - 파라미터명 매칭 + 값 패턴 매칭이 동시에 있으면 HIGH
-    - 위험 스킴(file://, dict:// 등) 또는 내부 IP 힌트가 보이면 즉시 HIGH (가이드라인 대응방안의 역기준)
+    - 위험 스킴(file://, dict:// 등) 또는 내부 IP 힌트가 보이면 즉시 HIGH
     - 파라미터명만 매칭되면 MEDIUM (실제 검증 필요)
     - 값 패턴만 매칭되면 MEDIUM
     """
@@ -187,8 +185,8 @@ def _calculate_risk(vuln_type: VulnType, name_matched: bool, value_reasons: List
 
 def search_targets(targets: List[ScanTarget]) -> List[SearchHit]:
     """
-    ScanTarget 리스트 전체를 검색하여 SSRF/File Inclusion 의심 파라미터를 식별합니다.
-    이것이 "Build Attack Tree"에서 말하는 검색 엔진의 핵심 로직입니다.
+    ScanTarget 리스트 전체를 검색하여 SSRF/File Inclusion 의심 파라미터를 식별
+    이것이 "Build Attack Tree"에서 말하는 검색 엔진의 핵심 로직
     """
     hits: List[SearchHit] = []
 
@@ -197,20 +195,9 @@ def search_targets(targets: List[ScanTarget]) -> List[SearchHit]:
             schema_type = (param.schema or {}).get("type", "").lower()
             if schema_type in {"integer", "number", "boolean"}:
                 continue
-            if _is_constrained_param(param):
-                continue
+            is_soft_constrained = _is_constrained_param(param)
 
             vuln_type = _classify_param_name(param.name)
-            sibling_names = {
-                re.sub(r"[^a-z0-9]", "", str(name).lower())
-                for name in (param.schema or {}).get("x-argus-sibling-names", [])
-            }
-            if (
-                re.sub(r"[^a-z0-9]", "", param.name.lower()) == "template"
-                and "report" in target.path.lower()
-                and "logourl" in sibling_names
-            ):
-                vuln_type = VulnType.SSRF
             name_matched = vuln_type != VulnType.UNKNOWN
 
             value_reasons = _inspect_value(param.sample_value or "")
@@ -234,11 +221,12 @@ def search_targets(targets: List[ScanTarget]) -> List[SearchHit]:
                     matched_reasons=(
                         (["PARAM_NAME_KEYWORD"] if name_matched else []) + value_reasons
                     ),
+                    is_soft_constrained=is_soft_constrained,
                 )
             )
 
     # 위험도 높은 순으로 정렬
     risk_order = {RiskLevel.HIGH: 0, RiskLevel.MEDIUM: 1, RiskLevel.LOW: 2, RiskLevel.INFO: 3}
-    hits.sort(key=lambda h: risk_order[h.risk_level])
+    hits.sort(key=lambda h: (h.is_soft_constrained, risk_order[h.risk_level]))
 
     return hits

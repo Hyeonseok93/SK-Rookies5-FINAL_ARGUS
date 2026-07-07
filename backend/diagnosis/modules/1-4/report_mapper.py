@@ -1,4 +1,4 @@
-"""ARGUS 1-4 엔진 결과를 팀 표준 DiagnosisFinding으로 변환한다."""
+"""ARGUS 1-4 엔진 결과를 팀 표준 DiagnosisFinding으로 변환"""
 from __future__ import annotations
 
 from typing import Any
@@ -6,7 +6,6 @@ from typing import Any
 from diagnosis.result import DiagnosisFinding
 
 _CONFIDENCE_TO_SEVERITY = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
-
 
 def confirmed_result_to_finding(
     result: dict[str, Any], confirmed_by_roles: list[str] | None = None
@@ -39,19 +38,20 @@ def confirmed_result_to_finding(
             "payload_response_length": result.get("payload_response_length"),
             "response_body_snippet": result.get("response_body_snippet"),
             "stored_ssrf_probe": result.get("stored_ssrf_probe"),
+            "control_probe": result.get("control_probe"),
+            "confirmation_rounds": result.get("confirmation_rounds"),
+            "baseline_summary": result.get("baseline_summary"),
+            "payload_summary": result.get("payload_summary"),
             "confirmed_by_roles": sorted(set(confirmed_by_roles or [])),
         },
     )
 
-
 def build_findings(merged_findings: list[Any]) -> list[DiagnosisFinding]:
-    # run_pipeline returns already-confirmed, merged dictionaries (ZAP and injector).
     return [
         confirmed_result_to_finding(r, list(r.get("confirmed_by_roles") or []))
         for r in merged_findings
         if isinstance(r, dict)
     ]
-
 
 def build_status_and_message(
     findings: list[DiagnosisFinding], *, candidate_count: int, target_count: int

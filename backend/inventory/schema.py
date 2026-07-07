@@ -6,7 +6,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
 InputLocation = Literal["path", "query", "body", "form", "header", "cookie"]
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
@@ -49,6 +49,7 @@ class InputParam:
     in_: InputLocation
     name: str
     type: str = "string"
+    format: str | None = None
     required: bool = False
     sample: str | None = None
     role: str = "input"  # input | auth | meta
@@ -65,6 +66,8 @@ class InputParam:
         }
         if self.sample is not None:
             d["sample"] = self.sample
+        if self.format:
+            d["format"] = self.format
         return d
 
     @classmethod
@@ -73,6 +76,7 @@ class InputParam:
             in_=data["in"],
             name=data["name"],
             type=data.get("type", "string"),
+            format=data.get("format"),
             required=bool(data.get("required", False)),
             sample=data.get("sample"),
             role=data.get("role", "input"),
@@ -107,7 +111,13 @@ class Endpoint:
     @property
     def endpoint_id(self) -> str:
         base = self.base_url.rstrip("/")
-        return f"{base}:{self.method.upper()}:{self.path}"
+        parsed = urlparse(base)
+        host = (parsed.hostname or "").lower()
+        if host in ("127.0.0.1", "localhost"):
+            host = "localhost"
+        port = f":{parsed.port}" if parsed.port else ""
+        normalized_base = f"{parsed.scheme.lower()}://{host}{port}"
+        return f"{normalized_base}:{self.method.upper()}:{self.path}"
 
     def to_dict(self) -> dict[str, Any]:
         return {

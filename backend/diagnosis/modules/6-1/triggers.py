@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from typing import Any, Iterator, Literal
 from urllib.parse import quote
 
-from inventory.probe_build import WRITE_METHODS, build_probe_request, sample_value
+from app.services.zap_util import probe_url
+from inventory.probe_build import WRITE_METHODS, build_probe_request, frontend_gateway_path, sample_value
+from inventory.schema import build_full_url
 from inventory.schema import Endpoint, InputParam
 
 from parsers.parse_endpoints import materialize_path_params
@@ -68,7 +70,7 @@ def _default_body_obj(ep: Endpoint) -> dict[str, Any]:
             obj[inp.name] = sample_value(inp)
     if obj:
         return obj
-    base = build_probe_request(ep)
+    base = build_probe_request(ep, probe_base_fn=probe_url)
     raw = base.get("body") or ""
     if raw:
         try:
@@ -96,13 +98,10 @@ def _safe_path_segment(value: str) -> str:
 
 
 def _build_url(ep: Endpoint, path: str, query: dict[str, str]) -> str:
-    base = ep.base_url.rstrip("/")
+    base = probe_url(ep.base_url.rstrip("/"))
     p = path if path.startswith("/") else f"/{path}"
-    url = f"{base}{p}"
-    if query:
-        qs = "&".join(f"{_quote_query_value(k)}={_quote_query_value(v)}" for k, v in query.items())
-        url = f"{url}?{qs}"
-    return url
+    p = frontend_gateway_path(ep.base_url, p)
+    return build_full_url(base, p, query or None)
 
 
 def _safe_json_dumps(obj: dict[str, Any]) -> str | None:
@@ -130,8 +129,8 @@ def iter_param_jobs(ep: Endpoint, payloads: list[PayloadSpec]) -> Iterator[Probe
                 family="param",
                 method=ep.method.upper(),
                 url=_build_url(ep, path, query),
-                headers=dict(build_probe_request(ep)["headers"]),
-                body=build_probe_request(ep).get("body") or "",
+                headers=dict(build_probe_request(ep, probe_base_fn=probe_url)["headers"]),
+                body=build_probe_request(ep, probe_base_fn=probe_url).get("body") or "",
                 trigger_id=f"param:none:{payload.payload_id}",
                 param_name=None,
                 payload_id=payload.payload_id,
@@ -154,7 +153,9 @@ def iter_param_jobs(ep: Endpoint, payloads: list[PayloadSpec]) -> Iterator[Probe
                 path = materialize_path_params(ep.path, {k: str(v) for k, v in pv.items()})
                 bo[inp.name] = value
 
-            base = build_probe_request(ep, path_param_defaults={k: str(v) for k, v in pv.items()})
+            base = build_probe_request(
+                ep, probe_base_fn=probe_url, path_param_defaults={k: str(v) for k, v in pv.items()}
+            )
             headers = dict(base["headers"])
             body_str = base.get("body") or ""
             if inp.in_ in ("body", "form") and ep.method.upper() in WRITE_METHODS:
@@ -213,7 +214,7 @@ def iter_body_jobs(ep: Endpoint) -> Iterator[ProbeJob]:
     """Family 2: malformed / diverse request bodies."""
     if ep.method.upper() not in WRITE_METHODS:
         return
-    base = build_probe_request(ep)
+    base = build_probe_request(ep, probe_base_fn=probe_url)
     headers_base = dict(base["headers"])
 
     for variant_id, body, hdr_override in BODY_VARIANTS:
@@ -260,7 +261,7 @@ PATH_VARIANTS = (
 def iter_path_jobs(ep: Endpoint, payloads: list[PayloadSpec]) -> Iterator[ProbeJob]:
     """Family 3: path manipulation."""
     base_path = materialize_path_params(ep.path, _default_path_values(ep))
-    base = build_probe_request(ep)
+    base = build_probe_request(ep, probe_base_fn=probe_url)
     method = ep.method.upper()
     headers = dict(base["headers"])
     body = base.get("body") or ""
@@ -301,7 +302,7 @@ def iter_path_jobs(ep: Endpoint, payloads: list[PayloadSpec]) -> Iterator[ProbeJ
 
 def iter_method_jobs(ep: Endpoint) -> Iterator[ProbeJob]:
     """Family 4: wrong HTTP methods."""
-    base = build_probe_request(ep)
+    base = build_probe_request(ep, probe_base_fn=probe_url)
     current = ep.method.upper()
     for method in ALL_METHODS:
         if method == current:
@@ -331,7 +332,7 @@ HEADER_VARIANTS: list[tuple[str, dict[str, str]]] = [
 
 def iter_header_jobs(ep: Endpoint) -> Iterator[ProbeJob]:
     """Family 6: header tricks (Content-Type mismatch etc.)."""
-    base = build_probe_request(ep)
+    base = build_probe_request(ep, probe_base_fn=probe_url)
     headers = dict(base["headers"])
     method = ep.method.upper()
     body = base.get("body") or ""

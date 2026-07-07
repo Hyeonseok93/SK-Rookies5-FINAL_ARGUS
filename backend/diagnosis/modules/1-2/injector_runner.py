@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from dataclasses import replace
 from typing import Any, Iterable
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
@@ -17,7 +18,6 @@ UNSAFE_METHODS = {"DELETE", "PATCH"}
 DEFAULT_TYPES = (
     InjectionType.SQL,
     InjectionType.NOSQL,
-    InjectionType.SSTI,
     InjectionType.COMMAND,
     InjectionType.XPATH,
 )
@@ -32,7 +32,9 @@ def parse_injection_types(raw: Iterable[str] | None) -> list[InjectionType]:
         if not key:
             continue
         if key == "ALL":
-            return list(InjectionType)
+            return list(DEFAULT_TYPES)
+        if key == "SSTI":
+            continue
         try:
             selected.append(InjectionType[key])
         except KeyError:
@@ -207,6 +209,7 @@ EXCLUDED_FROM_INJECTION_REPORT = frozenset(
         "SUSPECTED_SERVER_ERROR_SIGNAL",
         "SUSPECTED_INJECTION",
         "WEAK_SERVER_ERROR_CONFIRMED_LEGACY",
+        "VERIFICATION_ERROR",
     }
 )
 
@@ -224,6 +227,13 @@ HIGH_CONFIDENCE_CLASSIFICATIONS = frozenset(
     }
 )
 
+WEAK_CONFIDENCE_CLASSIFICATIONS = frozenset(
+    {
+        "CONFIRMED_INJECTION_BOOLEAN_BASED",
+        "CONFIRMED_INJECTION_LOW_REPRODUCIBILITY",
+    }
+)
+
 
 def is_high_confidence_result(result: DetectionResult) -> bool:
     if result.verification_status != VerificationStatus.VERIFIED:
@@ -231,7 +241,113 @@ def is_high_confidence_result(result: DetectionResult) -> bool:
     return (result.classification or "") in HIGH_CONFIDENCE_CLASSIFICATIONS
 
 
+def _is_weak_confidence_result(result: DetectionResult) -> bool:
+    if result.verification_status != VerificationStatus.VERIFIED:
+        return False
+    return (result.classification or "") in WEAK_CONFIDENCE_CLASSIFICATIONS
+
+
+def _attach_reproduction(
+    result: DetectionResult,
+    *,
+    attempts: int,
+    strong: int,
+    weak: int,
+    suspected: int,
+    required: int,
+) -> DetectionResult:
+    summary = f"{strong}/{attempts} strong, {weak}/{attempts} weak"
+    result.verification_methods["reproduction"] = {
+        "attempts": attempts,
+        "strong": strong,
+        "weak": weak,
+        "suspected": suspected,
+        "required": required,
+        "summary": summary,
+    }
+    result.evidence = f"{result.evidence} Reproduction: {summary}." if result.evidence else f"Reproduction: {summary}."
+    result.verification_reason = (
+        f"{result.verification_reason} Reproduction: {summary}."
+        if result.verification_reason
+        else f"Reproduction: {summary}."
+    )
+    result.reproduction_summary = summary
+    result.reproduction_attempts = attempts
+    result.reproduction_strong = strong
+    result.reproduction_weak = weak
+    result.reproduction_suspected = suspected
+    result.reproduction_required = required
+    return result
+
+
+def aggregate_repeated_results(
+    results: list[DetectionResult],
+    *,
+    required_reproductions: int = 2,
+    minimum_attempts: int = 1,
+) -> list[DetectionResult]:
+    grouped: dict[tuple[Any, ...], list[DetectionResult]] = {}
+    for result in results:
+        grouped.setdefault(result_key(result), []).append(annotate_result(result))
+
+    aggregated: list[DetectionResult] = []
+    for attempts in grouped.values():
+        strong_results = [r for r in attempts if is_high_confidence_result(r)]
+        weak_results = [r for r in attempts if _is_weak_confidence_result(r)]
+        suspected_results = [r for r in attempts if r.verification_status == VerificationStatus.SUSPECTED]
+        attempts_count = max(len(attempts), minimum_attempts)
+        strong_count = len(strong_results)
+        weak_count = len(weak_results)
+        suspected_count = len(suspected_results)
+
+        if strong_count >= required_reproductions:
+            selected = strong_results[-1]
+        elif weak_count >= required_reproductions:
+            selected = weak_results[-1]
+        elif suspected_count >= required_reproductions:
+            selected = suspected_results[-1]
+        else:
+            continue
+
+        aggregated.append(
+            _attach_reproduction(
+                selected,
+                attempts=attempts_count,
+                strong=strong_count,
+                weak=weak_count,
+                suspected=suspected_count,
+                required=required_reproductions,
+            )
+        )
+
+    return dedupe_results(aggregated)
+
+
+def _zap_verification_seed(result: DetectionResult) -> DetectionResult:
+    return replace(
+        result,
+        cross_validated=False,
+        custom_verified=False,
+        custom_payload="",
+        custom_time_delay_sec=0.0,
+        verification_status=VerificationStatus.UNVERIFIED,
+        verification_reason="",
+        verification_methods={},
+        classification="",
+        confidence="",
+        argus_risk="",
+        related_issue="",
+        why_injection="",
+        risk_comment="",
+        reporting_guidance="",
+        raw_request_headers=dict(result.raw_request_headers or {}),
+    )
+
+
 def annotate_result(result: DetectionResult) -> DetectionResult:
+    if result.classification == "CONFIRMED_INJECTION_LOW_REPRODUCIBILITY":
+        return result
+
     time_verified = _method_status(result, "time_based") == VerificationStatus.VERIFIED.value
     boolean_verified = _method_status(result, "boolean_based") == VerificationStatus.VERIFIED.value
     error_verified = _method_status(result, "error_based") == VerificationStatus.VERIFIED.value
@@ -249,12 +365,12 @@ def annotate_result(result: DetectionResult) -> DetectionResult:
         result.reporting_guidance = "Report as confirmed; verify parameterized queries in code."
     elif result.verification_status == VerificationStatus.VERIFIED and boolean_verified:
         result.classification = "CONFIRMED_INJECTION_BOOLEAN_BASED"
-        result.confidence = "HIGH"
-        result.argus_risk = "HIGH"
-        result.related_issue = "SQL Injection / Boolean-based Blind SQL Injection"
+        result.confidence = "MEDIUM"
+        result.argus_risk = "MEDIUM"
+        result.related_issue = "Potential Injection / Boolean-based Response Difference"
         result.why_injection = "True/false payloads produced stable response differences."
-        result.risk_comment = "Reproducible response delta — higher confidence than isolated 500 errors."
-        result.reporting_guidance = "Report as confirmed; trace user input into query conditions."
+        result.risk_comment = "Boolean-only evidence can overlap with validation or business-rule differences."
+        result.reporting_guidance = "Report as a reproducible candidate; confirm with logs/query tracing before calling it high risk."
     elif result.verification_status == VerificationStatus.VERIFIED and error_verified and matched_patterns:
         result.classification = "CONFIRMED_INJECTION_ERROR_PATTERN"
         result.confidence = "HIGH"
@@ -331,33 +447,62 @@ def verify_zap_alerts(
     for idx, result in enumerate(zap_results):
         if progress_cb:
             progress_cb(idx + 1, len(zap_results), f"ZAP verify {result.url}")
+        seed = _zap_verification_seed(result)
         if session_headers:
             merged = dict(session_headers)
-            merged.update(result.raw_request_headers or {})
-            result.raw_request_headers = merged
-            result.url = probe_url(result.url)
-            if result.raw_request_url:
-                result.raw_request_url = probe_url(result.raw_request_url)
-        injector = injectors.get(result.injection_type)
+            merged.update(seed.raw_request_headers or {})
+            seed.raw_request_headers = merged
+            seed.url = probe_url(seed.url)
+            if seed.raw_request_url:
+                seed.raw_request_url = probe_url(seed.raw_request_url)
+        injector = injectors.get(seed.injection_type)
         if injector:
-            verified.append(injector.verify_zap_alert(result))
+            verified.append(injector.verify_zap_alert(seed))
         else:
-            result.verification_status = VerificationStatus.UNVERIFIABLE
-            result.verification_reason = f"Unsupported injection type: {result.injection_type}"
-            verified.append(result)
+            seed.verification_status = VerificationStatus.UNVERIFIABLE
+            seed.verification_reason = f"Unsupported injection type: {seed.injection_type}"
+            verified.append(seed)
     return verified, {"zap_verified": len(verified)}
+
+
+def result_key(result: DetectionResult) -> tuple[Any, ...]:
+    return (result.method, result.url, result.param, result.injection_type)
 
 
 def dedupe_results(results: list[DetectionResult]) -> list[DetectionResult]:
     merged: list[DetectionResult] = []
     seen: set[tuple[Any, ...]] = set()
     for result in results:
-        key = (result.method, result.url, result.param, result.injection_type, result.plugin_id)
+        key = (*result_key(result), result.plugin_id)
         if key in seen:
             continue
         seen.add(key)
         merged.append(result)
     return merged
+
+
+def _recheck_seed(result: DetectionResult) -> DetectionResult:
+    return DetectionResult(
+        method=result.method,
+        url=result.raw_request_url or result.url,
+        param=result.param,
+        risk=result.risk or "UNKNOWN",
+        plugin_id=result.plugin_id or "ARGUS_DIRECT",
+        plugin_name=result.plugin_name or f"ARGUS Direct {result.injection_type.value}",
+        injection_type=result.injection_type,
+        has_zap=result.has_zap,
+        raw_request_body=result.raw_request_body,
+        raw_request_url=result.raw_request_url or result.url,
+        raw_request_headers=dict(result.raw_request_headers or {}),
+    )
+
+
+def is_candidate_for_recheck(result: DetectionResult) -> bool:
+    return result.verification_status in {
+        VerificationStatus.VERIFIED,
+        VerificationStatus.SUSPECTED,
+        VerificationStatus.ERROR,
+    }
 
 
 def run_direct_verification(
@@ -370,6 +515,8 @@ def run_direct_verification(
     include_unsafe: bool = False,
     keep_all: bool = False,
     session_headers: dict[str, str] | None = None,
+    required_rechecks: list[DetectionResult] | None = None,
+    dedupe: bool = True,
     progress_cb: Any | None = None,
 ) -> tuple[list[DetectionResult], dict[str, Any]]:
     injectors = injector_map(jwt_token, verification_mode, injectors_mod)
@@ -382,6 +529,8 @@ def run_direct_verification(
         for t in targets
         if include_unsafe or t.method.upper() not in UNSAFE_METHODS
     ) * len(injection_types)
+    recheck_seeds = list({result_key(r): r for r in (required_rechecks or [])}.values())
+    total_probes += len(recheck_seeds)
 
     keep_statuses = {
         VerificationStatus.VERIFIED,
@@ -432,6 +581,18 @@ def run_direct_verification(
                 if keep_all or result.verification_status in keep_statuses:
                     results.append(result)
 
+    for seed in recheck_seeds:
+        probes += 1
+        if progress_cb:
+            progress_cb(probes, max(total_probes, 1), f"recheck {seed.method} {seed.url} ({seed.param})")
+
+        injector = injectors.get(seed.injection_type)
+        if injector is None:
+            continue
+
+        result = injector.verify_zap_alert(_recheck_seed(seed))
+        results.append(result)
+
     status_counts = Counter(
         r.verification_status.value if isinstance(r.verification_status, VerificationStatus) else str(r.verification_status)
         for r in results
@@ -441,9 +602,10 @@ def run_direct_verification(
         "skipped_methods": skipped_methods,
         "skipped_params": skipped_params,
         "results_before_dedupe": len(results),
+        "required_rechecks": len(recheck_seeds),
         "status_counts": dict(status_counts),
     }
-    return dedupe_results(results), stats
+    return (dedupe_results(results) if dedupe else results), stats
 
 
 def severity_for_result(result: DetectionResult) -> str:

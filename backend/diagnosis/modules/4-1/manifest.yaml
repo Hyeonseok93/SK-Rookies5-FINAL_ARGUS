@@ -1,5 +1,7 @@
 id: "4-1"
 title: "쿠키(Cookie) 및 웹 스토리지(Web Storage) 조작 가능성"
 chapter: 4
-implemented: true
-engine: httpx
+implemented: false
+diagnosable: false
+status_label: "수동 진단"
+engine: pending

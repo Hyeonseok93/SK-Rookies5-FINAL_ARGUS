@@ -52,6 +52,23 @@ diagnosis_1_5:
   sample_size: 60
   zap_enabled: false
 
+diagnosis_1_6:
+  # Mirrors native config.yaml: 1-6 runs the requests-based fuzzer against the
+  # api-tree spec — no ZAP, spider, or Selenium/Chrome (none are in the slim
+  # image). Under Docker the engine rewrites localhost->host.docker.internal via
+  # ARGUS_PROBE_HOST, so these host-facing URLs are already correct.
+  ui_target: "http://host.docker.internal:5174"
+  zap_host: "zap"
+  skip_zap: true
+  skip_spider: true
+  skip_selenium: true
+  timeout_sec: 36000
+  max_report_findings: 50
+  role_login_targets:
+    admin: "http://host.docker.internal:8081"
+  role_login_paths:
+    admin: "/api/v1/auth/admin/login"
+
 diagnosis_4_1:
   probe_mode: sample
   sample_size: 40
@@ -100,12 +117,6 @@ diagnosis_6_1:
   enable_header_fuzz: true
   enable_auth_modes: true
   httpx_enabled: true
-  zap_enabled: true
-  zap_unified_enabled: true
-  zap_supplemental_enabled: true
-  zap_max_requests: 8000
-  zap_max_minutes: 15
-  zap_seed_cap: 200
 
 diagnosis_4_2:
   timeout: 10.0

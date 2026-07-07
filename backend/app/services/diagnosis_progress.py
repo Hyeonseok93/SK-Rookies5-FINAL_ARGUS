@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 _lock = threading.Lock()
+_cancel_event = threading.Event()
 _state: dict[str, Any] = {
     "running": False,
     "section_id": None,
@@ -29,8 +30,12 @@ def _compute_percent(
 ) -> int:
     if phase == "done":
         return 100
-    if phase in ("error",):
+    if phase in ("error", "cancelled"):
         return 0
+    if phase == "cancelling":
+        if endpoints_total > 0:
+            return min(99, int(endpoints_done * 100 / endpoints_total))
+        return 5
     if phase in ("zap", "zap_supplemental"):
         if endpoints_total > 0 and endpoints_done >= endpoints_total:
             return 95
@@ -46,7 +51,17 @@ def _compute_percent(
     return 0
 
 
+def is_cancel_requested() -> bool:
+    return _cancel_event.is_set()
+
+
+def request_cancel(*, message: str = "취소 요청됨…") -> None:
+    _cancel_event.set()
+    update(phase="cancelling", message=message)
+
+
 def reset(*, section_id: str, endpoints_total: int = 0, message: str = "Starting…") -> None:
+    _cancel_event.clear()
     with _lock:
         _state.update(
             {
@@ -58,7 +73,11 @@ def reset(*, section_id: str, endpoints_total: int = 0, message: str = "Starting
                 "endpoints_total": max(0, int(endpoints_total)),
                 "requests_sent": 0,
                 "requests_cap": None,
-                "percent": 0,
+                "percent": _compute_percent(
+                    phase="starting",
+                    endpoints_done=0,
+                    endpoints_total=max(0, int(endpoints_total)),
+                ),
                 "updated_at": datetime.now(UTC).isoformat(),
             }
         )
@@ -99,6 +118,7 @@ def update(
 
 
 def finish(message: str = "Done") -> None:
+    _cancel_event.clear()
     with _lock:
         _state["running"] = False
         _state["phase"] = "done"
@@ -107,7 +127,17 @@ def finish(message: str = "Done") -> None:
         _state["updated_at"] = datetime.now(UTC).isoformat()
 
 
+def cancel_finish(message: str = "Cancelled") -> None:
+    _cancel_event.clear()
+    with _lock:
+        _state["running"] = False
+        _state["phase"] = "cancelled"
+        _state["message"] = message
+        _state["updated_at"] = datetime.now(UTC).isoformat()
+
+
 def fail(message: str) -> None:
+    _cancel_event.clear()
     with _lock:
         _state["running"] = False
         _state["phase"] = "error"

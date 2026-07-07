@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Terminal, Copy } from "lucide-react"; // 💡 Terminal, Copy 추가
 import type { DiagnosisSectionReport } from "../../types";
+
 
 const STATUS_STYLES: Record<string, string> = {
   pass: "border-emerald-400/50 bg-emerald-500/10 text-emerald-300",
@@ -30,8 +31,13 @@ export function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
-
-function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
+function FindingEvidence({
+  evidence,
+  sectionId,
+}: {
+  evidence: Record<string, unknown>;
+  sectionId: string;
+}) {
   const rows: { label: string; value: string }[] = [];
   const blocks: { label: string; value: string }[] = [];
 
@@ -89,6 +95,12 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
   }
 
   add("Classification", "classification");
+  if (sectionId === "1-2" && evidence.rule_id === "G12_INJECTION") {
+    add("Confidence", "confidence");
+    add("ARGUS risk", "argus_risk");
+    add("Verification", "verification_status");
+    add("Reproduction", "reproduction");
+  }
   add("Trigger", "trigger_label");
   add("Trigger code", "trigger");
   add("Rule", "rule_id");
@@ -215,10 +227,76 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
   );
 }
 
+function g12EvidenceValue(evidence: Record<string, unknown>, key: string) {
+  const direct = evidence[key];
+  if (direct !== undefined && direct !== null && direct !== "") return String(direct);
+  const detail = evidence.detail as Record<string, unknown> | undefined;
+  const nested = detail?.[key];
+  return nested !== undefined && nested !== null && nested !== "" ? String(nested) : "";
+}
+
+const G12_STRONG_CLASSIFICATIONS = new Set([
+  "CONFIRMED_INJECTION_TIME_BASED",
+  "CONFIRMED_INJECTION_ERROR_PATTERN",
+]);
+
+const G12_WEAK_CLASSIFICATIONS = new Set([
+  "CONFIRMED_INJECTION_BOOLEAN_BASED",
+  "CONFIRMED_INJECTION_LOW_REPRODUCIBILITY",
+]);
+
+function g12Classification(f: { evidence?: Record<string, unknown> }) {
+  return f.evidence ? g12EvidenceValue(f.evidence, "classification") : "";
+}
+
+function isG12StrongFinding(f: { evidence?: Record<string, unknown> }) {
+  return G12_STRONG_CLASSIFICATIONS.has(g12Classification(f));
+}
+
+function isG12WeakFinding(f: { evidence?: Record<string, unknown> }) {
+  return G12_WEAK_CLASSIFICATIONS.has(g12Classification(f));
+}
+
+function G12InjectionSignalBadge({ evidence }: { evidence?: Record<string, unknown> }) {
+  if (!evidence || g12EvidenceValue(evidence, "rule_id") !== "G12_INJECTION") return null;
+
+  const classification = g12EvidenceValue(evidence, "classification");
+  const confidence = g12EvidenceValue(evidence, "confidence");
+  const argusRisk = g12EvidenceValue(evidence, "argus_risk");
+
+  if (G12_STRONG_CLASSIFICATIONS.has(classification)) {
+    return (
+      <span className="shrink-0 rounded border border-rose-400/50 bg-rose-500/10 px-1.5 py-0.5 font-mono text-[9px] uppercase text-rose-300">
+        정탐 · {confidence || argusRisk || "HIGH"}
+      </span>
+    );
+  }
+
+  if (G12_WEAK_CLASSIFICATIONS.has(classification)) {
+    return (
+      <span className="shrink-0 rounded border border-amber-400/50 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] uppercase text-amber-300">
+        약한 정탐 · {confidence || argusRisk || "MEDIUM"}
+      </span>
+    );
+  }
+
+  if (classification.startsWith("SUSPECTED") || classification === "WEAK_SERVER_ERROR_CONFIRMED_LEGACY") {
+    return (
+      <span className="shrink-0 rounded border border-sky-400/40 bg-sky-500/10 px-1.5 py-0.5 font-mono text-[9px] uppercase text-sky-300">
+        의심 · {confidence || argusRisk || "LOW"}
+      </span>
+    );
+  }
+
+  return null;
+}
+
 function FindingListItem({
   f,
+  sectionId,
 }: {
   f: { severity: string; message: string; evidence?: Record<string, unknown> };
+  sectionId: string;
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const hasEvidence = f.evidence && Object.keys(f.evidence).length > 0;
@@ -232,8 +310,12 @@ function FindingListItem({
           >
             {f.severity}
           </span>
+          {/* Staging에서 추가된 1-2 뱃지 유지 */}
+          {sectionId === "1-2" ? <G12InjectionSignalBadge evidence={f.evidence} /> : null}
           <span className="text-xs text-white/90">{f.message}</span>
         </div>
+        
+        {/* 우리가 만든 토글 버튼 유지 */}
         {hasEvidence && (
           <button
             type="button"
@@ -244,8 +326,10 @@ function FindingListItem({
           </button>
         )}
       </div>
+      
+      {/* 두 브랜치의 로직 통합: 토글 상태 확인 + sectionId 넘겨주기 */}
       {showDetails && hasEvidence ? (
-        <FindingEvidence evidence={f.evidence!} />
+        <FindingEvidence evidence={f.evidence!} sectionId={sectionId} />
       ) : null}
     </li>
   );
@@ -254,14 +338,42 @@ function FindingListItem({
 function findingBucket(f: {
   severity: string;
   evidence?: Record<string, unknown>;
-}): "httpx" | "zap" | "info" | "inventory" | "other" {
+}):
+  | "httpx"
+  | "zap"
+  | "tls"
+  | "version"
+  | "port_scan"
+  | "csv"
+  | "info"
+  | "inventory"
+  | "other" {
   if (f.severity === "info") return "info";
+
   const ev = f.evidence;
+
   if (ev?.rule_id === "2-2-design") return "info";
-  const engine = String(ev?.engine ?? ev?.source ?? "");
+
+  const engine = String(ev?.engine ?? ev?.source ?? "").toLowerCase();
+
   if (engine === "inventory") return "inventory";
   if (engine === "httpx") return "httpx";
   if (engine === "zap") return "zap";
+
+  if (engine === "tls") return "tls";
+  if (engine === "version") return "version";
+  if (engine === "port_scan") return "port_scan";
+
+  // Dependency / CVE
+  if (
+    engine === "dependency" ||
+    engine === "csv" ||
+    engine === "osv" ||
+    engine === "dependency_check"
+  ) {
+    return "csv";
+  }
+
   return "other";
 }
 
@@ -271,12 +383,16 @@ function CollapsibleFindingsSection({
   count,
   defaultOpen,
   findings,
+  sectionId,
+  children,
 }: {
   title: string;
   subtitle?: string;
   count: number;
   defaultOpen: boolean;
   findings: { severity: string; message: string; evidence?: Record<string, unknown> }[];
+  sectionId: string;
+  children?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   if (count === 0) return null;
@@ -294,12 +410,106 @@ function CollapsibleFindingsSection({
         {subtitle ? <span className="ml-1 text-[10px] text-cyber-muted">{subtitle}</span> : null}
       </button>
       {open ? (
-        <ul className="space-y-2 border-t border-cyber-border/30 px-3 py-2">
-          {findings.map((f, i) => (
-            <FindingListItem key={`${title}-${f.severity}-${i}`} f={f} />
-          ))}
-        </ul>
+        <div className="border-t border-cyber-border/30">
+          {children}
+          <ul className="space-y-2 px-3 py-2">
+            {findings.map((f, i) => (
+              <FindingListItem key={`${title}-${f.severity}-${i}`} f={f} sectionId={sectionId} />
+            ))}
+          </ul>
+        </div>
       ) : null}
+    </div>
+  );
+}
+
+function Gradle74Guide() {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState<"unix" | "windows" | null>(null);
+
+  const unixCmd =
+    "./gradlew :api-module:dependencies --configuration runtimeClasspath > deps.txt";
+  const winCmd =
+    "gradlew.bat :api-module:dependencies --configuration runtimeClasspath > deps.txt";
+
+  const handleCopy = async (cmd: string, key: "unix" | "windows") => {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setCopied(key);
+      setTimeout(() => setCopied((v) => (v === key ? null : v)), 1500);
+    } catch {
+      // 클립보드 접근 실패 시 조용히 무시
+    }
+  };
+
+  return (
+    <div className="mb-3 overflow-hidden rounded-lg border border-cyber-border/50 bg-cyber-bg/20">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition hover:bg-cyber-accent/5"
+      >
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-cyber-muted transition ${open ? "rotate-180" : ""}`}
+        />
+        <Terminal className="h-3.5 w-3.5 shrink-0 text-cyan-300/80" />
+        <span className="text-xs font-semibold text-white">Gradle 의존성 트리 추출 가이드</span>
+        <span className="ml-1 text-[10px] text-cyber-muted">deps.txt 생성 명령어</span>
+      </button>
+      {open ? (
+        <div className="space-y-3 border-t border-cyber-border/30 px-3 py-3">
+          <GuideCommandBlock
+            label="Linux / macOS"
+            command={unixCmd}
+            copied={copied === "unix"}
+            onCopy={() => handleCopy(unixCmd, "unix")}
+          />
+          <GuideCommandBlock
+            label="Windows (cmd / PowerShell)"
+            command={winCmd}
+            copied={copied === "windows"}
+            onCopy={() => handleCopy(winCmd, "windows")}
+          />
+          <p className="text-[10px] text-cyber-muted">
+            생성된{" "}
+            <code className="rounded bg-cyber-bg/60 px-1 font-mono text-cyan-300/90">
+              deps.txt
+            </code>{" "}
+            파일을 업로드하면 자동으로 취약점 진단이 진행됩니다.
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function GuideCommandBlock({
+  label,
+  command,
+  copied,
+  onCopy,
+}: {
+  label: string;
+  command: string;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  return (
+    <div>
+      <div className="mb-1 text-[10px] uppercase tracking-wide text-cyber-muted">{label}</div>
+      <div className="flex items-center justify-between gap-2 rounded border border-cyber-border/40 bg-black/30 px-2 py-1.5">
+        <code className="overflow-x-auto whitespace-nowrap font-mono text-[11px] text-cyan-300/90">
+          {command}
+        </code>
+        <button
+          type="button"
+          onClick={onCopy}
+          className="flex shrink-0 items-center gap-1 rounded border border-cyber-border/50 px-1.5 py-0.5 text-[10px] text-cyber-muted transition hover:bg-cyber-accent/10 hover:text-cyan-300"
+        >
+          <Copy className="h-3 w-3" />
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -313,12 +523,60 @@ function GroupedFindingsPanel({
 }) {
   const httpx = findings.filter((f) => findingBucket(f) === "httpx");
   const zap = findings.filter((f) => findingBucket(f) === "zap");
+  const tls = findings.filter((f) => findingBucket(f) === "tls");
+  const version = findings.filter((f) => findingBucket(f) === "version");
+  const portScan = findings.filter((f) => findingBucket(f) === "port_scan");
+  const csv = findings.filter((f) => findingBucket(f) === "csv");
   const inventory = findings.filter((f) => findingBucket(f) === "inventory");
   const info = findings.filter((f) => findingBucket(f) === "info");
   const other = findings.filter((f) => findingBucket(f) === "other");
 
   if (findings.length === 0) {
     return <p className="text-xs text-cyber-muted">finding 없음</p>;
+  }
+
+  if (sectionId === "1-2") {
+    const info = findings.filter((f) => findingBucket(f) === "info");
+    const nonInfo = findings.filter((f) => findingBucket(f) !== "info");
+    const g12Strong = nonInfo.filter(isG12StrongFinding);
+    const g12Weak = nonInfo.filter(isG12WeakFinding);
+    const g12Other = nonInfo.filter((f) => !isG12StrongFinding(f) && !isG12WeakFinding(f));
+
+    return (
+      <>
+        <CollapsibleFindingsSection
+          title="info"
+          count={info.length}
+          defaultOpen={false}
+          findings={info}
+          sectionId={sectionId}
+        />
+        <CollapsibleFindingsSection
+          title="정탐"
+          subtitle="· time / error pattern"
+          count={g12Strong.length}
+          defaultOpen={g12Strong.length > 0}
+          findings={g12Strong}
+          sectionId={sectionId}
+        />
+        <CollapsibleFindingsSection
+          title="약한 정탐"
+          subtitle="· boolean response difference"
+          count={g12Weak.length}
+          defaultOpen={g12Strong.length === 0 && g12Weak.length > 0}
+          findings={g12Weak}
+          sectionId={sectionId}
+        />
+        <CollapsibleFindingsSection
+          title="ARGUS direct"
+          subtitle="· error / boolean / time 직접 검증"
+          count={g12Other.length}
+          defaultOpen={g12Strong.length === 0 && g12Weak.length === 0}
+          findings={g12Other}
+          sectionId={sectionId}
+        />
+      </>
+    );
   }
 
   const httpxSubtitle =
@@ -334,13 +592,66 @@ function GroupedFindingsPanel({
         count={httpx.length}
         defaultOpen={false}
         findings={httpx}
+        sectionId={sectionId}
       />
+      <CollapsibleFindingsSection
+        title="TLS"
+        subtitle="· TLS 검사"
+        count={tls.length}
+        defaultOpen={false}
+        findings={tls}
+        sectionId={sectionId}
+      />
+
+      <CollapsibleFindingsSection
+        title="Version"
+        subtitle="· 버전 정보 분석"
+        count={version.length}
+        defaultOpen={false}
+        findings={version}
+        sectionId={sectionId}
+      />
+
+      <CollapsibleFindingsSection
+        title="Port Scan"
+        subtitle="· 포트 스캔"
+        count={portScan.length}
+        defaultOpen={false}
+        findings={portScan}
+        sectionId={sectionId}
+      />
+
+      <CollapsibleFindingsSection
+        title="CSV (Dependency/CVE)"
+        subtitle="· 라이브러리 취약점 분석"
+        count={csv.length}
+        defaultOpen={true}
+        findings={csv}
+        sectionId={sectionId}
+      >
+        {csv.length > 0 && (
+          <div className="mx-3 mt-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-200/90">
+            <p className="mb-1 font-semibold text-amber-400">안내</p>
+            <p>
+              CSV 기반 결과는 프로젝트에서 사용하는 라이브러리 버전을 알려진 취약점 데이터베이스(GHSA/CVE)와 비교하여 탐지한 결과입니다.
+            </p>
+            <p className="mt-1">
+              따라서 <strong className="text-amber-300">현재 사용 중인 버전에 알려진 보안 취약점이 존재함을 의미</strong>하지만,{" "}
+              <strong className="text-amber-300">해당 취약점이 현재 서비스에서 실제로 악용 가능한 상태임을 의미하는 것은 아닙니다.</strong>
+            </p>
+            <p className="mt-1">
+              실제 영향 여부는 애플리케이션의 사용 방식, 설정 및 배포 환경에 따라 달라질 수 있습니다. 결과는 참고용으로 활용하시기 바랍니다.
+            </p>
+          </div>
+        )}
+      </CollapsibleFindingsSection>
       <CollapsibleFindingsSection
         title="ZAP"
         subtitle={zapSubtitle}
         count={zap.length}
         defaultOpen={false}
         findings={zap}
+        sectionId={sectionId}
       />
       <CollapsibleFindingsSection
         title="inventory"
@@ -348,12 +659,14 @@ function GroupedFindingsPanel({
         count={inventory.length}
         defaultOpen={sectionId === "3-4"}
         findings={inventory}
+        sectionId={sectionId}
       />
       <CollapsibleFindingsSection
         title="info"
         count={info.length}
         defaultOpen={sectionId === "3-4"}
         findings={info}
+        sectionId={sectionId}
       />
       {other.length > 0 ? (
         <CollapsibleFindingsSection
@@ -361,6 +674,7 @@ function GroupedFindingsPanel({
           count={other.length}
           defaultOpen={false}
           findings={other}
+          sectionId={sectionId}
         />
       ) : null}
     </>
@@ -392,6 +706,7 @@ function ZapStatsLine({ zap }: { zap: unknown }) {
 
 export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionReport }) {
   const statsMessages = new Set([
+    "1-2 scan statistics",
     "1-5 scan statistics",
     "4-1 scan statistics",
     "4-2 scan statistics",
@@ -411,6 +726,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const findings = report.findings.filter((f) => !statsMessages.has(f.message));
   const statsFinding = report.findings.find((f) => statsMessages.has(f.message));
   const stats = statsFinding?.evidence?.stats as Record<string, unknown> | undefined;
+  const isG12Stats = statsFinding?.message === "1-2 scan statistics";
   const isG15Stats = statsFinding?.message === "1-5 scan statistics";
   const isG41Stats = statsFinding?.message === "4-1 scan statistics";
   const isG42Stats = statsFinding?.message === "4-2 scan statistics";
@@ -427,6 +743,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const isG35Stats = statsFinding?.message === "3-5 scan statistics";
   const isG36Stats = statsFinding?.message === "3-6 scan statistics";
 
+
   return (
     <div className="border-t border-cyber-border/40 bg-cyber-bg/30 px-4 py-3">
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -439,8 +756,38 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
         ) : null}
       </div>
 
+      {report.section_id === "7-4" ? <Gradle74Guide /> : null}
+
       {stats ? (
         <div className="mb-3 rounded border border-cyber-border/40 bg-cyber-panel/40 px-3 py-2 text-[11px] text-cyber-muted">
+          {isG12Stats ? (
+            <>
+              api-tree{" "}
+              <span className="font-mono text-cyan-300/90">{String(stats.scan_targets ?? "—")}</span>
+              {typeof stats.targets_with_params === "number" ? (
+                <span> · params {stats.targets_with_params}</span>
+              ) : null}
+              {typeof stats.verified_findings === "number" ? (
+                <span> · verified {stats.verified_findings}</span>
+              ) : null}
+              {typeof stats.confirmed_findings === "number" ? (
+                <span className={stats.confirmed_findings > 0 ? "text-rose-300/90" : "text-cyber-muted"}>
+                  {" "}
+                  · 정탐 {stats.confirmed_findings}
+                </span>
+              ) : null}
+              {typeof stats.verified_findings === "number" && typeof stats.confirmed_findings === "number" ? (
+                <span className="text-amber-300/90">
+                  {" "}
+                  · 약한 정탐 {Math.max(0, stats.verified_findings - stats.confirmed_findings)}
+                </span>
+              ) : null}
+              {typeof stats.excluded_server_error_signals === "number" && stats.excluded_server_error_signals > 0 ? (
+                <span> · excluded {stats.excluded_server_error_signals}</span>
+              ) : null}
+              <ZapStatsLine zap={stats.zap} />
+            </>
+          ) : null}
           {isG15Stats ? (
             <>
               sink{" "}
@@ -454,14 +801,14 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span> · phase B {stats.phase_b_jobs}</span>
               ) : null}
               {typeof (stats.redirect as { open_redirects?: number })?.open_redirects === "number" &&
-              (stats.redirect as { open_redirects?: number }).open_redirects! > 0 ? (
+                (stats.redirect as { open_redirects?: number }).open_redirects! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · open redirect {(stats.redirect as { open_redirects?: number }).open_redirects}
                 </span>
               ) : null}
               {typeof (stats.cors as { issues?: number })?.issues === "number" &&
-              (stats.cors as { issues?: number }).issues! > 0 ? (
+                (stats.cors as { issues?: number }).issues! > 0 ? (
                 <span className="text-amber-300/90">
                   {" "}
                   · CORS {(stats.cors as { issues?: number }).issues}
@@ -492,7 +839,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                   {" "}
                   · cookie flags {(stats.cookie_attr as { issues?: number }).issues}
                   {typeof (stats.cookie_attr as { from_cache?: number })?.from_cache === "number" &&
-                  (stats.cookie_attr as { from_cache?: number }).from_cache! > 0 ? (
+                    (stats.cookie_attr as { from_cache?: number }).from_cache! > 0 ? (
                     <span className="text-cyan-300/80">
                       {" "}
                       (cache {(stats.cookie_attr as { from_cache?: number }).from_cache})
@@ -502,21 +849,21 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
               ) : null}
               {typeof (stats.cross_cookie as { cross_accepted?: number })?.cross_accepted ===
                 "number" &&
-              (stats.cross_cookie as { cross_accepted?: number }).cross_accepted! > 0 ? (
+                (stats.cross_cookie as { cross_accepted?: number }).cross_accepted! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · cross {(stats.cross_cookie as { cross_accepted?: number }).cross_accepted}
                 </span>
               ) : null}
               {typeof (stats.tamper as { tamper_accepted?: number })?.tamper_accepted === "number" &&
-              (stats.tamper as { tamper_accepted?: number }).tamper_accepted! > 0 ? (
+                (stats.tamper as { tamper_accepted?: number }).tamper_accepted! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · tamper {(stats.tamper as { tamper_accepted?: number }).tamper_accepted}
                 </span>
               ) : null}
               {typeof (stats.by_severity as { high?: number })?.high === "number" &&
-              (stats.by_severity as { high?: number }).high! > 0 ? (
+                (stats.by_severity as { high?: number }).high! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · high {(stats.by_severity as { high?: number }).high}
@@ -532,7 +879,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span className="text-cyan-300/80"> · auth {stats.auth_source}</span>
               ) : null}
               {typeof (stats.token_analysis as { tokens_analyzed?: number })?.tokens_analyzed ===
-              "number" ? (
+                "number" ? (
                 <span>
                   {" "}
                   · tokens analyzed{" "}
@@ -540,14 +887,14 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 </span>
               ) : null}
               {typeof (stats.by_severity as { high?: number })?.high === "number" &&
-              (stats.by_severity as { high?: number }).high! > 0 ? (
+                (stats.by_severity as { high?: number }).high! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · high {(stats.by_severity as { high?: number }).high}
                 </span>
               ) : null}
               {typeof (stats.by_severity as { medium?: number })?.medium === "number" &&
-              (stats.by_severity as { medium?: number }).medium! > 0 ? (
+                (stats.by_severity as { medium?: number }).medium! > 0 ? (
                 <span className="text-amber-300/90">
                   {" "}
                   · medium {(stats.by_severity as { medium?: number }).medium}
@@ -601,8 +948,8 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span> · unique finding {stats.collapsed_issues}</span>
               ) : null}
               {typeof stats.raw_issues === "number" &&
-              typeof stats.collapsed_issues === "number" &&
-              stats.raw_issues > stats.collapsed_issues ? (
+                typeof stats.collapsed_issues === "number" &&
+                stats.raw_issues > stats.collapsed_issues ? (
                 <span className="text-cyber-muted"> (raw {stats.raw_issues} → deduped)</span>
               ) : null}
               {stats.httpx ? " · httpx 프로브 완료" : null}
@@ -627,7 +974,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span> · finding {stats.issues}</span>
               ) : null}
               {typeof stats.raw_issues === "number" && typeof stats.collapsed_issues === "number" &&
-              stats.raw_issues > stats.collapsed_issues ? (
+                stats.raw_issues > stats.collapsed_issues ? (
                 <span className="text-cyber-muted">
                   {" "}
                   (raw {stats.raw_issues} → deduped)
@@ -666,7 +1013,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span> · finding {stats.issues}</span>
               ) : null}
               {typeof stats.raw_issues === "number" && typeof stats.collapsed_issues === "number" &&
-              stats.raw_issues > stats.collapsed_issues ? (
+                stats.raw_issues > stats.collapsed_issues ? (
                 <span className="text-cyber-muted">
                   {" "}
                   (raw {stats.raw_issues} → deduped)
@@ -702,7 +1049,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span> · finding {stats.issues}</span>
               ) : null}
               {typeof stats.raw_issues === "number" && typeof stats.collapsed_issues === "number" &&
-              stats.raw_issues > stats.collapsed_issues ? (
+                stats.raw_issues > stats.collapsed_issues ? (
                 <span className="text-cyber-muted">
                   {" "}
                   (raw {stats.raw_issues} → deduped)
@@ -758,7 +1105,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
               {" · admin API "}
               <span className="font-mono text-cyan-300/90">{String(stats.admin_api_paths ?? "—")}</span>
               {typeof (stats.by_severity as { medium?: number })?.medium === "number" &&
-              (stats.by_severity as { medium?: number }).medium! > 0 ? (
+                (stats.by_severity as { medium?: number }).medium! > 0 ? (
                 <span className="text-amber-300/90">
                   {" "}
                   · medium {(stats.by_severity as { medium?: number }).medium}
@@ -783,8 +1130,8 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
               <span className="font-mono text-cyan-300/90">
                 {String(
                   (stats.pages_anonymous as { pages_probed?: number })?.pages_probed ??
-                    (stats.pages as { pages_probed?: number })?.pages_probed ??
-                    "—",
+                  (stats.pages as { pages_probed?: number })?.pages_probed ??
+                  "—",
                 )}
               </span>
               {typeof (stats.pages_anonymous as { with_noindex?: number })?.with_noindex === "number" ? (
@@ -849,7 +1196,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span className="text-cyan-300/80"> · multi pass</span>
               ) : null}
               {typeof (stats.authenticated as { issues?: number })?.issues === "number" &&
-              (stats.authenticated as { issues?: number }).issues! > 0 ? (
+                (stats.authenticated as { issues?: number }).issues! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · auth issues {(stats.authenticated as { issues?: number }).issues}
@@ -887,7 +1234,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 </span>
               ) : null}
               {typeof (stats.coverage as { status_401?: number })?.status_401 === "number" &&
-              (stats.coverage as { status_401?: number }).status_401! > 0 ? (
+                (stats.coverage as { status_401?: number }).status_401! > 0 ? (
                 <span className="text-amber-300/90">
                   {" "}
                   · 401 {(stats.coverage as { status_401?: number }).status_401}
@@ -895,7 +1242,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
               ) : null}
               {typeof (stats.coverage as { connection_errors?: number })?.connection_errors ===
                 "number" &&
-              (stats.coverage as { connection_errors?: number }).connection_errors! > 0 ? (
+                (stats.coverage as { connection_errors?: number }).connection_errors! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · unreachable {(stats.coverage as { connection_errors?: number }).connection_errors}
@@ -908,21 +1255,21 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 </span>
               ) : null}
               {typeof (stats.coverage as { emails_seen?: number })?.emails_seen === "number" &&
-              (stats.coverage as { emails_seen?: number }).emails_seen! > 0 ? (
+                (stats.coverage as { emails_seen?: number }).emails_seen! > 0 ? (
                 <span>
                   {" "}
                   · emails in JSON {(stats.coverage as { emails_seen?: number }).emails_seen}
                 </span>
               ) : null}
               {typeof (stats.coverage as { phones_seen?: number })?.phones_seen === "number" &&
-              (stats.coverage as { phones_seen?: number }).phones_seen! > 0 ? (
+                (stats.coverage as { phones_seen?: number }).phones_seen! > 0 ? (
                 <span>
                   {" "}
                   · phones in JSON {(stats.coverage as { phones_seen?: number }).phones_seen}
                 </span>
               ) : null}
               {typeof stats.raw_issues === "number" && typeof stats.collapsed_issues === "number" &&
-              stats.raw_issues > stats.collapsed_issues ? (
+                stats.raw_issues > stats.collapsed_issues ? (
                 <span> · raw {stats.raw_issues}</span>
               ) : null}
               {typeof stats.auth_passes === "number" ? (

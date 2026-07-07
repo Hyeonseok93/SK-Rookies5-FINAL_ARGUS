@@ -52,6 +52,36 @@ def test_dedupe_prefers_api_port_over_frontend():
     assert out[0].base_url == "http://localhost:8080"
 
 
+def test_dedupe_admin_prefers_origin_with_admin_session():
+    targets = _load("targets")
+    from inventory.schema import Endpoint
+
+    rows = [
+        Endpoint(
+            base_url="http://localhost:8081",
+            path="/api/v1/admin/members",
+            method="GET",
+            kind="api",
+        ),
+        Endpoint(
+            base_url="http://localhost:8080",
+            path="/api/v1/admin/members",
+            method="GET",
+            kind="api",
+        ),
+    ]
+    sessions = [
+        {
+            "email": "admin@ex.com",
+            "token": "tok",
+            "login_url": "http://localhost:8080/api/v1/auth/admin/login",
+        }
+    ]
+    out = targets.dedupe_api_probe_endpoints(rows, sessions=sessions)
+    assert len(out) == 1
+    assert out[0].base_url == "http://localhost:8080"
+
+
 def test_timestamp_not_phone_false_positive():
     rules = _load("pii_rules")
     hits = rules.analyze_text(
@@ -137,6 +167,15 @@ def test_url_query_rrn():
     assert any(h.rule_id == "rrn_plain" for h in hits)
 
 
+def test_normalize_field_path_for_merge():
+    probes = _load("probes")
+    assert (
+        probes.normalize_field_path_for_merge("response_body.data.members[3].email")
+        == "response_body.data.members[*].email"
+    )
+    assert probes.normalize_field_path_for_merge("response_body.data.email") == "response_body.data.email"
+
+
 def test_collapse_auth_findings():
     probes = _load("probes")
     from diagnosis.result import DiagnosisFinding
@@ -147,22 +186,31 @@ def test_collapse_auth_findings():
         "direction": "response_body",
         "field_path": "body.phone",
         "marker": "010-1234-5678",
+        "method": "GET",
+        "url": "http://localhost:8080/api/a",
+        "sample": "010-1234-5678",
     }
     items = [
         DiagnosisFinding(
             severity="high",
             message="[5-2][httpx][anonymous][response_body] leak",
-            evidence={**base_ev, "auth_mode": "anonymous"},
+            evidence={**base_ev, "auth_mode": "anonymous", "sample": "010-1111-1111"},
         ),
         DiagnosisFinding(
             severity="high",
             message="[5-2][httpx][authenticated:a@b:login][response_body] leak",
-            evidence={**base_ev, "auth_mode": "authenticated:a@b:login"},
+            evidence={**base_ev, "auth_mode": "authenticated:a@b:login", "sample": "010-2222-2222"},
         ),
     ]
     collapsed, stats = probes.collapse_findings(items)
     assert stats["collapsed_issues"] == 1
     assert len(collapsed[0].evidence.get("auth_modes", [])) == 2
+
+    raw = probes.serialize_raw_findings(items)
+    assert len(raw) == 2
+    samples = {row["evidence"]["auth_mode"]: row["evidence"]["sample"] for row in raw}
+    assert samples["anonymous"] == "010-1111-1111"
+    assert samples["authenticated:a@b:login"] == "010-2222-2222"
 
 
 def test_g52_module_implemented():

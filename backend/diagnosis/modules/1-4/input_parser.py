@@ -1,9 +1,9 @@
 """
 ARGUS - SSRF / File Inclusion 진단 모듈
 
-"Build Attack Tree" 모달에서 선택 가능한 3가지 입력 소스를 각각 파싱합니다.
+"Build Attack Tree" 모달에서 선택 가능한 3가지 입력 소스를 각각 파싱
   1) URL List  : 줄바꿈으로 구분된 전체 URL 텍스트
-  2) API List  : "METHOD endpoint" 형식 텍스트 (Postman/Insomnia export 등에서 흔한 형태)
+  2) API List  : "METHOD endpoint" 형식 텍스트 
   3) Swagger   : OpenAPI/Swagger JSON (URL 또는 업로드 파일 경로)
 """
 
@@ -17,7 +17,7 @@ from models import ScanTarget, ScanParam, ParamLocation, InputSource
 
 
 def _operation_roles(path: str, detail: dict) -> List[str]:
-    """Read declarative role metadata only; never infer roles from product URLs."""
+    """선언된 역할 메타데이터만 읽으며, 제품 URL로 역할을 추론하지 않음"""
     raw_roles = (
         detail.get("x-roles")
         or detail.get("x-allowed-roles")
@@ -38,7 +38,7 @@ def _operation_roles(path: str, detail: dict) -> List[str]:
 def filter_targets_by_role(targets: List[ScanTarget], role: str,
                            access_decisions: Optional[Dict[tuple, bool]] = None,
                            role_aliases: Optional[List[str]] = None) -> List[ScanTarget]:
-    """Filter with x-roles first and token-probe decisions second."""
+    """먼저 x-roles로 필터링한 뒤 토큰 탐색 결과를 적용"""
     if not role or role.casefold() == "all":
         return targets
 
@@ -64,8 +64,8 @@ def filter_targets_by_role(targets: List[ScanTarget], role: str,
 # --------------------------------------------------------------------------
 def parse_url_list(raw_text: str) -> List[ScanTarget]:
     """
-    줄바꿈으로 구분된 URL 목록을 파싱합니다.
-    빈 줄, 주석(#으로 시작), 잘못된 URL은 무시합니다.
+    줄바꿈으로 구분된 URL 목록을 파싱
+    빈 줄, 주석(#으로 시작), 잘못된 URL은 무시
 
     예시 입력:
         https://target.com/view?file=a.pdf
@@ -104,9 +104,9 @@ API_LINE_PATTERN = re.compile(
 
 def parse_api_list(raw_text: str, default_base_url: str = "") -> List[ScanTarget]:
     """
-    "METHOD URL [JSON_BODY]" 형식의 API 목록을 파싱합니다.
-    URL이 절대경로(https://...)가 아니면 default_base_url을 붙입니다.
-    JSON body가 있으면 body 내부 키도 ScanParam(location=BODY)으로 추출합니다.
+    "METHOD URL [JSON_BODY]" 형식의 API 목록을 파싱
+    URL이 절대경로(https://...)가 아니면 default_base_url을 붙임
+    JSON body가 있으면 body 내부 키도 ScanParam(location=BODY)으로 추출
     """
     targets: List[ScanTarget] = []
 
@@ -176,7 +176,7 @@ def parse_api_list(raw_text: str, default_base_url: str = "") -> List[ScanTarget
 # --------------------------------------------------------------------------
 def _resolve_swagger_source(source: str, auth_headers: Optional[Dict[str, str]] = None) -> dict:
     """
-    source가 URL이면 GET 요청으로 가져오고, 로컬 파일 경로면 직접 읽습니다.
+    source가 URL이면 GET 요청으로 가져오고, 로컬 파일 경로면 직접 읽음
     """
     if source.startswith("http://") or source.startswith("https://"):
         resp = requests.get(source, timeout=10, headers=auth_headers or None)
@@ -214,19 +214,27 @@ def _schema_sample_value(name: str, schema: Optional[dict]) -> str:
         return str(schema["enum"][0])
 
     name_lower = name.lower()
-    schema_type = schema.get("type", "string")
-    fmt = schema.get("format", "")
+    schema_type = str(schema.get("type", "string")).lower()
+    fmt = str(schema.get("format", "")).lower()
 
-    if schema_type in ("integer", "number") or fmt in ("int32", "int64", "double", "float"):
+    if fmt == "date":
+        return "2026-01-01"
+    if fmt == "date-time":
+        return "2026-01-01T00:00:00"
+    if fmt == "time":
+        return "00:00:00"
+    if fmt in ("int32", "int64") or schema_type == "integer":
         return "0" if name_lower in {"page"} else "1"
+    if fmt in ("double", "float") or schema_type == "number":
+        return "1.0"
     if schema_type == "boolean":
-        return "false"
-    if "date-time" == fmt:
-        return "2026-06-30T00:00:00"
-    if "date" == fmt:
-        return "2026-06-30"
+        return "true"
+    if fmt == "email":
+        return "argus-test@example.com"
+    if fmt == "uuid":
+        return "00000000-0000-0000-0000-000000000000"
     if "email" in name_lower:
-        return "argus@example.com"
+        return "argus-test@example.com"
     if "phone" in name_lower:
         return "010-1234-5678"
     normalized_name = re.sub(r"[^a-z0-9]", "", name_lower)
@@ -244,7 +252,7 @@ def _schema_sample_value(name: str, schema: Optional[dict]) -> str:
 def _extract_body_params(spec: dict, schema: dict,
                          required_names: Optional[List[str]] = None,
                          location: ParamLocation = ParamLocation.BODY) -> List[ScanParam]:
-    """Expand an object schema into sibling parameters at the requested location."""
+    """객체 스키마를 지정된 위치의 개별 파라미터로 펼칩니다."""
     schema = _resolve_schema_ref(spec, schema)
     required = set(required_names or schema.get("required", []) or [])
 
@@ -271,8 +279,7 @@ def _extract_body_params(spec: dict, schema: dict,
     params: List[ScanParam] = []
     for prop_name, prop_schema in properties.items():
         resolved = _resolve_schema_ref(spec, prop_schema)
-        # Preserve just enough parent-object context for semantic triage after
-        # the object schema is flattened into individual ScanParam instances.
+        # 객체 스키마를 개별 ScanParam으로 펼친 뒤 의미를 판별할 수 있도록 상위 객체의 문맥을 필요한 만큼 보존
         resolved = dict(resolved)
         if resolved.get("type") == "array" and resolved.get("items"):
             resolved["items"] = _resolve_schema_ref(spec, resolved["items"])
@@ -291,7 +298,7 @@ def _extract_body_params(spec: dict, schema: dict,
 
 
 def _deduplicate_params(params: List[ScanParam]) -> List[ScanParam]:
-    """Keep one parameter per HTTP location/name while preserving OpenAPI order."""
+    """OpenAPI 순서를 유지하면서 HTTP 위치와 이름의 조합마다 파라미터 하나만 남김"""
     unique: List[ScanParam] = []
     seen = set()
     for param in params:
@@ -306,7 +313,7 @@ def _deduplicate_params(params: List[ScanParam]) -> List[ScanParam]:
 def parse_swagger(source: str, host_override: str = "",
                   auth_headers: Optional[Dict[str, str]] = None) -> List[ScanTarget]:
     """
-    Swagger(OpenAPI 2.0/3.0) 스펙을 파싱하여 ScanTarget 리스트를 생성합니다.
+    Swagger(OpenAPI 2.0/3.0) 스펙을 파싱하여 ScanTarget 리스트를 생성
 
     source        : Swagger JSON URL 또는 로컬 파일 경로
     host_override : 스펙 내 host/servers 정보 대신 실제 대상 서버를 강제 지정할 때 사용
@@ -400,8 +407,8 @@ def parse_inputs(
     auth_headers: Optional[Dict[str, str]] = None,
 ) -> List[ScanTarget]:
     """
-    Build Attack Tree 모달에서 체크된 입력들을 모두 병합하여 ScanTarget 리스트를 반환합니다.
-    체크되지 않은 입력은 빈 문자열로 두면 자동으로 스킵됩니다.
+    Build Attack Tree 모달에서 체크된 입력들을 모두 병합하여 ScanTarget 리스트를 반환
+    체크되지 않은 입력은 빈 문자열로 두면 자동으로 스킵
     """
     targets: List[ScanTarget] = []
 
@@ -418,7 +425,7 @@ def parse_inputs(
         print(f"[Swagger 로딩] {source}: {len(parsed)}개 타깃")
         targets.extend(parsed)
 
-    # 같은 URL의 request media type별 ScanTarget은 서로 다른 주입 대상입니다.
+    # 같은 URL의 request media type별 ScanTarget은 서로 다른 주입 대상
     seen = set()
     unique_targets = []
     for t in targets:

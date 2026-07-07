@@ -21,3 +21,6 @@ env/
 # Runtime logs
 *.log
 logs/
+
+# Local documentation (not committed)
+docs/

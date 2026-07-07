@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 import json
+import logging
 import yaml
 from pathlib import Path
 
@@ -51,6 +52,8 @@ from inventory.upload_batch import ensure_batch_dir, write_batch_manifest
 from inventory.upload_retention import prune_upload_batches
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
+logger = logging.getLogger("uvicorn.error")
+logger.setLevel(logging.INFO)
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
@@ -117,7 +120,7 @@ def get_tree(
 
 @router.get("/endpoints", response_model=EndpointListResponse)
 def list_endpoints(
-    q: str | None = Query(None, description="Filter by path/method/base_url"),
+    q: str | None = Query(None, description="Filter by path/method/base_url/request parameter"),
     source: str | None = Query(None, description="Filter by source id (url_list, api_list, openapi)"),
     inventory: str = Query("ready", description="ready (built) or verified (after verify)"),
     limit: int = Query(50, ge=1, le=500),
@@ -136,6 +139,7 @@ def list_endpoints(
             if needle in e.path.lower()
             or needle in e.method.lower()
             or needle in e.base_url.lower()
+            or any(needle in p.name.lower() for p in e.request_params)
         ]
     if source:
         items = [
@@ -527,6 +531,8 @@ def _build_verify_response(
                 f"Verified 0/{payload['total_checked']} endpoints.{hint} "
                 "Original inventory was kept (not wiped)."
             ),
+            warning=payload.get("warning"),
+            error=payload.get("error", "verify_empty_result"),
         )
 
     verified_tree: ApiTree = payload["verified_tree"]
@@ -595,7 +601,19 @@ async def verify_attack_surface(
                 spider_enabled=use_spider,
                 ajax_spider_enabled=use_ajax_spider,
             )
-            working_tree = payload["verified_tree"]
+            zap_tree = payload["verified_tree"]
+            if zap_tree.endpoints:
+                working_tree = zap_tree
+            else:
+                # A failed/empty ZAP pass must not prevent the independent
+                # httpx pass from probing the original inventory. Partial or
+                # complete httpx results can still be persisted safely.
+                logger.warning(
+                    "ZAP verify produced 0 endpoints; continuing httpx with the "
+                    "original inventory (%d endpoints)",
+                    len(tree.endpoints),
+                )
+                working_tree = tree
         except ZapNotAvailableError as exc:
             if not use_httpx:
                 return VerifyInventoryResponse(

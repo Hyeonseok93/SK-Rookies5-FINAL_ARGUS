@@ -3,5 +3,5 @@ title: "계정 정보 파악 가능성"
 chapter: 3
 implemented: false
 diagnosable: false
-review_later: true
+status_label: "수동 진단"
 engine: pending

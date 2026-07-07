@@ -1,4 +1,4 @@
-"""Diagnosis module 1-4: SSRF / File Inclusion 공격 가능성."""
+""" 1-4: SSRF / File Inclusion 공격 가능성"""
 from __future__ import annotations
 
 import sys
@@ -24,6 +24,7 @@ if str(_MODULE_DIR) not in sys.path:
 from inventory_bridge import endpoints_to_scan_targets  # noqa: E402
 from main import run_pipeline  # noqa: E402
 from report_mapper import build_findings, build_status_and_message  # noqa: E402
+from search_engine import search_targets  # noqa: E402
 
 
 def _scan_options(raw: dict) -> dict:
@@ -46,7 +47,7 @@ def _result_key(result: dict) -> tuple[str, str, str, str]:
 
 
 def _dedupe_session_results(results: list[dict]) -> list[dict]:
-    """Merge account duplicates while preserving every confirming role."""
+    """확인된 역할을 모두 보존하면서 중복 계정을 병합"""
     deduped: dict[tuple[str, str, str, str], dict] = {}
     for result in results:
         key = _result_key(result)
@@ -71,8 +72,10 @@ class G14Module(DiagnosisModule):
     section_id = "1-4"
     title = "SSRF / File Inclusion 공격 가능성"
     chapter = 1
-    implemented = True
-    engine = "custom-injector+zap"
+    implemented = False
+    diagnosable = False
+    status_label = "수동 진단"
+    engine = "pending"
 
     def __init__(self, module_dir: Path) -> None:
         self.module_dir = module_dir
@@ -82,6 +85,12 @@ class G14Module(DiagnosisModule):
             if isinstance(raw, dict):
                 self.title = str(raw.get("title", self.title))
                 self.chapter = int(raw.get("chapter", self.chapter))
+                self.implemented = bool(raw.get("implemented", self.implemented))
+                self.diagnosable = bool(raw.get("diagnosable", self.diagnosable))
+                self.review_later = bool(raw.get("review_later", False))
+                self.status_label = (
+                    str(raw["status_label"]).strip() if raw.get("status_label") else None
+                )
                 self.engine = str(raw.get("engine", self.engine))
 
     def _error_report(self, ctx: DiagnosisContext, message: str) -> SectionReport:
@@ -109,6 +118,7 @@ class G14Module(DiagnosisModule):
 
         scoped = filter_endpoints_by_probe_bases(tree.endpoints, raw)
         targets = endpoints_to_scan_targets(scoped)
+        candidate_count = len(search_targets(targets))
         prepare(len(targets), f"1-4: {len(targets)}개 인벤토리 대상 준비")
         accounts = load_test_accounts().get("accounts") or []
         if not accounts:
@@ -165,7 +175,7 @@ class G14Module(DiagnosisModule):
         merged_unique = _dedupe_session_results(merged_all)
         findings: list[DiagnosisFinding] = build_findings(merged_unique)
         status, message = build_status_and_message(
-            findings, candidate_count=len(merged_unique), target_count=len(targets)
+            findings, candidate_count=candidate_count, target_count=len(targets)
         )
         report = SectionReport(
             section_id=self.section_id,

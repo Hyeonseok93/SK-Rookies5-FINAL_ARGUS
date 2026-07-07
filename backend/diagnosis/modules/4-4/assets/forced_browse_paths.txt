@@ -1,0 +1,9 @@
+# 중요 페이지 강제 탐색 기본 경로
+/admin
+/admin/users
+/manage
+/board/write
+/mypage
+/dashboard
+/account
+/profile

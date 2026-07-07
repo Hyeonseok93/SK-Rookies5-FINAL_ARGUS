@@ -1,4 +1,4 @@
-"""Dynamic authorization-boundary discovery from OpenAPI declarations and JWTs."""
+"""OpenAPI 선언과 JWT를 이용한 동적 권한 경계 탐색"""
 
 import base64
 import json
@@ -27,7 +27,7 @@ def _claim_aliases(value: str) -> List[str]:
 
 
 def decode_jwt_payload(token: str) -> Dict[str, Any]:
-    """Decode claims without verification; the target server still verifies the JWT."""
+    """검증 없이 클레임을 디코딩하며, JWT 검증은 대상 서버가 수행"""
     clean = token.strip()
     if clean.lower().startswith("bearer "):
         clean = clean[7:].strip()
@@ -133,7 +133,7 @@ def parse_token_sets(raw_values: Iterable[str]) -> List[TokenIdentity]:
 
 def apply_explicit_resource_ids(identities: List[TokenIdentity],
                                 raw_values: Iterable[str]) -> None:
-    """Apply ROLE:param=value values; explicit values precede JWT-derived IDs."""
+    """ROLE:param=value 값을 적용하며, 명시된 값을 JWT에서 얻은 ID보다 우선"""
     by_name = {
         _normalized(alias): identity
         for identity in identities
@@ -201,7 +201,7 @@ class RoleBoundaryDiscoverer:
 
                 probe = injector.probe_target_access(target)
                 status = probe.response.status_code if probe.response is not None else None
-                # Network/validation failures are inconclusive and must not silently remove coverage.
+                # 네트워크/검증 실패만으로는 결론을 내릴 수 없으므로 검사 범위를 조용히 제외해서는 안 됨
                 accessible = status not in (401, 403) if status is not None else True
                 decisions[identity.name][key] = accessible
                 matrix.append({
