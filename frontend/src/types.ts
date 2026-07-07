@@ -4,6 +4,7 @@ export type SourceFiles = {
   url_list: File | null;
   api_list: File | null;
   openapi: File[];
+  gradle_deps: File[];
 };
 
 export interface SourceOption {
@@ -19,6 +20,7 @@ export interface BuildSourceSelection {
   url_list_enabled: boolean;
   api_list_enabled: boolean;
   openapi_enabled: boolean;
+  gradle_deps_enabled: boolean;
 }
 
 export interface BuildInventoryPayload {
