@@ -11,20 +11,48 @@ import threading
 import time
 from typing import Optional
 
-from selenium import webdriver
-from selenium.common.exceptions import (
-    NoSuchElementException,
-    TimeoutException,
-    WebDriverException,
-)
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
-
 from config import Config
+
+# Selenium/Chrome are optional. They are only needed when the engine runs
+# WITHOUT --skip-selenium. Import lazily so this module (and main.py, which
+# imports SessionManager unconditionally at the top) load fine in environments
+# that don't ship selenium/Chrome — e.g. the slim Docker image, which runs 1-6
+# with skip_selenium. Instantiating SessionManager there raises ImportError,
+# which main.py's Step 3 catches and degrades to a no-Selenium scan.
+webdriver = None
+Options = Service = By = EC = WebDriverWait = ChromeDriverManager = None
+NoSuchElementException = TimeoutException = WebDriverException = None
+
+
+def _load_selenium() -> None:
+    """Populate the selenium/webdriver-manager names on first use."""
+    global webdriver, Options, Service, By, EC, WebDriverWait, ChromeDriverManager
+    global NoSuchElementException, TimeoutException, WebDriverException
+    if webdriver is not None:
+        return
+    from selenium import webdriver as _webdriver
+    from selenium.common.exceptions import (
+        NoSuchElementException as _NoSuchElementException,
+        TimeoutException as _TimeoutException,
+        WebDriverException as _WebDriverException,
+    )
+    from selenium.webdriver.chrome.options import Options as _Options
+    from selenium.webdriver.chrome.service import Service as _Service
+    from selenium.webdriver.common.by import By as _By
+    from selenium.webdriver.support import expected_conditions as _EC
+    from selenium.webdriver.support.ui import WebDriverWait as _WebDriverWait
+    from webdriver_manager.chrome import ChromeDriverManager as _ChromeDriverManager
+
+    webdriver = _webdriver
+    Options = _Options
+    Service = _Service
+    By = _By
+    EC = _EC
+    WebDriverWait = _WebDriverWait
+    ChromeDriverManager = _ChromeDriverManager
+    NoSuchElementException = _NoSuchElementException
+    TimeoutException = _TimeoutException
+    WebDriverException = _WebDriverException
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +71,9 @@ class SessionManager:
     """
 
     def __init__(self, cfg: Config):
+        # Raises ImportError when selenium/Chrome are unavailable; main.py's
+        # Step 3 catches it and continues without Selenium.
+        _load_selenium()
         self.cfg = cfg
         self.jwt_token: str = ""
         self._cdp_lock = threading.Lock()  # CDP 로그 수집 동시성 보호
