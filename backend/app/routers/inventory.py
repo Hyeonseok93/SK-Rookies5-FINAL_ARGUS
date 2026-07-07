@@ -363,11 +363,13 @@ async def build_attack_surface(
     url_list_enabled: bool = Form(False),
     api_list_enabled: bool = Form(False),
     openapi_enabled: bool = Form(False),
+    gradle_deps_enabled: bool = Form(False),
     url_list_file: UploadFile | None = File(None),
     api_list_file: UploadFile | None = File(None),
     openapi_files: list[UploadFile] | None = File(None),
+    gradle_deps_files: list[UploadFile] | None = File(None),
 ) -> BuildInventoryResponse:
-    if not any([url_list_enabled, api_list_enabled, openapi_enabled]):
+    if not any([url_list_enabled, api_list_enabled, openapi_enabled, gradle_deps_enabled]):
         return BuildInventoryResponse(
             ok=False,
             stats=InventoryStats(),
@@ -379,9 +381,11 @@ async def build_attack_surface(
     url_list_path: Path | None = None
     api_list_path: Path | None = None
     openapi_paths: list[Path] = []
+    gradle_dep_paths: list[Path] = []
     url_list_name: str | None = None
     api_list_name: str | None = None
     openapi_names: list[str] = []
+    gradle_dep_names: list[str] = []
 
     if url_list_enabled:
         if not url_list_file or not url_list_file.filename:
@@ -421,12 +425,66 @@ async def build_attack_surface(
         if not openapi_paths:
             return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Swagger file required.")
 
+    if gradle_deps_enabled:
+        if not gradle_deps_files:
+            return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Gradle dependency file required.")
+        gradle_dep_warnings: list[str] = []
+        for index, upload in enumerate(gradle_deps_files):
+            if not upload.filename:
+                continue
+            if not _ext_ok(upload.filename, {".txt"}):
+                return BuildInventoryResponse(
+                    ok=False,
+                    stats=InventoryStats(),
+                    message=f"Gradle dependency file: use .txt ({upload.filename})",
+                )
+            stored_name = f"deps_{index}.txt"
+            stored_path = batch_dir / stored_name
+            raw_bytes = await upload.read()
+            stored_path.parent.mkdir(parents=True, exist_ok=True)
+            stored_path.write_bytes(raw_bytes)
+            gradle_dep_paths.append(stored_path)
+            gradle_dep_names.append(upload.filename)
+            # 가볍게 지원 형식 여부 확인 (경고만, 저장은 완료)
+            try:
+                preview = raw_bytes[:4096].decode("utf-8", errors="replace")
+                _gradle_markers = ("runtimeClasspath", "+---", "\\---")
+                _maven_markers = ("[INFO]", "maven-dependency-plugin")
+                _pip_markers = ("==",)
+                _npm_markers = ('"dependencies"', '"packages"', '"version"')
+                recognized = (
+                    any(m in preview for m in _gradle_markers)
+                    or any(m in preview for m in _maven_markers)
+                    or preview.strip().startswith("{")
+                    or sum(1 for l in preview.splitlines()[:20]
+                           if re.search(r"[A-Za-z0-9_.-]+==", l)) >= 2
+                )
+                if not recognized:
+                    gradle_dep_warnings.append(
+                        f"{upload.filename}: 지원 형식(Gradle/Maven/pip/npm)이 아닐 수 있음"
+                    )
+            except Exception:
+                pass
+        if not gradle_dep_paths:
+            return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Gradle dependency file required.")
+        # 컨테이너 내부 절대경로 목록을 JSON에 저장 → diagnosis_service._context()가 읽음
+        dep_abs_paths = [str(p.resolve()) for p in gradle_dep_paths]
+        gradle_dep_files_json = DATA_DIR / "gradle_dep_files.json"
+        gradle_dep_files_json.write_text(
+            json.dumps({"paths": dep_abs_paths, "batch_id": batch_id}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    elif (DATA_DIR / "gradle_dep_files.json").is_file() and not gradle_deps_enabled:
+        # 명시적으로 비활성화한 경우 기존 파일 유지 (다른 업로드만 수행 중)
+        pass
+
     write_batch_manifest(
         batch_dir,
         batch_id=batch_id,
         url_list=url_list_name,
         api_list=api_list_name,
         openapi=openapi_names,
+        gradle_deps=gradle_dep_names if gradle_dep_names else None,
     )
 
     cfg = load_config()

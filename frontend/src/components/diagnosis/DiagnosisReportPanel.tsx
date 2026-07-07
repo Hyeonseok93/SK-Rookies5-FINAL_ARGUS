@@ -272,14 +272,42 @@ function FindingListItem({
 function findingBucket(f: {
   severity: string;
   evidence?: Record<string, unknown>;
-}): "httpx" | "zap" | "info" | "inventory" | "other" {
+}):
+  | "httpx"
+  | "zap"
+  | "tls"
+  | "version"
+  | "port_scan"
+  | "csv"
+  | "info"
+  | "inventory"
+  | "other" {
   if (f.severity === "info") return "info";
+
   const ev = f.evidence;
+
   if (ev?.rule_id === "2-2-design") return "info";
-  const engine = String(ev?.engine ?? ev?.source ?? "");
+
+  const engine = String(ev?.engine ?? ev?.source ?? "").toLowerCase();
+
   if (engine === "inventory") return "inventory";
   if (engine === "httpx") return "httpx";
   if (engine === "zap") return "zap";
+
+  if (engine === "tls") return "tls";
+  if (engine === "version") return "version";
+  if (engine === "port_scan") return "port_scan";
+
+  // Dependency / CVE
+  if (
+    engine === "dependency" ||
+    engine === "csv" ||
+    engine === "osv" ||
+    engine === "dependency_check"
+  ) {
+    return "csv";
+  }
+
   return "other";
 }
 
@@ -333,6 +361,10 @@ function GroupedFindingsPanel({
 }) {
   const httpx = findings.filter((f) => findingBucket(f) === "httpx");
   const zap = findings.filter((f) => findingBucket(f) === "zap");
+  const tls = findings.filter((f) => findingBucket(f) === "tls");
+  const version = findings.filter((f) => findingBucket(f) === "version");
+  const portScan = findings.filter((f) => findingBucket(f) === "port_scan");
+  const csv = findings.filter((f) => findingBucket(f) === "csv");
   const inventory = findings.filter((f) => findingBucket(f) === "inventory");
   const info = findings.filter((f) => findingBucket(f) === "info");
   const other = findings.filter((f) => findingBucket(f) === "other");
@@ -398,6 +430,41 @@ function GroupedFindingsPanel({
         count={httpx.length}
         defaultOpen={false}
         findings={httpx}
+        sectionId={sectionId}
+      />
+      <CollapsibleFindingsSection
+        title="TLS"
+        subtitle="· TLS 검사"
+        count={tls.length}
+        defaultOpen={false}
+        findings={tls}
+        sectionId={sectionId}
+      />
+
+      <CollapsibleFindingsSection
+        title="Version"
+        subtitle="· 버전 정보 분석"
+        count={version.length}
+        defaultOpen={false}
+        findings={version}
+        sectionId={sectionId}
+      />
+
+      <CollapsibleFindingsSection
+        title="Port Scan"
+        subtitle="· 포트 스캔"
+        count={portScan.length}
+        defaultOpen={false}
+        findings={portScan}
+        sectionId={sectionId}
+      />
+
+      <CollapsibleFindingsSection
+        title="CSV (Dependency/CVE)"
+        subtitle="· 라이브러리 취약점 분석"
+        count={csv.length}
+        defaultOpen={true}
+        findings={csv}
         sectionId={sectionId}
       />
       <CollapsibleFindingsSection
@@ -553,14 +620,14 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span> · phase B {stats.phase_b_jobs}</span>
               ) : null}
               {typeof (stats.redirect as { open_redirects?: number })?.open_redirects === "number" &&
-              (stats.redirect as { open_redirects?: number }).open_redirects! > 0 ? (
+                (stats.redirect as { open_redirects?: number }).open_redirects! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · open redirect {(stats.redirect as { open_redirects?: number }).open_redirects}
                 </span>
               ) : null}
               {typeof (stats.cors as { issues?: number })?.issues === "number" &&
-              (stats.cors as { issues?: number }).issues! > 0 ? (
+                (stats.cors as { issues?: number }).issues! > 0 ? (
                 <span className="text-amber-300/90">
                   {" "}
                   · CORS {(stats.cors as { issues?: number }).issues}
@@ -591,7 +658,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                   {" "}
                   · cookie flags {(stats.cookie_attr as { issues?: number }).issues}
                   {typeof (stats.cookie_attr as { from_cache?: number })?.from_cache === "number" &&
-                  (stats.cookie_attr as { from_cache?: number }).from_cache! > 0 ? (
+                    (stats.cookie_attr as { from_cache?: number }).from_cache! > 0 ? (
                     <span className="text-cyan-300/80">
                       {" "}
                       (cache {(stats.cookie_attr as { from_cache?: number }).from_cache})
@@ -601,21 +668,21 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
               ) : null}
               {typeof (stats.cross_cookie as { cross_accepted?: number })?.cross_accepted ===
                 "number" &&
-              (stats.cross_cookie as { cross_accepted?: number }).cross_accepted! > 0 ? (
+                (stats.cross_cookie as { cross_accepted?: number }).cross_accepted! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · cross {(stats.cross_cookie as { cross_accepted?: number }).cross_accepted}
                 </span>
               ) : null}
               {typeof (stats.tamper as { tamper_accepted?: number })?.tamper_accepted === "number" &&
-              (stats.tamper as { tamper_accepted?: number }).tamper_accepted! > 0 ? (
+                (stats.tamper as { tamper_accepted?: number }).tamper_accepted! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · tamper {(stats.tamper as { tamper_accepted?: number }).tamper_accepted}
                 </span>
               ) : null}
               {typeof (stats.by_severity as { high?: number })?.high === "number" &&
-              (stats.by_severity as { high?: number }).high! > 0 ? (
+                (stats.by_severity as { high?: number }).high! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · high {(stats.by_severity as { high?: number }).high}
@@ -631,7 +698,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span className="text-cyan-300/80"> · auth {stats.auth_source}</span>
               ) : null}
               {typeof (stats.token_analysis as { tokens_analyzed?: number })?.tokens_analyzed ===
-              "number" ? (
+                "number" ? (
                 <span>
                   {" "}
                   · tokens analyzed{" "}
@@ -639,14 +706,14 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 </span>
               ) : null}
               {typeof (stats.by_severity as { high?: number })?.high === "number" &&
-              (stats.by_severity as { high?: number }).high! > 0 ? (
+                (stats.by_severity as { high?: number }).high! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · high {(stats.by_severity as { high?: number }).high}
                 </span>
               ) : null}
               {typeof (stats.by_severity as { medium?: number })?.medium === "number" &&
-              (stats.by_severity as { medium?: number }).medium! > 0 ? (
+                (stats.by_severity as { medium?: number }).medium! > 0 ? (
                 <span className="text-amber-300/90">
                   {" "}
                   · medium {(stats.by_severity as { medium?: number }).medium}
@@ -700,8 +767,8 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span> · unique finding {stats.collapsed_issues}</span>
               ) : null}
               {typeof stats.raw_issues === "number" &&
-              typeof stats.collapsed_issues === "number" &&
-              stats.raw_issues > stats.collapsed_issues ? (
+                typeof stats.collapsed_issues === "number" &&
+                stats.raw_issues > stats.collapsed_issues ? (
                 <span className="text-cyber-muted"> (raw {stats.raw_issues} → deduped)</span>
               ) : null}
               {stats.httpx ? " · httpx 프로브 완료" : null}
@@ -726,7 +793,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span> · finding {stats.issues}</span>
               ) : null}
               {typeof stats.raw_issues === "number" && typeof stats.collapsed_issues === "number" &&
-              stats.raw_issues > stats.collapsed_issues ? (
+                stats.raw_issues > stats.collapsed_issues ? (
                 <span className="text-cyber-muted">
                   {" "}
                   (raw {stats.raw_issues} → deduped)
@@ -765,7 +832,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span> · finding {stats.issues}</span>
               ) : null}
               {typeof stats.raw_issues === "number" && typeof stats.collapsed_issues === "number" &&
-              stats.raw_issues > stats.collapsed_issues ? (
+                stats.raw_issues > stats.collapsed_issues ? (
                 <span className="text-cyber-muted">
                   {" "}
                   (raw {stats.raw_issues} → deduped)
@@ -801,7 +868,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span> · finding {stats.issues}</span>
               ) : null}
               {typeof stats.raw_issues === "number" && typeof stats.collapsed_issues === "number" &&
-              stats.raw_issues > stats.collapsed_issues ? (
+                stats.raw_issues > stats.collapsed_issues ? (
                 <span className="text-cyber-muted">
                   {" "}
                   (raw {stats.raw_issues} → deduped)
@@ -857,7 +924,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
               {" · admin API "}
               <span className="font-mono text-cyan-300/90">{String(stats.admin_api_paths ?? "—")}</span>
               {typeof (stats.by_severity as { medium?: number })?.medium === "number" &&
-              (stats.by_severity as { medium?: number }).medium! > 0 ? (
+                (stats.by_severity as { medium?: number }).medium! > 0 ? (
                 <span className="text-amber-300/90">
                   {" "}
                   · medium {(stats.by_severity as { medium?: number }).medium}
@@ -882,8 +949,8 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
               <span className="font-mono text-cyan-300/90">
                 {String(
                   (stats.pages_anonymous as { pages_probed?: number })?.pages_probed ??
-                    (stats.pages as { pages_probed?: number })?.pages_probed ??
-                    "—",
+                  (stats.pages as { pages_probed?: number })?.pages_probed ??
+                  "—",
                 )}
               </span>
               {typeof (stats.pages_anonymous as { with_noindex?: number })?.with_noindex === "number" ? (
@@ -948,7 +1015,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 <span className="text-cyan-300/80"> · multi pass</span>
               ) : null}
               {typeof (stats.authenticated as { issues?: number })?.issues === "number" &&
-              (stats.authenticated as { issues?: number }).issues! > 0 ? (
+                (stats.authenticated as { issues?: number }).issues! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · auth issues {(stats.authenticated as { issues?: number }).issues}
@@ -986,7 +1053,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 </span>
               ) : null}
               {typeof (stats.coverage as { status_401?: number })?.status_401 === "number" &&
-              (stats.coverage as { status_401?: number }).status_401! > 0 ? (
+                (stats.coverage as { status_401?: number }).status_401! > 0 ? (
                 <span className="text-amber-300/90">
                   {" "}
                   · 401 {(stats.coverage as { status_401?: number }).status_401}
@@ -994,7 +1061,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
               ) : null}
               {typeof (stats.coverage as { connection_errors?: number })?.connection_errors ===
                 "number" &&
-              (stats.coverage as { connection_errors?: number }).connection_errors! > 0 ? (
+                (stats.coverage as { connection_errors?: number }).connection_errors! > 0 ? (
                 <span className="text-rose-300/90">
                   {" "}
                   · unreachable {(stats.coverage as { connection_errors?: number }).connection_errors}
@@ -1007,21 +1074,21 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                 </span>
               ) : null}
               {typeof (stats.coverage as { emails_seen?: number })?.emails_seen === "number" &&
-              (stats.coverage as { emails_seen?: number }).emails_seen! > 0 ? (
+                (stats.coverage as { emails_seen?: number }).emails_seen! > 0 ? (
                 <span>
                   {" "}
                   · emails in JSON {(stats.coverage as { emails_seen?: number }).emails_seen}
                 </span>
               ) : null}
               {typeof (stats.coverage as { phones_seen?: number })?.phones_seen === "number" &&
-              (stats.coverage as { phones_seen?: number }).phones_seen! > 0 ? (
+                (stats.coverage as { phones_seen?: number }).phones_seen! > 0 ? (
                 <span>
                   {" "}
                   · phones in JSON {(stats.coverage as { phones_seen?: number }).phones_seen}
                 </span>
               ) : null}
               {typeof stats.raw_issues === "number" && typeof stats.collapsed_issues === "number" &&
-              stats.raw_issues > stats.collapsed_issues ? (
+                stats.raw_issues > stats.collapsed_issues ? (
                 <span> · raw {stats.raw_issues}</span>
               ) : null}
               {typeof stats.auth_passes === "number" ? (

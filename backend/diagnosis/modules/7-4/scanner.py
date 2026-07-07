@@ -41,6 +41,7 @@ class ScanOptions:
     zap_enabled: bool = False
     zap_max_minutes: int = 10
     zap_seed_cap: int = 200
+    gradle_dep_files: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -65,6 +66,7 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
         zap_enabled=bool(cfg.get("zap_enabled", False)),
         zap_max_minutes=max(1, min(int(cfg.get("zap_max_minutes", 10)), 120)),
         zap_seed_cap=max(20, min(int(cfg.get("zap_seed_cap", 200)), 5000)),
+        gradle_dep_files=[str(p) for p in (cfg.get("gradle_dep_files") or []) if p],
     )
 
 
@@ -199,6 +201,43 @@ def run_g74_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     stats["probe_mode"] = opts.probe_mode
     stats["sample_size"] = opts.sample_size
     stats["httpx"] = {"probed": stats.get("probed", 0), "issues": stats.get("issues", 0)}
+
+    # TLS / certificate checks on HTTPS base URLs (target-agnostic, stdlib ssl).
+    # http 대상은 tls_check 가 알아서 무시함(전송암호화 부재는 security_rules 가 이미 지적).
+    tls_mod = _load_local("tls_check")
+    tls_base_urls = targets_mod.collect_base_urls(ctx.raw_config)
+    tls_findings, tls_stats = tls_mod.check_tls_for_base_urls(
+        tls_base_urls,
+        timeout=opts.timeout,
+    )
+    findings.extend(tls_findings)
+    stats["tls"] = tls_stats
+
+    # CVE / version-disclosure checks on all base URLs (target-agnostic).
+    version_mod = _load_local("version_check")
+    version_findings, version_stats = version_mod.check_versions_for_base_urls(
+        tls_base_urls,
+        timeout=opts.timeout,
+    )
+    findings.extend(version_findings)
+    stats["version"] = version_stats
+
+    # Sensitive open-port scan on target hosts (target-agnostic).
+    port_mod = _load_local("port_scan")
+    port_findings, port_stats = port_mod.scan_ports_for_base_urls(
+        tls_base_urls,
+    )
+    findings.extend(port_findings)
+    stats["ports"] = port_stats
+
+    # SCA / CVE — parse gradle dependency-tree files and query OSV.dev (target-agnostic).
+    if opts.gradle_dep_files:
+        from pathlib import Path as _Path
+        dep_paths = [_Path(p) for p in opts.gradle_dep_files]
+        sca_mod = _load_local("dependency_check")
+        sca_findings, sca_stats = sca_mod.scan_gradle_dependency_files(dep_paths)
+        findings.extend(sca_findings)
+        stats["sca"] = sca_stats
 
     priority_seed_urls: list[str] = []
     for finding in findings:

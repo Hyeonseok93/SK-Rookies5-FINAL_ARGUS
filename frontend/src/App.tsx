@@ -86,6 +86,7 @@ const EMPTY_FILES: SourceFiles = {
   url_list: null,
   api_list: null,
   openapi: [],
+  gradle_deps: [],
 };
 
 const EMPTY_LOGIN_ENTRY_REPORT: LoginEntryReportResponse = {
@@ -300,10 +301,13 @@ function App() {
       .catch(() => {});
   }, []);
 
-  const handleFileSelect = (id: SourceId, file: File | File[] | null) => {
+  const handleFileSelect = (id: SourceId | "gradle_deps", file: File | File[] | null) => {
     setSourceFiles((prev) => {
       if (id === "openapi") {
         return { ...prev, openapi: Array.isArray(file) ? file : file ? [file] : [] };
+      }
+      if (id === "gradle_deps") {
+        return { ...prev, gradle_deps: Array.isArray(file) ? file : file ? [file] : [] };
       }
       return { ...prev, [id]: Array.isArray(file) ? (file[0] ?? null) : file };
     });
@@ -467,6 +471,7 @@ function App() {
           url_list_enabled: sourceFiles.url_list != null,
           api_list_enabled: sourceFiles.api_list != null,
           openapi_enabled: sourceFiles.openapi.length > 0,
+          gradle_deps_enabled: sourceFiles.gradle_deps.length > 0,
         },
         files: sourceFiles,
       });
