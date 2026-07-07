@@ -433,7 +433,12 @@ export function DiagnosisPage() {
           body = g74OptionsToPayload(options as G74DiagnosisOptions);
         }
         const res = await runDiagnosisSection(sectionId, body);
-        setReports((prev) => ({ ...prev, [sectionId]: res.report }));
+        // Async modules return no report here (accepted/async_run); the report
+        // arrives later via progress polling. Only store a report we actually got.
+        const report = res.report;
+        if (report) {
+          setReports((prev) => ({ ...prev, [sectionId]: report }));
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
