@@ -8,6 +8,7 @@ import { G34FindingsPanel } from "./G34FindingsPanel";
 import { G35FindingsPanel } from "./G35FindingsPanel";
 import { G36FindingsPanel } from "./G36FindingsPanel";
 import { G42FindingsPanel } from "./G42FindingsPanel";
+import { G45FindingsPanel } from "./G45FindingsPanel";
 import { G52FindingsPanel } from "./G52FindingsPanel";
 import { G61FindingsPanel } from "./G61FindingsPanel";
 import { G62FindingsPanel } from "./G62FindingsPanel";
@@ -377,6 +378,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const isG15Stats = statsFinding?.message === "1-5 scan statistics";
   const isG41Stats = statsFinding?.message === "4-1 scan statistics";
   const isG42Stats = statsFinding?.message === "4-2 scan statistics";
+  const isG45Stats = statsFinding?.message === "4-5 scan statistics";
   const isG22Stats = statsFinding?.message === "2-2 scan statistics";
   const isG71Stats = statsFinding?.message === "7-1 scan statistics";
   const isG72Stats = statsFinding?.message === "7-2 scan statistics";
@@ -539,6 +541,15 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
               ) : null}
               {typeof stats.duplicate_login_ip_findings === "number" ? (
                 <span> · cross-IP login {stats.duplicate_login_ip_findings}</span>
+              ) : null}
+            </>
+          ) : null}
+          {isG45Stats ? (
+            <>
+              API endpoints{" "}
+              <span className="font-mono text-cyan-300/90">{String(stats.scanned_endpoints ?? "—")}</span>
+              {typeof stats.admin_endpoints === "number" ? (
+                <span> · tested endpoints {stats.admin_endpoints}</span>
               ) : null}
             </>
           ) : null}
@@ -997,6 +1008,8 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
         <G36FindingsPanel findings={findings} stats={stats} status={report.status} />
       ) : report.section_id === "4-2" ? (
         <G42FindingsPanel findings={findings} />
+      ) : report.section_id === "4-5" ? (
+        <G45FindingsPanel findings={findings} />
       ) : report.section_id === "5-2" ? (
         <G52FindingsPanel findings={findings} stats={stats} />
       ) : report.section_id === "6-1" && report.g61_summary ? (

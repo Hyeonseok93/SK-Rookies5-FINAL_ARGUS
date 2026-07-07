@@ -3,6 +3,8 @@ import json
 from typing import Any
 import requests
 
+from inventory.net import probe_url
+
 def get_headers(token: str, cookie_name: str | None = None, delivery: str | None = None) -> dict[str, str]:
     token_str = str(token or "").strip()
     if not token_str:
@@ -48,7 +50,7 @@ def get_dynamic_user_id(account: dict, endpoints: list[dict], base_url_global: s
         if ep.get("method", "GET").upper() != "GET": continue
         url = ep.get("base_url", base_url_global) + ep.get("path", "")
         try:
-            res = requests.get(url, headers=auth_headers, timeout=5, verify=False)
+            res = requests.get(probe_url(url), headers=auth_headers, timeout=5, verify=False)
             if res.status_code == 200:
                 data = res.json()
                 # 우선순위: id -> userId -> memberId -> sub

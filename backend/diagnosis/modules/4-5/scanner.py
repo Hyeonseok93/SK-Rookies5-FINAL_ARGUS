@@ -23,6 +23,7 @@ from g45_utils import _read_api_tree, normalize_response_text, get_json_schema, 
 from g45_auth import auth_headers_for_session, get_dynamic_user_id
 from g45_payloads import safe_body
 from g45_discovery import build_resource_inventory, active_discovery_inventory
+from inventory.net import probe_url
 
 def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     stats = {"scanned_endpoints": 0, "admin_endpoints": 0}
@@ -100,7 +101,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             url = ep.get("base_url", "") + ep.get("path", "")
             _log(f"    [Phase 0] Testing {method} {url} ...")
             try:
-                res = requests.request(method, url, headers=user_a_headers, timeout=5, verify=False)
+                res = requests.request(method, probe_url(url), headers=user_a_headers, timeout=5, verify=False)
                 if res.status_code in {200, 201, 204}:
                     res_text_lower = res.text.lower()
                     error_keywords = ["권한", "denied", "unauthorized", "fail", "not allowed", "forbidden", "unauthenticated"]
@@ -209,7 +210,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                         if method == "GET":
                             _log(f"    [Phase 2 Case 1] Testing {method} {test_url} ...")
                             try:
-                                res = requests.get(test_url, headers=user_a_headers, timeout=5, verify=False)
+                                res = requests.get(probe_url(test_url), headers=user_a_headers, timeout=5, verify=False)
                                 if res.status_code == 200:
                                     _log(f"    [Case 1 IDOR] {test_url} -> VULNERABLE")
                                     findings.append(DiagnosisFinding(
@@ -241,7 +242,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         # 1. 대상: 파라미터가 명시되지 않거나 Query 파라미터만 있는 GET API (경로 파라미터 제외)
         if method == "GET" and "{" not in path:
             try:
-                res_a_base = requests.get(url_template, headers=user_a_headers, timeout=5, verify=False)
+                res_a_base = requests.get(probe_url(url_template), headers=user_a_headers, timeout=5, verify=False)
                 
                 if res_a_base.status_code == 200 and user_b_dynamic_id:
                     # 2단계: 쿼리 강제 주입 (Hidden Query Injection)
@@ -253,7 +254,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                             
                             _log(f"    [Phase 2 Case 2] Testing {method} {test_url} ...")
                             # User A 토큰으로 User B의 ID를 쿼리에 섞어서 요청
-                            res_injected = requests.get(test_url, headers=user_a_headers, timeout=5, verify=False)
+                            res_injected = requests.get(probe_url(test_url), headers=user_a_headers, timeout=5, verify=False)
                             
                             if res_injected.status_code == 200:
                                 injected_len = len(res_injected.content)
@@ -352,7 +353,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                     
                 _log(f"    [Phase 4] Testing {method} {test_url} (Injecting {param_name}={payload}) ...")
                 try:
-                    res = requests.request(method, test_url, headers=user_a_headers, json=body, timeout=5, verify=False)
+                    res = requests.request(method, probe_url(test_url), headers=user_a_headers, json=body, timeout=5, verify=False)
                     if res.status_code in {200, 201}:
                         found_payload = False
                         try:
@@ -425,7 +426,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             for v in v_list:
                 del_url = f"{url}/{v}"
                 try:
-                    requests.delete(del_url, headers=user_b_headers, timeout=3, verify=False)
+                    requests.delete(probe_url(del_url), headers=user_b_headers, timeout=3, verify=False)
                     _log(f"    [Cleanup] Deleted {del_url}")
                 except Exception as e:
                     print(f"    [Error] Exception during Cleanup: {e}")

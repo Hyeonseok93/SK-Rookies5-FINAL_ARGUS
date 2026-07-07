@@ -14,6 +14,7 @@ import { G62DiagnosisStartDialog } from "./G62DiagnosisStartDialog";
 import { G71DiagnosisStartDialog } from "./G71DiagnosisStartDialog";
 import { G22DiagnosisStartDialog } from "./G22DiagnosisStartDialog";
 import { G22SectionInfoPopover } from "./diagnosis/G22SectionInfoPopover";
+import { G45SectionInfoPopover } from "./diagnosis/G45SectionInfoPopover";
 import { G21DiagnosisStartDialog } from "./G21DiagnosisStartDialog";
 import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
@@ -756,6 +757,14 @@ export function DiagnosisPage() {
                               onMouseDown={(e) => e.stopPropagation()}
                             >
                               <G22SectionInfoPopover />
+                            </span>
+                          ) : section.id === "4-5" ? (
+                            <span
+                              className="shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              <G45SectionInfoPopover />
                             </span>
                           ) : null}
                         </span>
