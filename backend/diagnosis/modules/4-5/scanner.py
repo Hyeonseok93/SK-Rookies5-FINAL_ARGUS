@@ -74,6 +74,13 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     report_dir.mkdir(parents=True, exist_ok=True)
     log_file_path = report_dir / "g45_scan.log"
     
+    # 매 진단 시작 시 기존 로그 파일 초기화
+    if log_file_path.exists():
+        try:
+            log_file_path.unlink()
+        except OSError:
+            pass
+    
     def _log(msg: str):
         formatted_msg = f"[{datetime.now().isoformat()}] {msg}"
         with open(log_file_path, "a", encoding="utf-8") as f:
@@ -91,6 +98,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         for i, ep in enumerate(admin_endpoints):
             method = ep.get("method", "GET")
             url = ep.get("base_url", "") + ep.get("path", "")
+            _log(f"    [Phase 0] Testing {method} {url} ...")
             try:
                 res = requests.request(method, url, headers=user_a_headers, timeout=5, verify=False)
                 if res.status_code in {200, 201, 204}:
@@ -137,18 +145,11 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     
     # [Phase 1] Discovery
     _log("Phase 1: Discovery (Building B's Resource Inventory)")
-    b_inventory = build_resource_inventory(user_b_token, endpoints, base_url_global, _log)
+    b_inventory = build_resource_inventory(user_b_headers, endpoints, base_url_global, _log)
     created_resources = []
-    
-    if not b_inventory:
-        _log("    Passive discovery yielded no IDs. Starting Active Discovery (POST)...")
-        b_inventory = active_discovery_inventory(user_b_token, endpoints, base_url_global, created_resources, _log)
         
     _log("    Building A's Resource Inventory for noise filtering...")
-    user_a_token = user_a.get("token", "")
-    a_inventory = build_resource_inventory(user_a_token, endpoints, base_url_global, _log)
-    if not a_inventory:
-        a_inventory = active_discovery_inventory(user_a_token, endpoints, base_url_global, created_resources, _log)
+    a_inventory = build_resource_inventory(user_a_headers, endpoints, base_url_global, _log)
         
     filtered_b_inventory = {}
     for k, v_list in b_inventory.items():
@@ -158,7 +159,22 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             filtered_b_inventory[k] = unique_v
             
     b_inventory = filtered_b_inventory
-    _log(f"    B Inventory built (filtered): {b_inventory}")
+    
+    if not b_inventory:
+        _log("    Passive discovery yielded no UNIQUE IDs. Starting Active Discovery (POST)...")
+        b_inventory = active_discovery_inventory(user_b_headers, endpoints, base_url_global, created_resources, _log)
+        if b_inventory:
+            # Re-filter after active discovery just in case
+            a_inventory = active_discovery_inventory(user_a_headers, endpoints, base_url_global, created_resources, _log)
+            for k, v_list in b_inventory.items():
+                a_list = a_inventory.get(k, [])
+                unique_v = [v for v in v_list if v not in a_list]
+                if unique_v:
+                    filtered_b_inventory[k] = unique_v
+            b_inventory = filtered_b_inventory
+    # 로그 폭탄 방지: 각 키별로 최대 5개까지만 출력하고 개수 표시
+    b_inventory_summary = {k: f"[{len(v)} items] {v[:5]}..." if len(v) > 5 else v for k, v in b_inventory.items()}
+    _log(f"    B Inventory built (filtered): {b_inventory_summary}")
     
     # [Phase 2] Exploitation (2 Cases)
     _log(f"Phase 2: IDOR Testing (2 Cases)")
@@ -169,100 +185,73 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         url_template = ep.get("base_url", base_url_global) + path
         
         # IDOR Cases
-        if "{" in path and "}" in path and b_inventory:
-            # Case 1: Explicit Path ID Substitution
-            # Find a matching ID type from inventory (heuristic: path contains 'post' -> postId)
-            b_ids_to_test = []
-            path_lower = path.lower()
-            for inv_k, inv_v in b_inventory.items():
-                key_normalized = re.sub(r"(?i)id$", "", inv_k.lower())
-                if not key_normalized:
-                    continue
-                if key_normalized in path_lower or inv_k.lower() in path_lower:
-                    b_ids_to_test.extend(inv_v)
-            if not b_ids_to_test:
-                b_ids_to_test = [v for inv_k, vals in b_inventory.items() if inv_k.lower() == "id" for v in vals]
+        if "{" in path and "}" in path:
+            if not b_inventory:
+                _log(f"    [Phase 2 Case 1] Skipping {method} {url_template} (No Resource IDs found to test)")
+            else:
+                # Case 1: Explicit Path ID Substitution
+                # Find a matching ID type from inventory (heuristic: path contains 'post' -> postId)
+                b_ids_to_test = []
+                path_lower = path.lower()
+                for inv_k, inv_v in b_inventory.items():
+                    key_normalized = re.sub(r"(?i)id$", "", inv_k.lower())
+                    if not key_normalized:
+                        continue
+                    if key_normalized in path_lower or inv_k.lower() in path_lower:
+                        b_ids_to_test.extend(inv_v)
+                if not b_ids_to_test:
+                    b_ids_to_test = [v for inv_k, vals in b_inventory.items() if inv_k.lower() == "id" for v in vals]
 
-            if len(re.findall(r"\{[^}]+\}", path)) != 1:
-                continue
-            for b_id in set(b_ids_to_test[:3]):  # Test up to 3 IDs
-                test_url = re.sub(r'\{[^}]+\}', str(b_id), url_template, count=1)
-                
-                if method == "GET":
-                    try:
-                        res = requests.get(test_url, headers=user_a_headers, timeout=5, verify=False)
-                        if res.status_code == 200:
-                            _log(f"    [Case 1 IDOR] {test_url} -> VULNERABLE")
-                            findings.append(DiagnosisFinding(
-                                severity="high",
-                                message="Horizontal Privilege Escalation (Case 1: Path/Query IDOR)",
-                                evidence={
-                                    "rule_id": "idor_horizontal_case1",
-                                    "url": test_url,
-                                    "method": method,
-                                    "description": "[수동 검증 필수] 정상 토큰(User A)으로 제3자(User B)의 명시적 리소스 ID에 접근하여 200 OK를 받았습니다. 퍼블릭 API인지 점검이 필요합니다.",
-                                    "attack_payload": f"User A token accessing Resource ID: {b_id}",
-                                    "target_role": "Resource Owner",
-                                    "bypassed_role": "Other User (Attacker)",
-                                    "remediation": (
-                                        "**[조치 방안]**\n"
-                                        "해당 리소스가 작성자 본인만 열람 가능한 경우, 조회 대상 객체의 소유자 ID와 현재 로그인한 유저의 ID가 일치하는지 검증하는 인가(ACL) 로직을 추가하세요.\n\n"
-                                        "---\n"
-                                        "⚠️ **[스캐너 한계 및 수동 진단 가이드]**\n"
-                                        "1. **Public/공용 API 오탐**: 블로그 글, 공지사항처럼 원래 누구나 볼 수 있는 리소스(Public Data)인 경우 취약점이 아닙니다. 스캐너는 비즈니스 맥락(이게 비밀글인지 공지글인지)을 완벽히 이해하지 못합니다.\n"
-                                        "2. **수동 확인법**: 노출된 데이터가 실제로 '타인에게 보여선 안 되는 민감한 개인정보'가 맞는지 직접 판단해야 합니다."
-                                    ),
-                                    "status_code": 200
-                                }
-                            ))
-                    except Exception as e:
-                        _log(f"    [Error] Phase 2 Case 1 IDOR request failed: {e}")
+                if len(re.findall(r"\{[^}]+\}", path)) == 1:
+                    for b_id in set(b_ids_to_test[:3]):  # Test up to 3 IDs
+                        test_url = re.sub(r'\{[^}]+\}', str(b_id), url_template, count=1)
+                        
+                        if method == "GET":
+                            _log(f"    [Phase 2 Case 1] Testing {method} {test_url} ...")
+                            try:
+                                res = requests.get(test_url, headers=user_a_headers, timeout=5, verify=False)
+                                if res.status_code == 200:
+                                    _log(f"    [Case 1 IDOR] {test_url} -> VULNERABLE")
+                                    findings.append(DiagnosisFinding(
+                                        severity="high",
+                                        message="Horizontal Privilege Escalation (Case 1: Path/Query IDOR)",
+                                        evidence={
+                                            "rule_id": "idor_horizontal_case1",
+                                            "url": test_url,
+                                            "method": method,
+                                            "description": "[수동 검증 필수] 정상 토큰(User A)으로 제3자(User B)의 명시적 리소스 ID에 접근하여 200 OK를 받았습니다. 퍼블릭 API인지 점검이 필요합니다.",
+                                            "attack_payload": f"User A token accessing Resource ID: {b_id}",
+                                            "target_role": "Resource Owner",
+                                            "bypassed_role": "Other User (Attacker)",
+                                            "remediation": (
+                                                "**[조치 방안]**\n"
+                                                "해당 리소스가 작성자 본인만 열람 가능한 경우, 조회 대상 객체의 소유자 ID와 현재 로그인한 유저의 ID가 일치하는지 검증하는 인가(ACL) 로직을 추가하세요.\n\n"
+                                                "---\n"
+                                                "⚠️ **[스캐너 한계 및 수동 진단 가이드]**\n"
+                                                "1. **Public/공용 API 오탐**: 블로그 글, 공지사항처럼 원래 누구나 볼 수 있는 리소스(Public Data)인 경우 취약점이 아닙니다. 스캐너는 비즈니스 맥락(이게 비밀글인지 공지글인지)을 완벽히 이해하지 못합니다.\n"
+                                                "2. **수동 확인법**: 노출된 데이터가 실제로 '타인에게 보여선 안 되는 민감한 개인정보'가 맞는지 직접 판단해야 합니다."
+                                            ),
+                                            "status_code": 200
+                                        }
+                                    ))
+                            except Exception as e:
+                                _log(f"    [Error] Phase 2 Case 1 IDOR request failed: {e}")
                     
         # Case 2: Hidden Query IDOR (Generic Personal API Test)
         # 1. 대상: 파라미터가 명시되지 않거나 Query 파라미터만 있는 GET API (경로 파라미터 제외)
         if method == "GET" and "{" not in path:
             try:
-                # 1단계: 이 API가 "개인화된 데이터를 반환하는 API"인지 판별 (Public API 필터링)
                 res_a_base = requests.get(url_template, headers=user_a_headers, timeout=5, verify=False)
-                res_b_base = requests.get(url_template, headers=user_b_headers, timeout=5, verify=False)
                 
-                if res_a_base.status_code == 200 and res_b_base.status_code == 200:
-                    a_text = normalize_response_text(res_a_base.text)
-                    b_text = normalize_response_text(res_b_base.text)
+                if res_a_base.status_code == 200 and user_b_dynamic_id:
+                    # 2단계: 쿼리 강제 주입 (Hidden Query Injection)
+                    # 스킵 로직 제거: 빈 배열이라도 강제로 파라미터를 찔러서 데이터가 딸려오는지 확인
+                    hidden_params = ["userId", "user_id", "memberId", "member_id", "accountId", "id"]
                     
-                    is_personal_api = False
-                    try:
-                        a_json = res_a_base.json()
-                        b_json = res_b_base.json()
-                        a_schema = get_json_schema(a_json)
-                        b_schema = get_json_schema(b_json)
-                        
-                        # Schema is same, but content is different -> personal API
-                        if a_schema == b_schema and a_text != b_text:
-                            is_personal_api = True
-                    except Exception:
-                        a_len = len(a_text)
-                        b_len = len(b_text)
-                        size_diff = abs(a_len - b_len)
-                        if size_diff >= 50:
-                            is_personal_api = True
-
-                    # Fallback structural check for ident exposure
-                    if not is_personal_api:
-                        is_personal_api = any(
-                            ident and ident in b_text and ident not in a_text
-                            for ident in [str(user_b_dynamic_id), str(user_b.get("email", "")), str(user_b.get("nickname", ""))]
-                        )
-
-                    
-                    if is_personal_api and user_b_dynamic_id:
-                        # 2단계: 쿼리 강제 주입 (Hidden Query Injection)
-                        # Swagger에 없어도 흔히 쓰이는 식별자 파라미터들을 무차별 주입
-                        hidden_params = ["userId", "user_id", "memberId", "member_id", "accountId", "id"]
-                        
-                        for param in hidden_params:
+                    for param in hidden_params:
                             test_url = f"{url_template}?{param}={user_b_dynamic_id}"
                             
+                            _log(f"    [Phase 2 Case 2] Testing {method} {test_url} ...")
                             # User A 토큰으로 User B의 ID를 쿼리에 섞어서 요청
                             res_injected = requests.get(test_url, headers=user_a_headers, timeout=5, verify=False)
                             
@@ -275,6 +264,10 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                                 if user_b_dynamic_id: b_identifiers.append(str(user_b_dynamic_id))
                                 if user_b.get("email"): b_identifiers.append(str(user_b.get("email")))
                                 if user_b.get("nickname"): b_identifiers.append(str(user_b.get("nickname")))
+                                
+                                if not b_identifiers:
+                                    _log("    [Phase 2 Case 2] Skipped: No User B identifiers available to verify leakage.")
+                                    break  # No identifiers to verify, so skip testing further parameters for this endpoint
                                 
                                 # A의 기본 응답에 B의 식별자가 이미 들어있다면 원래 볼 수 있는 정보임 (공용 게시판 등)
                                 already_visible = any(b_id in res_a_base.text for b_id in b_identifiers if b_id)
@@ -357,6 +350,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                 else:
                     body[param_name] = payload
                     
+                _log(f"    [Phase 4] Testing {method} {test_url} (Injecting {param_name}={payload}) ...")
                 try:
                     res = requests.request(method, test_url, headers=user_a_headers, json=body, timeout=5, verify=False)
                     if res.status_code in {200, 201}:

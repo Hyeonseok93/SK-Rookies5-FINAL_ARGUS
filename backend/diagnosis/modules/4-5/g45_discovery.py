@@ -10,9 +10,8 @@ from g45_auth import get_headers
 from g45_utils import extract_ids_from_response
 from g45_payloads import safe_body
 
-def build_resource_inventory(account_token: str, endpoints: list[dict], base_url_global: str, logger=None) -> dict:
+def build_resource_inventory(headers: dict, endpoints: list[dict], base_url_global: str, logger=None) -> dict:
     inventory = {}
-    headers = get_headers(account_token)
     
     for ep in endpoints:
         if ep.get("method", "GET").upper() != "GET":
@@ -41,9 +40,8 @@ def build_resource_inventory(account_token: str, endpoints: list[dict], base_url
         inventory[k] = list(set(inventory[k]))
     return inventory
 
-def active_discovery_inventory(account_token: str, endpoints: list[dict], base_url_global: str, created_resources: list, logger=None) -> dict:
+def active_discovery_inventory(headers: dict, endpoints: list[dict], base_url_global: str, created_resources: list, logger=None) -> dict:
     inventory = {}
-    headers = get_headers(account_token)
     
     for ep in endpoints:
         if ep.get("method", "POST").upper() != "POST":
