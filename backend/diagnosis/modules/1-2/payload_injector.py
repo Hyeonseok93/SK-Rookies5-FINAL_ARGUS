@@ -7,6 +7,7 @@ import difflib
 import json
 import re
 import time
+import statistics
 import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -85,6 +86,17 @@ class BaseInjector:
             self.headers["Authorization"] = auth_val
 
         self.sleep_secs = 3
+        # --- time-based robust verification tuning ---
+        self.TIME_SAMPLES = 3        # 각 측정 반복 횟수 (median 계산용)
+        self.TIME_SLEEP_SECS = 3     # 주입 sleep 초 (self.sleep_secs 와 동일하게)
+        self.LINEARITY_RATIO = 0.6   # sleep(S) 증가분이 최소 S*ratio 초 이상이어야 확정
+        self.ZERO_NOISE_MARGIN = 1.0 # sleep(0) 증가분이 이보다 크면 baseline 불안정 → 보류
+        # --- boolean-based robust verification tuning ---
+        self.BOOL_SAMPLES = 3          # true/false/baseline 각 측정 반복 횟수 (median)
+        self.BOOL_TRUE_MIN = 0.90      # TRUE~baseline 유사도 하한 (anchor 성립 조건)
+        self.BOOL_FALSE_MAX = 0.75     # FALSE~baseline 유사도 상한
+        self.BOOL_TF_MAX = 0.85        # TRUE~FALSE 유사도 상한
+        self.BOOL_REPEAT_RATIO = 0.6   # 같은 쌍을 여러 번 시도했을 때 갈라진 비율 하한
         self.time_payloads: List[str] = []
         self.error_payloads: List[str] = []
         self.boolean_pairs: List[Tuple[str, str]] = []
@@ -133,7 +145,7 @@ class BaseInjector:
             return ProbeResponse(-1.0, "ERROR", "", {}, str(exc))
 
     def _normalize_param_name(self, value: str) -> str:
-        return (value or "").strip().strip("{}<>:«»").casefold()
+        return (value or "").strip().strip("짬쨩").casefold()
 
     def _param_matches(self, candidate: str, target: str) -> bool:
         return self._normalize_param_name(candidate) == self._normalize_param_name(target)
@@ -334,7 +346,13 @@ class BaseInjector:
         return self.verification_mode == "strict"
 
     def _strong_verified_methods(self, result: DetectionResult, verified_methods: List[str]) -> List[str]:
-        """High-confidence methods: time delay or DB error patterns (not boolean-only)."""
+        """High-confidence methods accepted even in strict mode.
+
+        time_based  : median-of-N + 선형성(선형 비례) 통과분만 VERIFIED 로 옴
+        error_based : DB/parser 에러 패턴 매칭 (결정적)
+        boolean_based: 반복 재현성(repeat_ratio >= 임계) 통과분만 VERIFIED 로 옴
+                       → 강화된 반복검증을 통과한 boolean 은 strict 에서도 확정 인정
+        """
         strong: List[str] = []
         if "time_based" in verified_methods:
             strong.append("time_based")
@@ -342,6 +360,12 @@ class BaseInjector:
             patterns = (result.verification_methods.get("error_based") or {}).get("matched_patterns") or []
             if patterns:
                 strong.append("error_based")
+        if "boolean_based" in verified_methods:
+            detail = result.verification_methods.get("boolean_based") or {}
+            ratio = detail.get("repeat_ratio", 0.0)
+            # 반복검증을 통과(VERIFIED)한 boolean 만 여기 들어옴 → strict 에서도 확정 인정
+            if detail.get("status") == VerificationStatus.VERIFIED.value and ratio >= self.BOOL_REPEAT_RATIO:
+                strong.append("boolean_based")
         return strong
 
     def _finalize_verified(
@@ -382,42 +406,116 @@ class BaseInjector:
             return False
         return False
 
-    def _verify_time_based(self, result: DetectionResult, baseline: ProbeResponse, headers: Dict[str, str], method: str) -> Tuple[bool, float]:
-        max_delay = 0.0
-        tried = 0
-        for payload in self.time_payloads:
-            url, body, probe_headers, changed, location = self._build_probe_variant(result, payload, headers)
-            if not changed:
-                continue
-            tried += 1
-            probe = self.send_probe(method, url, body, probe_headers)
-            max_delay = max(max_delay, probe.elapsed)
-            diff = probe.elapsed - baseline.elapsed
-            if diff >= (self.sleep_secs * 0.8):
-                result.custom_payload = payload
-                result.custom_time_delay_sec = probe.elapsed
-                self._add_method(
-                    result,
-                    "time_based",
-                    VerificationStatus.VERIFIED,
-                    f"Time delta exceeded threshold at {location}.",
-                    baseline_sec=round(baseline.elapsed, 3),
-                    delayed_sec=round(probe.elapsed, 3),
-                    diff_sec=round(diff, 3),
-                    status_code=probe.status_code,
-                    payload=payload,
-                )
-                return True, max_delay
-        self._add_method(
-            result,
-            "time_based",
-            VerificationStatus.FALSE_POSITIVE if tried else VerificationStatus.UNVERIFIABLE,
-            "No meaningful time delta." if tried else "No time-based variant could be built.",
-            baseline_sec=round(baseline.elapsed, 3),
-            max_delay_sec=round(max_delay, 3),
-            tried_payloads=tried,
+    def _measure_median(self, method, url, body, headers, samples):
+        """같은 요청을 samples 번 보내고 elapsed 중앙값 반환. 실패(-1)는 제외."""
+        elapseds = []
+        for _ in range(max(1, samples)):
+            probe = self.send_probe(method, url, body, headers)
+            if probe.elapsed >= 0:
+                elapseds.append(probe.elapsed)
+        if not elapseds:
+            return -1.0
+        return statistics.median(elapseds)
+
+    def _build_sleep_payload(self, sleep_secs):
+        """sleep 초를 바꿔가며 payload 생성 (MySQL SLEEP 기준)."""
+        return f"1 AND SLEEP({sleep_secs})"
+
+    def _verify_time_based(
+        self,
+        result: DetectionResult,
+        baseline,  # ProbeResponse (기존 시그니처 유지용, 아래서 median 으로 다시 잼)
+        headers: Dict[str, str],
+        method: str,
+    ) -> Tuple[bool, float]:
+        S = int(self.TIME_SLEEP_SECS)
+
+        # 1) baseline median-of-N
+        clean_url, clean_body, clean_headers, clean_changed, _ = self._build_probe_variant(
+            result, "1", headers
         )
-        return False, max_delay
+        if not clean_changed:
+            self._add_method(
+                result, "time_based", VerificationStatus.UNVERIFIABLE,
+                "No time-based variant could be built.",
+            )
+            return False, 0.0
+
+        base_med = self._measure_median(method, clean_url, clean_body, clean_headers, self.TIME_SAMPLES)
+        if base_med < 0:
+            self._add_method(
+                result, "time_based", VerificationStatus.UNVERIFIABLE,
+                "Baseline timing could not be measured.",
+            )
+            return False, 0.0
+
+        # 2) sleep(0) median : 부하 기준선
+        zero_payload = self._build_sleep_payload(0)
+        z_url, z_body, z_headers, z_changed, _ = self._build_probe_variant(result, zero_payload, headers)
+        zero_med = (
+            self._measure_median(method, z_url, z_body, z_headers, self.TIME_SAMPLES)
+            if z_changed else base_med
+        )
+        if zero_med < 0:
+            zero_med = base_med
+
+        # 3) sleep(S) median
+        s_payload = self._build_sleep_payload(S)
+        s_url, s_body, s_headers, s_changed, s_location = self._build_probe_variant(result, s_payload, headers)
+        if not s_changed:
+            self._add_method(
+                result, "time_based", VerificationStatus.UNVERIFIABLE,
+                "No time-based variant could be built.",
+            )
+            return False, 0.0
+        sleep_med = self._measure_median(method, s_url, s_body, s_headers, self.TIME_SAMPLES)
+        if sleep_med < 0:
+            self._add_method(
+                result, "time_based", VerificationStatus.UNVERIFIABLE,
+                "Injected timing could not be measured.",
+            )
+            return False, 0.0
+
+        # 4) 선형성 판정
+        zero_delta = zero_med - base_med
+        sleep_delta = sleep_med - zero_med
+        base_info = dict(
+            baseline_med_sec=round(base_med, 3),
+            sleep0_med_sec=round(zero_med, 3),
+            sleep_s_med_sec=round(sleep_med, 3),
+            sleep_secs=S,
+            zero_delta_sec=round(zero_delta, 3),
+            sleep_delta_sec=round(sleep_delta, 3),
+            samples=self.TIME_SAMPLES,
+        )
+
+        # (a) sleep(0)에서 이미 크게 느려짐 → baseline 불안정 → 보류(SUSPECTED)
+        if zero_delta > self.ZERO_NOISE_MARGIN:
+            self._add_method(
+                result, "time_based", VerificationStatus.SUSPECTED,
+                "Baseline unstable under load (sleep(0) already slow) — not confirmed.",
+                **base_info,
+            )
+            return False, sleep_med
+
+        # (b) 증가분이 요청한 S 에 비례 → 진짜 sleep 실행 = VERIFIED
+        if sleep_delta >= S * self.LINEARITY_RATIO:
+            result.custom_payload = s_payload
+            result.custom_time_delay_sec = sleep_med
+            self._add_method(
+                result, "time_based", VerificationStatus.VERIFIED,
+                f"Delay scaled with injected sleep at {s_location} (linear).",
+                **base_info,
+            )
+            return True, sleep_med
+
+        # (c) 값 바꿔도 지연 그대로 → 부하/노이즈 오탐
+        self._add_method(
+            result, "time_based", VerificationStatus.FALSE_POSITIVE,
+            "Delay did not scale with injected sleep — load/noise, not injection.",
+            **base_info,
+        )
+        return False, sleep_med
 
     def _verify_error_based(self, result: DetectionResult, baseline: ProbeResponse, headers: Dict[str, str], method: str) -> bool:
         error_patterns = self.SQL_ERROR_PATTERNS + self.COMMAND_ERROR_PATTERNS + self.XML_XPATH_ERROR_PATTERNS
@@ -476,40 +574,98 @@ class BaseInjector:
         )
         return False
 
+    def _median_similarity(self, method, url, body, headers, ref_text, samples):
+        """같은 요청을 samples 번 보내 각 응답과 ref_text 의 유사도 중앙값 + 대표 응답 반환."""
+        import statistics as _st
+        sims = []
+        last_probe = None
+        for _ in range(max(1, samples)):
+            probe = self.send_probe(method, url, body, headers)
+            last_probe = probe
+            if probe.elapsed >= 0:
+                sims.append(self._similarity(probe.text, ref_text))
+        if not sims:
+            return -1.0, last_probe
+        return _st.median(sims), last_probe
+
     def _verify_boolean_based(self, result: DetectionResult, baseline: ProbeResponse, headers: Dict[str, str], method: str) -> bool:
         tried = 0
         best_delta = 0.0
+        N = self.BOOL_SAMPLES
         for true_payload, false_payload in self.boolean_pairs:
             true_url, true_body, true_headers, true_changed, true_location = self._build_probe_variant(result, true_payload, headers)
             false_url, false_body, false_headers, false_changed, _ = self._build_probe_variant(result, false_payload, headers)
             if not (true_changed and false_changed):
                 continue
             tried += 1
-            true_probe = self.send_probe(method, true_url, true_body, true_headers)
-            false_probe = self.send_probe(method, false_url, false_body, false_headers)
-            true_to_base = self._similarity(true_probe.text, baseline.text)
-            false_to_base = self._similarity(false_probe.text, baseline.text)
-            true_to_false = self._similarity(true_probe.text, false_probe.text)
-            delta = abs(true_to_base - false_to_base)
-            best_delta = max(best_delta, delta)
-            status_diverged = true_probe.status_code != false_probe.status_code and true_probe.status_code == baseline.status_code
-            body_diverged = true_to_base >= 0.90 and false_to_base <= 0.75 and true_to_false <= 0.85
-            if status_diverged or body_diverged:
+
+            # 반복 시도: 각 라운드마다 true/false 를 재서 '일관되게' 갈라지는지 확인
+            rounds = max(1, N)
+            diverged_rounds = 0
+            true_status = false_status = ""
+            last_true_to_base = last_false_to_base = last_true_to_false = 0.0
+            for _ in range(rounds):
+                true_probe = self.send_probe(method, true_url, true_body, true_headers)
+                false_probe = self.send_probe(method, false_url, false_body, false_headers)
+                if true_probe.elapsed < 0 or false_probe.elapsed < 0:
+                    continue
+                true_to_base = self._similarity(true_probe.text, baseline.text)
+                false_to_base = self._similarity(false_probe.text, baseline.text)
+                true_to_false = self._similarity(true_probe.text, false_probe.text)
+                last_true_to_base, last_false_to_base, last_true_to_false = true_to_base, false_to_base, true_to_false
+                true_status, false_status = true_probe.status_code, false_probe.status_code
+                delta = abs(true_to_base - false_to_base)
+                best_delta = max(best_delta, delta)
+                status_diverged = (
+                    true_probe.status_code != false_probe.status_code
+                    and true_probe.status_code == baseline.status_code
+                )
+                # anchor 검증: TRUE 는 baseline 과 유사해야 하고, FALSE 는 달라야 함
+                body_diverged = (
+                    true_to_base >= self.BOOL_TRUE_MIN
+                    and false_to_base <= self.BOOL_FALSE_MAX
+                    and true_to_false <= self.BOOL_TF_MAX
+                )
+                if status_diverged or body_diverged:
+                    diverged_rounds += 1
+
+            repeat_ratio = diverged_rounds / rounds if rounds else 0.0
+            if repeat_ratio >= self.BOOL_REPEAT_RATIO:
                 result.custom_payload = f"TRUE:{true_payload} / FALSE:{false_payload}"
                 self._add_method(
                     result,
                     "boolean_based",
                     VerificationStatus.VERIFIED,
-                    f"Boolean true/false responses diverged at {true_location}.",
-                    true_status=true_probe.status_code,
-                    false_status=false_probe.status_code,
-                    true_to_baseline=round(true_to_base, 3),
-                    false_to_baseline=round(false_to_base, 3),
-                    true_to_false=round(true_to_false, 3),
+                    f"Boolean true/false responses consistently diverged at {true_location} "
+                    f"({diverged_rounds}/{rounds} rounds).",
+                    true_status=true_status,
+                    false_status=false_status,
+                    true_to_baseline=round(last_true_to_base, 3),
+                    false_to_baseline=round(last_false_to_base, 3),
+                    true_to_false=round(last_true_to_false, 3),
+                    diverged_rounds=diverged_rounds,
+                    rounds=rounds,
+                    repeat_ratio=round(repeat_ratio, 3),
                     true_payload=true_payload,
                     false_payload=false_payload,
                 )
                 return True
+            # 한 번이라도 갈렸지만 일관적이지 않음 → 약한 신호(SUSPECTED)
+            if diverged_rounds > 0:
+                self._add_method(
+                    result,
+                    "boolean_based",
+                    VerificationStatus.SUSPECTED,
+                    f"Boolean divergence unstable at {true_location} "
+                    f"({diverged_rounds}/{rounds} rounds) — dynamic content or load suspected.",
+                    diverged_rounds=diverged_rounds,
+                    rounds=rounds,
+                    repeat_ratio=round(repeat_ratio, 3),
+                    best_similarity_delta=round(best_delta, 3),
+                    true_payload=true_payload,
+                    false_payload=false_payload,
+                )
+                return False
         self._add_method(
             result,
             "boolean_based",

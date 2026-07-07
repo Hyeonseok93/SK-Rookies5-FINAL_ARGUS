@@ -6,7 +6,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.services.zap_util import ZapNotAvailableError, ensure_zap_proxy, probe_url
-from diagnosis.progress_reporter import zap_phase
 from diagnosis.replay.normalize import FRONTEND_PORTS, collect_probe_base_urls
 from inventory.load import find_openapi_spec
 
@@ -46,6 +45,7 @@ def run_zap_injection_phase(
     jwt_token: str = "",
     session_headers: dict[str, str] | None = None,
     max_minutes: int = 20,
+    progress_cb: Any | None = None,
 ) -> tuple[list[Any], dict[str, Any]]:
     """Run Spider + Active Scan (injection policy) on each API base. Returns DetectionResult list."""
     from zap_engine import ZapEngine
@@ -66,31 +66,32 @@ def run_zap_injection_phase(
 
     spec_path = find_openapi_spec(data_dir)
     swagger_url = str(spec_path.resolve()) if spec_path is not None else ""
+    primary_target = probe_url(bases[0])
+
+    engine.configure_scan(
+        target_url=primary_target,
+        swagger_url=swagger_url,
+        jwt_token=jwt_token,
+        session_headers=session_headers,
+    )
+
     all_results: list[Any] = []
     scanned_targets: list[str] = []
     per_base_minutes = max(5, int(max_minutes / max(len(bases), 1)))
-
-    def _zap_progress(update: dict[str, Any]) -> None:
-        zap_phase(
-            str(update.get("message") or "ZAP scan…"),
-            percent=int(update.get("percent") or 0),
-            requests_sent=int(update.get("requests_sent") or 0),
-        )
-
-    for base in bases:
+    zap_total = max(len(bases) * 100, 1)
+    for idx, base in enumerate(bases):
         target_url = probe_url(base.rstrip("/"))
         scanned_targets.append(target_url)
-        engine.configure_scan(
-            target_url=target_url,
-            swagger_url=swagger_url,
-            jwt_token=jwt_token,
-            session_headers=session_headers,
-            on_progress=_zap_progress,
-        )
+
+        def _zap_progress(status: int, current_url: str, base_idx: int = idx) -> None:
+            done = min(zap_total, base_idx * 100 + max(0, min(int(status), 100)))
+            if progress_cb:
+                progress_cb(done, zap_total, current_url, int(status))
+
         zap_results = engine.run_active_scan(
             target_url=target_url,
             max_minutes=per_base_minutes,
-            on_progress=_zap_progress,
+            progress_cb=_zap_progress,
         )
         all_results.extend(zap_results)
 

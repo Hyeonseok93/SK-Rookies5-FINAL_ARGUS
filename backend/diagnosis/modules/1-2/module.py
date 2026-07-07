@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 from pathlib import Path
 
 import yaml
@@ -44,15 +43,6 @@ class G12Module(DiagnosisModule):
                 self.chapter = int(raw.get("chapter", self.chapter))
                 self.engine = str(raw.get("engine", self.engine))
 
-    def _save_json_report(self, ctx: DiagnosisContext, report: SectionReport) -> None:
-        report_dir = ctx.data_dir / "report" / self.section_id
-        report_dir.mkdir(parents=True, exist_ok=True)
-        payload = report.to_dict()
-        text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-        (report_dir / "latest.json").write_text(text, encoding="utf-8")
-        checked_at = (report.checked_at or utc_now_iso()).replace(":", "").replace("+", "_").replace(".", "_")
-        (report_dir / f"report_{checked_at}.json").write_text(text, encoding="utf-8")
-
     def run(self, ctx: DiagnosisContext) -> SectionReport:
         scanner = _load_scanner()
         result = scanner.run_g12_scan(ctx, self.module_dir)
@@ -77,7 +67,6 @@ class G12Module(DiagnosisModule):
                 ),
             )
         self.save_report(ctx, report)
-        self._save_json_report(ctx, report)
         return report
 
 

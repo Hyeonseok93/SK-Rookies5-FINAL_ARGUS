@@ -43,16 +43,16 @@ def _bootstrap_locals():
 
 @dataclass
 class ScanOptions:
+    max_targets: int = 500
+    scan_all_inventory: bool = True
     injector_enabled: bool = True
     direct_enabled: bool = True
-    zap_enabled: bool = False
+    zap_enabled: bool = True
     zap_max_minutes: int = 20
-    verification_mode: str = "balanced"
-    injection_types: list[str] = field(default_factory=lambda: ["SQL", "NOSQL", "COMMAND", "XPATH"])
+    verification_mode: str = "strict"
+    injection_types: list[str] = field(default_factory=lambda: ["SQL"])
     include_unsafe_methods: bool = False
     keep_all_results: bool = False
-    verification_rounds: int = 3
-    confirmation_threshold: int = 3
 
 
 @dataclass
@@ -65,29 +65,19 @@ class ScanResult:
 
 def _scan_options(raw: dict[str, Any]) -> ScanOptions:
     cfg = raw.get("diagnosis_1_2") or raw.get("scan_1_2") or {}
-    types_raw = cfg.get("injection_types")
-    types: list[str] = []
-    if isinstance(types_raw, list):
-        types = [str(t) for t in types_raw if str(t).strip()]
-    elif isinstance(types_raw, str) and types_raw.strip():
-        types = [t.strip() for t in types_raw.split(",") if t.strip()]
-    injector_on = bool(cfg.get("injector_enabled", True))
-    verification_rounds = max(1, min(int(cfg.get("verification_rounds", 3)), 5))
-    confirmation_threshold = max(
-        1,
-        min(int(cfg.get("confirmation_threshold", verification_rounds)), verification_rounds),
-    )
+    # G12 must be deterministic in CI/local re-runs: fixed OpenAPI/ZAP phase,
+    # then strict ARGUS Direct SQL verification over the same api-tree scope.
     return ScanOptions(
-        injector_enabled=injector_on,
-        direct_enabled=bool(cfg.get("direct_enabled", injector_on)),
-        zap_enabled=bool(cfg.get("zap_enabled", False)),
+        max_targets=500,
+        scan_all_inventory=True,
+        injector_enabled=True,
+        direct_enabled=True,
+        zap_enabled=True,
         zap_max_minutes=max(1, min(int(cfg.get("zap_max_minutes", 20)), 120)),
-        verification_mode=str(cfg.get("verification_mode", "balanced")),
-        injection_types=types or ["SQL", "NOSQL", "COMMAND", "XPATH"],
-        include_unsafe_methods=bool(cfg.get("include_unsafe_methods", False)),
-        keep_all_results=bool(cfg.get("keep_all_results", False)),
-        verification_rounds=verification_rounds,
-        confirmation_threshold=confirmation_threshold,
+        verification_mode="strict",
+        injection_types=["SQL"],
+        include_unsafe_methods=False,
+        keep_all_results=False,
     )
 
 
@@ -150,11 +140,6 @@ def _result_to_finding(result: Any, models_mod: Any, runner_mod: Any, *, engine:
             "verification_reason": result.verification_reason,
             "verification_methods": result.verification_methods,
             "custom_payload": result.custom_payload,
-            "reproduction": getattr(result, "reproduction_summary", ""),
-            "reproduction_attempts": getattr(result, "reproduction_attempts", None),
-            "reproduction_strong": getattr(result, "reproduction_strong", None),
-            "reproduction_weak": getattr(result, "reproduction_weak", None),
-            "reproduction_required": getattr(result, "reproduction_required", None),
             "detail": result.to_dict(),
         },
     )
@@ -169,6 +154,8 @@ def run_g12_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     targets, target_meta = targets_mod.load_scan_targets(
         ctx.data_dir,
         raw,
+        max_targets=opts.max_targets,
+        scan_all=opts.scan_all_inventory,
     )
 
     if target_meta.get("error") == "no_api_tree":
@@ -202,7 +189,17 @@ def run_g12_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     # Phase 1–2: ZAP → injector verify (branch default pipeline)
     if opts.zap_enabled:
-        zap_phase("1-2 ZAP injection scan…", percent=0, requests_sent=0)
+        zap_phase("1-2 ZAP injection scan…", done=0, total=100, percent=0)
+
+        def _zap_progress(done: int, total: int, current_url: str, status: int) -> None:
+            percent = int(done * 100 / max(total, 1))
+            zap_phase(
+                f"1-2 ZAP active scan {percent}% · {current_url} ({status}%)",
+                done=done,
+                total=total,
+                percent=percent,
+            )
+
         try:
             zap_raw, zap_stats = zap_scan_mod.run_zap_injection_phase(
                 raw,
@@ -210,49 +207,23 @@ def run_g12_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                 jwt_token=jwt_token,
                 session_headers=session_headers,
                 max_minutes=opts.zap_max_minutes,
+                progress_cb=_zap_progress,
             )
             stats["zap"] = zap_stats
             if zap_stats.get("error"):
                 stats["zap_error"] = zap_stats["error"]
             elif opts.injector_enabled and zap_raw:
-                zap_total = len(zap_raw) * opts.verification_rounds
-                zap_progress = step_progress(total=max(zap_total, 1), phase_name="zap_verify", label="ZAP verify")
-                zap_attempts: list[Any] = []
-                zap_round_stats: list[dict[str, Any]] = []
-                zap_offset = 0
-
-                for round_idx in range(opts.verification_rounds):
-                    def _zap_round_progress(probe: int, total: int, label: str, *, offset: int = zap_offset) -> None:
-                        zap_progress(
-                            min(offset + probe, max(zap_total, 1)),
-                            f"round {round_idx + 1}/{opts.verification_rounds} {label}",
-                        )
-
-                    round_verified, round_vstats = runner_mod.verify_zap_alerts(
-                        zap_raw,
-                        jwt_token=jwt_token,
-                        injectors_mod=payload_injector_mod,
-                        verification_mode=opts.verification_mode,
-                        session_headers=session_headers,
-                        progress_cb=_zap_round_progress,
-                    )
-                    zap_offset += len(zap_raw)
-                    zap_attempts.extend([runner_mod.annotate_result(r) for r in round_verified])
-                    zap_round_stats.append({"round": round_idx + 1, **round_vstats})
-
-                verified = runner_mod.aggregate_repeated_results(
-                    zap_attempts,
-                    required_reproductions=opts.confirmation_threshold,
-                    minimum_attempts=opts.verification_rounds,
+                zap_progress = step_progress(total=len(zap_raw), phase_name="zap_verify", label="ZAP verify")
+                verified, vstats = runner_mod.verify_zap_alerts(
+                    zap_raw,
+                    jwt_token=jwt_token,
+                    injectors_mod=payload_injector_mod,
+                    verification_mode=opts.verification_mode,
+                    session_headers=session_headers,
+                    progress_cb=lambda d, t, lbl: zap_progress(d, lbl),
                 )
                 all_detection_results.extend(verified)
-                stats["zap_verify"] = {
-                    "rounds": opts.verification_rounds,
-                    "confirmation_threshold": opts.confirmation_threshold,
-                    "round_stats": zap_round_stats,
-                    "attempt_results": len(zap_attempts),
-                    "results_before_dedupe": len(verified),
-                }
+                stats["zap_verify"] = vstats
             elif zap_raw:
                 all_detection_results.extend(zap_raw)
         except ZapNotAvailableError as exc:
@@ -264,58 +235,23 @@ def run_g12_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             len([p for p in t.params if p.location.value in {"query", "path", "body", "header"}])
             for t in targets
             if opts.include_unsafe_methods or t.method.upper() not in {"DELETE", "PATCH"}
-        ) * len(injection_types) * opts.verification_rounds
+        ) * len(injection_types)
         direct_progress = step_progress(total=max(total_probes, 1), phase_name="injector", label="1-2 direct")
 
         def _progress(probe: int, total: int, label: str) -> None:
             direct_progress(min(probe, max(total, 1)), label[:120])
 
-        direct_attempts: list[Any] = []
-        recheck_candidates: dict[tuple[Any, ...], Any] = {}
-        direct_round_stats: list[dict[str, Any]] = []
-        progress_offset = 0
-
-        for round_idx in range(opts.verification_rounds):
-            required_rechecks = list(recheck_candidates.values()) if round_idx > 0 else []
-
-            def _round_progress(probe: int, total: int, label: str, *, offset: int = progress_offset) -> None:
-                _progress(offset + probe, max(total_probes, 1), f"round {round_idx + 1}/{opts.verification_rounds} {label}")
-
-            round_results, round_stats = runner_mod.run_direct_verification(
-                targets,
-                jwt_token=jwt_token,
-                injectors_mod=payload_injector_mod,
-                injection_types=injection_types,
-                verification_mode=opts.verification_mode,
-                include_unsafe=opts.include_unsafe_methods,
-                keep_all=opts.keep_all_results,
-                session_headers=session_headers,
-                required_rechecks=required_rechecks,
-                dedupe=False,
-                progress_cb=_round_progress,
-            )
-            progress_offset += int(round_stats.get("probes_run", 0))
-            direct_round_stats.append({"round": round_idx + 1, **round_stats})
-
-            annotated_round = [runner_mod.annotate_result(r) for r in round_results]
-            direct_attempts.extend(annotated_round)
-            for result in annotated_round:
-                if runner_mod.is_candidate_for_recheck(result):
-                    recheck_candidates[runner_mod.result_key(result)] = result
-
-        direct_results = runner_mod.aggregate_repeated_results(
-            direct_attempts,
-            required_reproductions=opts.confirmation_threshold,
-            minimum_attempts=opts.verification_rounds,
+        direct_results, direct_stats = runner_mod.run_direct_verification(
+            targets,
+            jwt_token=jwt_token,
+            injectors_mod=payload_injector_mod,
+            injection_types=injection_types,
+            verification_mode=opts.verification_mode,
+            include_unsafe=opts.include_unsafe_methods,
+            keep_all=opts.keep_all_results,
+            session_headers=session_headers,
+            progress_cb=_progress,
         )
-        direct_stats = {
-            "rounds": opts.verification_rounds,
-            "confirmation_threshold": opts.confirmation_threshold,
-            "round_stats": direct_round_stats,
-            "attempt_results": len(direct_attempts),
-            "recheck_candidates": len(recheck_candidates),
-            "results_before_dedupe": len(direct_results),
-        }
         all_detection_results.extend(direct_results)
         stats["direct"] = direct_stats
 

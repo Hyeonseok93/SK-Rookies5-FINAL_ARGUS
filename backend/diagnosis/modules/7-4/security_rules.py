@@ -97,12 +97,25 @@ def scan_response_security(
     is_https = (parsed.scheme or "").lower() == "https"
     issues: list[SecurityIssue] = []
 
-    if is_https and not h.get("strict-transport-security"):
+    if is_https:
+        # HTTPS 인데 HSTS 없음 → 다운그레이드/스트립 공격 취약
+        if not h.get("strict-transport-security"):
+            issues.append(
+                SecurityIssue(
+                    check_type="missing_hsts",
+                    reason="Strict-Transport-Security not set on HTTPS response",
+                    severity=_severity(rules, strict_sev="medium", relaxed_sev="low"),
+                    header="strict-transport-security",
+                )
+            )
+    else:
+        # HTTP 평문 서비스 → 전송구간 암호화 자체가 없음 (MITM 스니핑/변조 가능).
+        # HSTS "누락"보다 근본적인 문제라 별도 지적으로 분리하고 심각도도 높게.
         issues.append(
             SecurityIssue(
-                check_type="missing_hsts",
-                reason="Strict-Transport-Security not set on HTTPS response",
-                severity=_severity(rules, strict_sev="medium", relaxed_sev="low"),
+                check_type="no_transport_encryption",
+                reason="Service served over plaintext HTTP — no transport encryption (TLS) in place",
+                severity="high",
                 header="strict-transport-security",
             )
         )
@@ -147,6 +160,30 @@ def scan_response_security(
                 severity=_severity(rules, strict_sev="medium", relaxed_sev="low"),
                 header="x-content-type-options",
                 header_value=xcto or None,
+            )
+        )
+
+    # X-XSS-Protection: 표준상 deprecated 헤더지만 KISA/SK Shielders 진단 기준상 점검 항목.
+    # 값이 "0" 이면 브라우저 내장 XSS 필터를 명시적으로 비활성화한 것 → 지적.
+    # 미설정은 strict 모드에서만 정보성으로 지적 (최신 권고는 CSP 로 대체).
+    xxp = h.get("x-xss-protection", "")
+    if xxp.strip() == "0":
+        issues.append(
+            SecurityIssue(
+                check_type="xxss_protection_disabled",
+                reason="X-XSS-Protection explicitly disabled (0)",
+                severity="low",
+                header="x-xss-protection",
+                header_value=xxp,
+            )
+        )
+    elif rules.strict and not xxp:
+        issues.append(
+            SecurityIssue(
+                check_type="missing_xxss_protection",
+                reason="X-XSS-Protection not set (use CSP as the primary control)",
+                severity="low",
+                header="x-xss-protection",
             )
         )
 
