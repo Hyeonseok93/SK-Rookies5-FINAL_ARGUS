@@ -30,7 +30,7 @@ export const GUIDELINE_SECTIONS: GuidelineSection[] = [
   { id: "4-2", title: "인증(세션 및 토큰) 값 안전성 설정 여부", chapter: 4 },
   { id: "4-3", title: "접근제어 우회 가능성 확인", chapter: 4 },
   { id: "4-4", title: "비인증 상태로 중요 page접근 가능성", chapter: 4 },
-  { id: "4-5", title: "일반계정 권한 상승 가능성", chapter: 4 },
+  { id: "4-5", title: "일반계정 권한 상승 가능성", chapter: 4, description: "자동 진단(IDOR, 권한 덮어쓰기) 지원 모듈입니다. 진단을 위해 최소 2개의 일반 권한(USER) 계정이 필요하며, 결과는 보조 자료로 활용해야 합니다." },
   { id: "5-1", title: "소스코드 내 주요정보 노출 여부", chapter: 5 },
   { id: "5-2", title: "요청 및 응답 값 내 주요정보 포함여부 확인", chapter: 5 },
   { id: "6-1", title: "오류페이지를 통한 정보 노출 여부", chapter: 6 },

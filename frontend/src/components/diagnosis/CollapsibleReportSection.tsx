@@ -7,7 +7,7 @@ export function CollapsibleReportSection({
   defaultOpen = false,
   children,
 }: {
-  title: string;
+  title: ReactNode;
   subtitle?: string;
   defaultOpen?: boolean;
   children: ReactNode;
@@ -24,7 +24,7 @@ export function CollapsibleReportSection({
         <ChevronDown
           className={`h-4 w-4 shrink-0 text-cyber-muted transition ${open ? "rotate-180" : ""}`}
         />
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-cyber-muted">
+        <span className="flex items-center text-[10px] font-semibold uppercase tracking-wide text-cyber-muted">
           {title}
         </span>
         {subtitle ? <span className="text-[10px] text-cyber-muted/80">{subtitle}</span> : null}

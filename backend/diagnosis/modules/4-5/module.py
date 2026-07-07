@@ -66,13 +66,23 @@ class G45Module(DiagnosisModule):
 
         result = scanner.run_g45_scan(ctx, self.module_dir)
 
+        findings = list(result.findings)
+        if hasattr(result, "stats") and result.stats:
+            findings.append(
+                DiagnosisFinding(
+                    severity="info",
+                    message="4-5 scan statistics",
+                    evidence={"stats": result.stats},
+                )
+            )
+
         report = SectionReport(
             section_id=self.section_id,
             title=self.title,
             chapter=self.chapter,
             status=result.status,
             implemented=True,
-            findings=result.findings,
+            findings=findings,
             message=result.message,
             checked_at=utc_now_iso(),
         )

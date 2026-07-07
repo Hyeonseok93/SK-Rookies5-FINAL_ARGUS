@@ -1,7 +1,21 @@
 import { useState } from "react";
 import { ChevronDown, Terminal, Copy } from "lucide-react"; // 💡 Terminal, Copy 추가
 import type { DiagnosisSectionReport } from "../../types";
-
+import { G15FindingsPanel } from "./G15FindingsPanel";
+import { G22FindingsPanel } from "./G22FindingsPanel";
+import { G32FindingsPanel } from "./G32FindingsPanel";
+import { G34FindingsPanel } from "./G34FindingsPanel";
+import { G35FindingsPanel } from "./G35FindingsPanel";
+import { G36FindingsPanel } from "./G36FindingsPanel";
+import { G42FindingsPanel } from "./G42FindingsPanel";
+import { G45FindingsPanel } from "./G45FindingsPanel";
+import { G52FindingsPanel } from "./G52FindingsPanel";
+import { G61FindingsPanel } from "./G61FindingsPanel";
+import { G62FindingsPanel } from "./G62FindingsPanel";
+import { G71FindingsPanel } from "./G71FindingsPanel";
+import { G72FindingsPanel } from "./G72FindingsPanel";
+import { G73FindingsPanel } from "./G73FindingsPanel";
+import { G74FindingsPanel } from "./G74FindingsPanel";
 
 const STATUS_STYLES: Record<string, string> = {
   pass: "border-emerald-400/50 bg-emerald-500/10 text-emerald-300",
@@ -730,6 +744,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const isG15Stats = statsFinding?.message === "1-5 scan statistics";
   const isG41Stats = statsFinding?.message === "4-1 scan statistics";
   const isG42Stats = statsFinding?.message === "4-2 scan statistics";
+  const isG45Stats = statsFinding?.message === "4-5 scan statistics";
   const isG22Stats = statsFinding?.message === "2-2 scan statistics";
   const isG71Stats = statsFinding?.message === "7-1 scan statistics";
   const isG72Stats = statsFinding?.message === "7-2 scan statistics";
@@ -908,6 +923,15 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
               ) : null}
               {typeof stats.duplicate_login_ip_findings === "number" ? (
                 <span> · cross-IP login {stats.duplicate_login_ip_findings}</span>
+              ) : null}
+            </>
+          ) : null}
+          {isG45Stats ? (
+            <>
+              API endpoints{" "}
+              <span className="font-mono text-cyan-300/90">{String(stats.scanned_endpoints ?? "—")}</span>
+              {typeof stats.admin_endpoints === "number" ? (
+                <span> · tested endpoints {stats.admin_endpoints}</span>
               ) : null}
             </>
           ) : null}
@@ -1345,6 +1369,36 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
 
       {findings.length === 0 ? (
         <p className="text-xs text-cyber-muted">finding 없음</p>
+      ) : report.section_id === "1-5" ? (
+        <G15FindingsPanel findings={findings} />
+      ) : report.section_id === "2-2" ? (
+        <G22FindingsPanel findings={findings} />
+      ) : report.section_id === "3-2" ? (
+        <G32FindingsPanel findings={findings} stats={stats} />
+      ) : report.section_id === "3-4" ? (
+        <G34FindingsPanel findings={findings} stats={stats} status={report.status} />
+      ) : report.section_id === "3-5" ? (
+        <G35FindingsPanel findings={findings} stats={stats} />
+      ) : report.section_id === "3-6" ? (
+        <G36FindingsPanel findings={findings} stats={stats} status={report.status} />
+      ) : report.section_id === "4-2" ? (
+        <G42FindingsPanel findings={findings} />
+      ) : report.section_id === "4-5" ? (
+        <G45FindingsPanel findings={findings} />
+      ) : report.section_id === "5-2" ? (
+        <G52FindingsPanel findings={findings} stats={stats} />
+      ) : report.section_id === "6-1" && report.g61_summary ? (
+        <G61FindingsPanel summary={report.g61_summary} status={report.status} />
+      ) : report.section_id === "6-2" ? (
+        <G62FindingsPanel findings={findings} />
+      ) : report.section_id === "7-1" ? (
+        <G71FindingsPanel findings={findings} />
+      ) : report.section_id === "7-2" ? (
+        <G72FindingsPanel findings={findings} />
+      ) : report.section_id === "7-3" ? (
+        <G73FindingsPanel findings={findings} />
+      ) : report.section_id === "7-4" ? (
+        <G74FindingsPanel findings={findings} />
       ) : (
         <GroupedFindingsPanel findings={findings} sectionId={report.section_id} />
       )}
