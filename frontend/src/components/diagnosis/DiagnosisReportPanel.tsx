@@ -319,6 +319,7 @@ function CollapsibleFindingsSection({
   defaultOpen,
   findings,
   sectionId,
+  children,
 }: {
   title: string;
   subtitle?: string;
@@ -326,6 +327,7 @@ function CollapsibleFindingsSection({
   defaultOpen: boolean;
   findings: { severity: string; message: string; evidence?: Record<string, unknown> }[];
   sectionId: string;
+  children?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   if (count === 0) return null;
@@ -343,11 +345,14 @@ function CollapsibleFindingsSection({
         {subtitle ? <span className="ml-1 text-[10px] text-cyber-muted">{subtitle}</span> : null}
       </button>
       {open ? (
-        <ul className="space-y-2 border-t border-cyber-border/30 px-3 py-2">
-          {findings.map((f, i) => (
-            <FindingListItem key={`${title}-${f.severity}-${i}`} f={f} sectionId={sectionId} />
-          ))}
-        </ul>
+        <div className="border-t border-cyber-border/30">
+          {children}
+          <ul className="space-y-2 px-3 py-2">
+            {findings.map((f, i) => (
+              <FindingListItem key={`${title}-${f.severity}-${i}`} f={f} sectionId={sectionId} />
+            ))}
+          </ul>
+        </div>
       ) : null}
     </div>
   );
@@ -558,7 +563,23 @@ function GroupedFindingsPanel({
         defaultOpen={true}
         findings={csv}
         sectionId={sectionId}
-      />
+      >
+        {csv.length > 0 && (
+          <div className="mx-3 mt-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-200/90">
+            <p className="mb-1 font-semibold text-amber-400">안내</p>
+            <p>
+              CSV 기반 결과는 프로젝트에서 사용하는 라이브러리 버전을 알려진 취약점 데이터베이스(GHSA/CVE)와 비교하여 탐지한 결과입니다.
+            </p>
+            <p className="mt-1">
+              따라서 <strong className="text-amber-300">현재 사용 중인 버전에 알려진 보안 취약점이 존재함을 의미</strong>하지만,{" "}
+              <strong className="text-amber-300">해당 취약점이 현재 서비스에서 실제로 악용 가능한 상태임을 의미하는 것은 아닙니다.</strong>
+            </p>
+            <p className="mt-1">
+              실제 영향 여부는 애플리케이션의 사용 방식, 설정 및 배포 환경에 따라 달라질 수 있습니다. 결과는 참고용으로 활용하시기 바랍니다.
+            </p>
+          </div>
+        )}
+      </CollapsibleFindingsSection>
       <CollapsibleFindingsSection
         title="ZAP"
         subtitle={zapSubtitle}

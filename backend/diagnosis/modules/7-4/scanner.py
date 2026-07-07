@@ -176,27 +176,33 @@ def run_g74_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         sample_size=opts.sample_size,
         extra_paths=opts.extra_paths,
     )
-    if not probe_targets:
+    if not probe_targets and not opts.gradle_dep_files:
         return ScanResult(
             status="skipped",
-            message="No base URLs configured — add targets in dashboard Base URLs or config.yaml",
+            message="No base URLs or dependency files configured.",
             stats={"targets": 0, "probe_mode": opts.probe_mode},
         )
 
     from diagnosis.progress_reporter import endpoint_progress, prepare, zap_phase
 
-    prepare(len(probe_targets), f"7-4: {len(probe_targets)} URL(s)")
-
     scan_rules = rules_mod.scan_rules_from_config(ctx.raw_config)
-    findings, stats = probes_mod.run_security_probes(
-        probe_targets,
-        scan_response_fn=lambda url, h, **kw: rules_mod.scan_response_security(
-            url, h, rules=scan_rules, **kw
-        ),
-        timeout=opts.timeout,
-        scan_rules=scan_rules,
-        on_progress=endpoint_progress(total=len(probe_targets), phase_name="httpx", prefix="httpx "),
-    )
+    findings: list[DiagnosisFinding] = []
+    stats: dict[str, Any] = {}
+
+    if probe_targets:
+        prepare(len(probe_targets), f"7-4: {len(probe_targets)} URL(s)")
+        probe_findings, probe_stats = probes_mod.run_security_probes(
+            probe_targets,
+            scan_response_fn=lambda url, h, **kw: rules_mod.scan_response_security(
+                url, h, rules=scan_rules, **kw
+            ),
+            timeout=opts.timeout,
+            scan_rules=scan_rules,
+            on_progress=endpoint_progress(total=len(probe_targets), phase_name="httpx", prefix="httpx "),
+        )
+        findings.extend(probe_findings)
+        stats.update(probe_stats)
+
     stats.update(target_meta)
     stats["probe_mode"] = opts.probe_mode
     stats["sample_size"] = opts.sample_size
