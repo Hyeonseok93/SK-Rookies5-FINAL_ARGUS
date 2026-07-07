@@ -178,6 +178,7 @@ def run_section(
     g15_options: dict | None = None,
     g41_options: dict | None = None,
     g42_options: dict | None = None,
+    **kwargs,
 ) -> SectionReport:
     if section_id not in SECTION_BY_ID:
         raise KeyError(f"Unknown section: {section_id}")
