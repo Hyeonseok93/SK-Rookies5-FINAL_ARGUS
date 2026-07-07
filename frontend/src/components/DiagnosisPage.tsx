@@ -723,7 +723,18 @@ export function DiagnosisPage() {
                         <span className="shrink-0 rounded border border-cyber-border/60 bg-cyber-bg px-2 py-0.5 font-mono text-[11px] text-cyber-accent">
                           {section.id}
                         </span>
-                        <span className="flex-1 text-sm text-white">{section.title}</span>
+                        <span className="flex-1 text-sm text-white flex items-center gap-2">
+                          {section.title}
+                          {section.description && (
+                            <div className="group relative flex items-center" onClick={(e) => e.stopPropagation()}>
+                              <AlertCircle className="h-3.5 w-3.5 text-cyber-muted transition group-hover:text-cyan-400" />
+                              <div className="absolute left-1/2 top-full mt-2 hidden w-72 -translate-x-1/2 rounded border border-cyber-border/80 bg-cyber-bg px-3 py-2 text-xs text-white/90 shadow-xl group-hover:block z-50 whitespace-pre-wrap text-left leading-relaxed">
+                                {section.description}
+                                <div className="absolute -top-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-t border-l border-cyber-border/80 bg-cyber-bg"></div>
+                              </div>
+                            </div>
+                          )}
+                        </span>
                         {badgeLabel ? (
                           <span
                             className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] ${
