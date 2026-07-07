@@ -20,7 +20,7 @@ def write_batch_manifest(
     batch_id: str,
     url_list: str | None = None,
     api_list: str | None = None,
-    openapi: str | None = None,
+    openapi: list[str] | None = None,
 ) -> Path:
     """Write manifest.json listing files stored in this batch (relative names)."""
     manifest: dict[str, Any] = {

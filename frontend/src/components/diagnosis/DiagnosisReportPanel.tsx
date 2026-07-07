@@ -1,6 +1,21 @@
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { DiagnosisSectionReport } from "../../types";
+import { G15FindingsPanel } from "./G15FindingsPanel";
+import { G22FindingsPanel } from "./G22FindingsPanel";
+import { G32FindingsPanel } from "./G32FindingsPanel";
+import { G34FindingsPanel } from "./G34FindingsPanel";
+import { G35FindingsPanel } from "./G35FindingsPanel";
+import { G36FindingsPanel } from "./G36FindingsPanel";
+import { G42FindingsPanel } from "./G42FindingsPanel";
+import { G52FindingsPanel } from "./G52FindingsPanel";
+import { G61FindingsPanel } from "./G61FindingsPanel";
+import { G62FindingsPanel } from "./G62FindingsPanel";
+import { G71FindingsPanel } from "./G71FindingsPanel";
+import { G72FindingsPanel } from "./G72FindingsPanel";
+import { G73FindingsPanel } from "./G73FindingsPanel";
+import { G74FindingsPanel } from "./G74FindingsPanel";
+import { filterG62DisplayFindings } from "../../lib/g62ReportView";
 
 const STATUS_STYLES: Record<string, string> = {
   pass: "border-emerald-400/50 bg-emerald-500/10 text-emerald-300",
@@ -8,6 +23,7 @@ const STATUS_STYLES: Record<string, string> = {
   warning: "border-amber-400/50 bg-amber-500/10 text-amber-300",
   fail: "border-rose-400/50 bg-rose-500/10 text-rose-300",
   error: "border-rose-400/50 bg-rose-500/10 text-rose-300",
+  cancelled: "border-amber-400/40 bg-amber-500/5 text-amber-200/80",
   skipped: "border-amber-400/40 bg-amber-500/5 text-amber-200/80",
   not_implemented: "border-cyber-border/60 bg-cyber-bg/40 text-cyber-muted",
   not_diagnosable: "border-amber-400/50 bg-amber-500/10 text-amber-300",
@@ -85,6 +101,14 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
   add("Param", "param");
   add("Param in", "param_in");
   add("Payload", "payload");
+  add("Attack", "attack");
+  add("Affected Parameters", "affected_parameters");
+  add("Writer Role", "cross_account_writer_role");
+  add("Reader Role", "cross_account_reader_role");
+  add("Description", "vuln_description");
+  add("Validation Reason", "validation_reason");
+  add("Remediation Guide", "remediation_guide");
+  add("Remediation Cause", "remediation_cause");
   add("Payloads tried", "payloads_tried_count");
   add("HTTP", "http_status");
   add("Baseline HTTP", "baseline_http_status");
@@ -347,7 +371,10 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
     "7-3 scan statistics",
     "7-4 scan statistics",
   ]);
-  const findings = report.findings.filter((f) => !statsMessages.has(f.message));
+  const findings =
+    report.section_id === "6-2"
+      ? filterG62DisplayFindings(report.findings.filter((f) => !statsMessages.has(f.message)))
+      : report.findings.filter((f) => !statsMessages.has(f.message));
   const statsFinding = report.findings.find((f) => statsMessages.has(f.message));
   const stats = statsFinding?.evidence?.stats as Record<string, unknown> | undefined;
   const isG15Stats = statsFinding?.message === "1-5 scan statistics";
@@ -365,6 +392,21 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const isG34Stats = statsFinding?.message === "3-4 scan statistics";
   const isG35Stats = statsFinding?.message === "3-5 scan statistics";
   const isG36Stats = statsFinding?.message === "3-6 scan statistics";
+  const hideProbeSummary =
+    report.section_id === "1-5" ||
+    report.section_id === "2-2" ||
+    report.section_id === "3-2" ||
+    report.section_id === "3-4" ||
+    report.section_id === "3-5" ||
+    report.section_id === "3-6" ||
+    report.section_id === "4-2" ||
+    report.section_id === "5-2" ||
+    report.section_id === "6-1" ||
+    report.section_id === "6-2" ||
+    report.section_id === "7-1" ||
+    report.section_id === "7-2" ||
+    report.section_id === "7-3" ||
+    report.section_id === "7-4";
 
   return (
     <div className="border-t border-cyber-border/40 bg-cyber-bg/30 px-4 py-3">
@@ -373,12 +415,12 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
         {report.checked_at ? (
           <span className="text-[10px] text-cyber-muted">{report.checked_at}</span>
         ) : null}
-        {report.message ? (
+        {report.message && !hideProbeSummary ? (
           <span className="text-xs text-cyber-muted">{report.message}</span>
         ) : null}
       </div>
 
-      {stats ? (
+      {stats && !hideProbeSummary ? (
         <div className="mb-3 rounded border border-cyber-border/40 bg-cyber-panel/40 px-3 py-2 text-[11px] text-cyber-muted">
           {isG15Stats ? (
             <>
@@ -935,8 +977,43 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
         </div>
       ) : null}
 
-      {findings.length === 0 ? (
+      {findings.length === 0 &&
+      report.section_id !== "1-5" &&
+      report.section_id !== "2-2" &&
+      report.section_id !== "3-2" &&
+      report.section_id !== "3-4" &&
+      report.section_id !== "3-5" &&
+      report.section_id !== "3-6" &&
+      report.section_id !== "6-1" ? (
         <p className="text-xs text-cyber-muted">finding 없음</p>
+      ) : report.section_id === "1-5" ? (
+        <G15FindingsPanel findings={findings} />
+      ) : report.section_id === "2-2" ? (
+        <G22FindingsPanel findings={findings} />
+      ) : report.section_id === "3-2" ? (
+        <G32FindingsPanel findings={findings} stats={stats} />
+      ) : report.section_id === "3-4" ? (
+        <G34FindingsPanel findings={findings} stats={stats} status={report.status} />
+      ) : report.section_id === "3-5" ? (
+        <G35FindingsPanel findings={findings} stats={stats} />
+      ) : report.section_id === "3-6" ? (
+        <G36FindingsPanel findings={findings} stats={stats} status={report.status} />
+      ) : report.section_id === "4-2" ? (
+        <G42FindingsPanel findings={findings} />
+      ) : report.section_id === "5-2" ? (
+        <G52FindingsPanel findings={findings} stats={stats} />
+      ) : report.section_id === "6-1" && report.g61_summary ? (
+        <G61FindingsPanel summary={report.g61_summary} status={report.status} />
+      ) : report.section_id === "6-2" ? (
+        <G62FindingsPanel findings={findings} />
+      ) : report.section_id === "7-1" ? (
+        <G71FindingsPanel findings={findings} />
+      ) : report.section_id === "7-2" ? (
+        <G72FindingsPanel findings={findings} />
+      ) : report.section_id === "7-3" ? (
+        <G73FindingsPanel findings={findings} />
+      ) : report.section_id === "7-4" ? (
+        <G74FindingsPanel findings={findings} />
       ) : (
         <GroupedFindingsPanel findings={findings} sectionId={report.section_id} />
       )}

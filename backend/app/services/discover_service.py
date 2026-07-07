@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -35,8 +37,11 @@ from app.services.zap_util import (
 )
 from inventory.enrich_from_traffic import enrich_tree_from_built_probes, enrich_tree_from_observations
 from inventory.merge import merge_trees
-from inventory.load import find_openapi_spec
+from inventory.load import find_openapi_specs
 from inventory.schema import ApiTree, Endpoint, InventoryMeta, build_full_url
+
+logger = logging.getLogger("uvicorn.error")
+logger.setLevel(logging.INFO)
 
 
 def _load_raw_config(config_path: Path) -> dict[str, Any]:
@@ -129,6 +134,7 @@ def discover_inventory_sync(
     ajax_spider_enabled: bool | None = None,
     seed_requestor: bool | None = None,
 ) -> dict[str, Any]:
+    started = time.monotonic()
     raw_cfg = _load_raw_config(config_path)
     discover_progress.reset(total_steps=6)
     discover_progress.persist(data_dir)
@@ -136,6 +142,13 @@ def discover_inventory_sync(
     bases = resolved_base_url_strings() or sorted({ep.base_url for ep in tree.endpoints})
     frontend = _frontend_base(bases)
     api_bases = _api_bases(bases)
+    logger.info(
+        "ZAP verify started: endpoints=%d bases=%s api_bases=%s frontend=%s",
+        len(tree.endpoints),
+        bases,
+        api_bases,
+        frontend,
+    )
 
     zap_cfg = raw_cfg.get("zap") or {}
     discover_cfg = dict(raw_cfg.get("discover") or {})
@@ -164,7 +177,14 @@ def discover_inventory_sync(
     discover_progress.update(phase="login", message="Logging in with saved test accounts…", step=1)
     discover_progress.persist(data_dir)
     accounts = load_test_accounts()["accounts"]
+    login_started = time.monotonic()
     account_auths = login_all_accounts(auth_cfg, accounts)
+    logger.info(
+        "ZAP verify login finished: accounts=%d authenticated=%d elapsed=%.2fs",
+        len(accounts),
+        len(account_auths),
+        time.monotonic() - login_started,
+    )
     if account_auths:
         apply_auth_to_zap(zap, account_auths[0])
         emails = ", ".join(str(a.get("email", "")) for a in account_auths[:3])
@@ -180,17 +200,18 @@ def discover_inventory_sync(
     # Step 2 — OpenAPI import per API base
     discover_progress.update(phase="openapi", message="Importing Swagger into ZAP…", step=2)
     discover_progress.persist(data_dir)
-    openapi_path = find_openapi_spec(data_dir)
-    if discover_cfg.get("openapi_import", True) and openapi_path:
-        for base in api_bases:
-            target = probe_url(base)
-            try:
-                zap.openapi.import_file(str(openapi_path), target)
-            except Exception:
+    openapi_paths = find_openapi_specs(data_dir)
+    if discover_cfg.get("openapi_import", True) and openapi_paths:
+        for openapi_path in openapi_paths:
+            for base in api_bases:
+                target = probe_url(base)
                 try:
-                    zap.openapi.import_url(f"{target}/v3/api-docs", target)
+                    zap.openapi.import_file(str(openapi_path), target)
                 except Exception:
-                    pass
+                    try:
+                        zap.openapi.import_url(f"{target}/v3/api-docs", target)
+                    except Exception:
+                        pass
 
     # Step 3 — replay every endpoint (GET/POST/PUT/PATCH/DELETE) through ZAP
     discover_progress.update(
@@ -201,6 +222,7 @@ def discover_inventory_sync(
     discover_progress.persist(data_dir)
     max_seeds = int(discover_cfg.get("max_seeds", 0))
     if discover_cfg.get("seed_requestor", True):
+        seed_started = time.monotonic()
 
         def _seed_progress(done: int, total: int) -> None:
             discover_progress.update(
@@ -216,6 +238,12 @@ def discover_inventory_sync(
             account_auths=account_auths,
             include_anonymous=True,
             on_progress=_seed_progress,
+        )
+        logger.info(
+            "ZAP endpoint probes finished: runs=%d responses=%d elapsed=%.2fs",
+            len(probe_results),
+            sum(1 for row in probe_results if row.get("http_status") is not None),
+            time.monotonic() - seed_started,
         )
         discover_progress.update(
             phase="seeds",
@@ -242,7 +270,14 @@ def discover_inventory_sync(
         discover_progress.update(phase="spider", message=f"Spidering {frontend}…", step=4)
         discover_progress.persist(data_dir)
         if discover_cfg.get("spider_enabled"):
+            spider_started = time.monotonic()
             run_spider(zap, web_url, max_seconds=spider_max, on_tick=_spider_tick)
+            logger.info(
+                "ZAP spider finished: base=%s max_seconds=%d elapsed=%.2fs",
+                frontend,
+                spider_max,
+                time.monotonic() - spider_started,
+            )
         if discover_cfg.get("ajax_spider_enabled"):
 
             def _ajax_tick(elapsed: int, limit: int) -> None:
@@ -254,15 +289,35 @@ def discover_inventory_sync(
 
             discover_progress.update(phase="spider", message=f"Ajax spider {frontend}…", step=4)
             discover_progress.persist(data_dir)
+            ajax_started = time.monotonic()
             run_ajax_spider(zap, web_url, max_seconds=ajax_max, on_tick=_ajax_tick)
+            ajax_elapsed = time.monotonic() - ajax_started
+            logger.info(
+                "ZAP Ajax spider finished: base=%s max_seconds=%d elapsed=%.2fs timed_out=%s",
+                frontend,
+                ajax_max,
+                ajax_elapsed,
+                ajax_elapsed >= ajax_max,
+            )
 
     # Step 5 — collect ZAP URLs
     discover_progress.update(phase="collect", message="Collecting URLs from ZAP Sites tree…", step=5)
     discover_progress.persist(data_dir)
     all_site_urls: set[str] = set()
-    for base in bases:
+    collect_started = time.monotonic()
+    # The frontend tree contains every dev-proxy request and can grow very
+    # large. Only registered backend origins can become inventory API rows;
+    # Ajax traffic that actually reached those origins remains visible there.
+    for base in api_bases:
         all_site_urls |= collect_site_urls(zap, base)
     traffic_obs = collect_traffic_observations(zap)
+    logger.info(
+        "ZAP collection finished: api_bases=%s urls=%d traffic_observations=%d elapsed=%.2fs",
+        api_bases,
+        len(all_site_urls),
+        len(traffic_obs),
+        time.monotonic() - collect_started,
+    )
 
     # Step 6 — classify + merge new endpoints + enrich params from traffic
     discover_progress.update(
@@ -292,7 +347,10 @@ def discover_inventory_sync(
     grouped = group_probe_results(results)
 
     existing_ids = {ep.endpoint_id for ep in enriched_tree.endpoints}
-    new_eps = _urls_to_new_endpoints(all_site_urls, existing_ids, bases)
+    # Only backend origins explicitly present in the Attack Surface Map may
+    # contribute discovered API endpoints.  In particular, do not turn API
+    # calls observed through a frontend dev proxy into separate :5173 rows.
+    new_eps = _urls_to_new_endpoints(all_site_urls, existing_ids, api_bases)
     discovered_tree = merge_trees(
         [enriched_tree, ApiTree(meta=enriched_tree.meta, endpoints=new_eps)],
         app_name=tree.meta.app_name,
@@ -341,6 +399,18 @@ def discover_inventory_sync(
     endpoint_summary = summarize_probe_results(all_results)
     discovered_count = endpoint_summary["discovered_count"]
     final_count = endpoint_summary["final_count"]
+    logger.info(
+        "ZAP verify summary: probe_runs=%d endpoints_probed=%d confirmed=%d "
+        "rejected=%d verified=%d discovered=%d params_enriched=%d elapsed=%.2fs",
+        endpoint_summary["probe_runs"],
+        endpoint_summary["endpoints_probed"],
+        endpoint_summary["confirmed"],
+        endpoint_summary["rejected"],
+        len(verified_endpoints),
+        discovered_count,
+        params_enriched,
+        time.monotonic() - started,
+    )
     deduped = dedupe_probe_results(all_results)
 
     confirmed = sum(1 for r in deduped if r.get("status") == "confirmed")

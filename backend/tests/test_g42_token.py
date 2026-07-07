@@ -102,6 +102,47 @@ def test_relogin_same_token_finding(monkeypatch):
     assert stats["first"]["access"] is True
 
 
+def test_discover_refresh_paths_from_tree(monkeypatch):
+    targets = _load("targets")
+    from diagnosis.replay import normalize as norm
+    from inventory.schema import ApiTree, Endpoint, InventoryMeta
+
+    tree = ApiTree(
+        meta=InventoryMeta(app_name="t"),
+        endpoints=[
+            Endpoint(
+                method="POST",
+                path="/api/v1/auth/refresh",
+                base_url="http://localhost:8080",
+                kind="api",
+            ),
+            Endpoint(
+                method="POST",
+                path="/api/v1/auth/login",
+                base_url="http://localhost:8080",
+                kind="api",
+            ),
+        ],
+    )
+    monkeypatch.setattr(targets, "load_api_tree", lambda _d: tree)
+    monkeypatch.setattr(norm, "load_dashboard_base_urls", lambda: ["http://localhost:8080"])
+    paths = targets.discover_refresh_paths(
+        {"diagnosis_4_2": {}},
+        data_dir=Path("."),
+    )
+    assert len(paths) == 1
+    assert paths[0]["path"] == "/api/v1/auth/refresh"
+    assert paths[0]["source"] == "inventory"
+    assert (
+        targets.resolve_refresh_path_for_base(
+            {"diagnosis_4_2": {}},
+            base_url="http://localhost:8080",
+            data_dir=Path("."),
+        )
+        == "/api/v1/auth/refresh"
+    )
+
+
 def test_discover_logout_urls_from_tree(monkeypatch):
     targets = _load("targets")
     from diagnosis.replay import normalize as norm

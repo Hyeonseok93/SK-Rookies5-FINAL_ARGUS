@@ -28,7 +28,8 @@ def build_inventory_from_dict(
     json_url_list: bool = False,
     url_list_path: Path | None = None,
     api_list_path: Path | None = None,
-    openapi_path: Path | None = None,
+    openapi_paths: list[Path] | None = None,
+    openapi_source_names: list[str] | None = None,
     json_url_list_path: Path | None = None,
     base_urls: list[str] | None = None,
 ) -> ApiTree:
@@ -50,22 +51,28 @@ def build_inventory_from_dict(
         else:
             missing.append("api_list")
 
-    saved_openapi_path: Path | None = openapi_path
     if openapi:
-        if saved_openapi_path and saved_openapi_path.is_file():
+        paths = openapi_paths or []
+        names: list[str | None] = list(openapi_source_names or [])
+        if len(names) < len(paths):
+            names.extend([None] * (len(paths) - len(names)))
+        valid = [(path, names[index]) for index, path in enumerate(paths) if path.is_file()]
+        if valid:
             oa_cfg = inv.get("openapi") or {}
             spec_base = oa_cfg.get("base_url")
             if not spec_base:
                 targets = cfg.get("targets") or []
                 if targets:
                     spec_base = str(targets[0].get("base_url") or "").rstrip("/") or None
-            trees.append(
-                load_openapi_inventory(
-                    saved_openapi_path,
-                    bases,
-                    spec_base_url=spec_base,
+            for path, original_name in valid:
+                trees.append(
+                    load_openapi_inventory(
+                        path,
+                        bases,
+                        spec_base_url=spec_base,
+                        source_tag=Path(original_name).stem if original_name else path.stem,
+                    )
                 )
-            )
         else:
             missing.append("openapi")
 
@@ -99,7 +106,8 @@ def build_inventory(
     json_url_list: bool = False,
     url_list_path: Path | None = None,
     api_list_path: Path | None = None,
-    openapi_path: Path | None = None,
+    openapi_paths: list[Path] | None = None,
+    openapi_source_names: list[str] | None = None,
     json_url_list_path: Path | None = None,
     base_urls: list[str] | None = None,
 ) -> ApiTree:
@@ -111,7 +119,8 @@ def build_inventory(
         json_url_list=json_url_list,
         url_list_path=url_list_path,
         api_list_path=api_list_path,
-        openapi_path=openapi_path,
+        openapi_paths=openapi_paths,
+        openapi_source_names=openapi_source_names,
         json_url_list_path=json_url_list_path,
         base_urls=base_urls,
     )
@@ -171,13 +180,15 @@ def compute_stats(tree: ApiTree) -> dict[str, Any]:
     }
 
 
-def persist_inventory(tree: ApiTree, data_dir: Path, openapi_path: Path | None = None) -> dict[str, str]:
+def persist_inventory(
+    tree: ApiTree, data_dir: Path, openapi_paths: list[Path] | None = None
+) -> dict[str, str]:
     data_dir.mkdir(parents=True, exist_ok=True)
     api_tree_path = data_dir / "api-tree.json"
     ready_path = data_dir / "api-tree-ready.json"
     tree.save(api_tree_path)
     tree.save(ready_path)
-    write_zap_exports(tree, data_dir, openapi_path)
+    write_zap_exports(tree, data_dir, openapi_paths)
     return {
         "api_tree": str(api_tree_path),
         "api_tree_ready": str(ready_path),

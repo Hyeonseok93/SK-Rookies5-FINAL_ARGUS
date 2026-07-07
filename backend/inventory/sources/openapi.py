@@ -66,6 +66,7 @@ def _body_properties(spec: dict[str, Any], operation: dict[str, Any]) -> list[In
                     in_="body",
                     name=name,
                     type=_schema_type(prop if isinstance(prop, dict) else {}),
+                    format=(prop.get("format") if isinstance(prop, dict) else None),
                     required=name in required,
                     sample=_example_value(prop if isinstance(prop, dict) else {}),
                     sources=["openapi"],
@@ -90,6 +91,10 @@ def _example_value(schema: dict[str, Any]) -> str | None:
         if key in schema:
             val = schema[key]
             return str(val) if val is not None else None
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum:
+        first = enum[0]
+        return str(first) if first is not None else None
     return None
 
 
@@ -115,11 +120,39 @@ def _parameter_inputs(spec: dict[str, Any], operation: dict[str, Any]) -> list[I
         role = "auth" if name.lower() in ("authorization", "cookie") else "input"
         if loc == "header" and role != "auth":
             role = "meta" if name.lower() in ("content-type", "accept", "user-agent") else "input"
+        # Spring-style query DTOs may be represented as one parameter whose
+        # schema references an object.  HTTP sends its properties as separate
+        # query parameters, so retain the fields rather than the wrapper name.
+        if (
+            loc == "query"
+            and isinstance(schema, dict)
+            and schema.get("type") == "object"
+            and schema.get("properties")
+        ):
+            required_fields = set(schema.get("required") or [])
+            for field_name, field_schema in schema["properties"].items():
+                if isinstance(field_schema, dict) and "$ref" in field_schema:
+                    field_schema = _resolve_ref(spec, field_schema["$ref"])
+                resolved_field = field_schema if isinstance(field_schema, dict) else {}
+                inputs.append(
+                    InputParam(
+                        in_="query",
+                        name=field_name,
+                        type=_schema_type(resolved_field),
+                        format=resolved_field.get("format"),
+                        required=field_name in required_fields,
+                        sample=_example_value(resolved_field),
+                        role=role,
+                        sources=["openapi"],
+                    )
+                )
+            continue
         inputs.append(
             InputParam(
                 in_=in_map[loc],  # type: ignore[arg-type]
                 name=name,
                 type=_schema_type(schema if isinstance(schema, dict) else {}),
+                format=(schema.get("format") if isinstance(schema, dict) else None),
                 required=bool(param.get("required", loc == "path")),
                 sample=_example_value(schema if isinstance(schema, dict) else {})
                 or (_example_value(param) if param.get("example") else None),
@@ -152,6 +185,7 @@ def _response_properties(spec: dict[str, Any], operation: dict[str, Any]) -> lis
                         in_="body",
                         name=name,
                         type=_schema_type(prop if isinstance(prop, dict) else {}),
+                        format=(prop.get("format") if isinstance(prop, dict) else None),
                         required=name in required,
                         sample=_example_value(prop if isinstance(prop, dict) else {}),
                         sources=["openapi"],
@@ -202,6 +236,7 @@ def load_openapi_inventory(
     base_urls: list[str],
     *,
     spec_base_url: str | None = None,
+    source_tag: str | None = None,
 ) -> ApiTree:
     if not spec_path.is_file():
         return ApiTree(
@@ -212,14 +247,19 @@ def load_openapi_inventory(
     spec = _load_spec(spec_path)
     paths = spec.get("paths") or {}
     servers = spec.get("servers") or []
-    default_base = spec_base_url
-    if not default_base and servers:
-        default_base = servers[0].get("url")
+    default_base = servers[0].get("url") if servers else None
+    if not default_base:
+        default_base = spec_base_url
     if not default_base:
         default_base = base_urls[0] if base_urls else "http://localhost"
 
-    bases = base_urls or [default_base.rstrip("/")]
+    # A spec's own server is authoritative. Dashboard/config bases are only a
+    # fallback for specs that do not declare servers.
+    bases = [str(default_base).rstrip("/")] if servers and default_base else (
+        base_urls or [str(default_base).rstrip("/")]
+    )
     endpoints: list[Endpoint] = []
+    source = f"openapi:{source_tag}" if source_tag else "openapi"
 
     for raw_path, path_item in paths.items():
         if not isinstance(path_item, dict):
@@ -248,12 +288,19 @@ def load_openapi_inventory(
                         request_params=request_params,
                         response_params=response_params,
                         request_headers=request_headers,
-                        sources=["openapi"],
+                        sources=[source],
                         kind="api",
                     )
                 )
 
+    # Preserve file provenance on parameter/header fields too.
+    for endpoint in endpoints:
+        for item in endpoint.request_params + endpoint.response_params:
+            item.sources = [source if value == "openapi" else value for value in item.sources]
+        for header in endpoint.request_headers + endpoint.response_headers:
+            header.sources = [source if value == "openapi" else value for value in header.sources]
+
     return ApiTree(
-        meta=InventoryMeta(sources_used=["openapi"] if endpoints else []),
+        meta=InventoryMeta(sources_used=[source] if endpoints else []),
         endpoints=endpoints,
     )

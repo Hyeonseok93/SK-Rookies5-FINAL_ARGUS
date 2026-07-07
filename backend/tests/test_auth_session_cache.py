@@ -31,7 +31,8 @@ def test_login_urls_for_account_uses_successful_only():
     assert urls == ["http://x/api/v1/auth/login"]
 
 
-def test_login_urls_skips_all_failed():
+def test_login_urls_retries_all_when_report_contains_only_failures():
+def test_login_urls_retries_all_when_report_contains_only_failures():
     entries = [
         {"url": "http://x/api/v1/auth/login"},
         {"url": "http://x/api/v1/auth/admin/login"},
@@ -49,7 +50,28 @@ def test_login_urls_skips_all_failed():
         ]
     }
     urls = login_urls_for_account({"email": "bad@ex.com", "password": "p"}, entries, report)
-    assert urls == []
+    assert urls == [entry["url"] for entry in entries]
+
+
+def test_login_urls_does_not_apply_stale_failures_to_new_origins():
+    entries = [
+        {"url": "http://api:8080/api/v1/auth/login"},
+        {"url": "http://api:8080/api/v1/auth/admin/login"},
+    ]
+    report = {
+        "accounts": [
+            {
+                "email": "a@ex.com",
+                "successful_login_urls": [],
+                "failed_login_urls": [
+                    "http://frontend:5173/api/v1/auth/login",
+                    "http://frontend:5173/api/v1/auth/admin/login",
+                ],
+            }
+        ]
+    }
+    urls = login_urls_for_account({"email": "a@ex.com", "password": "p"}, entries, report)
+    assert urls == [entry["url"] for entry in entries]
 
 
 def test_load_cached_account_auths_from_verify_report(tmp_path: Path):

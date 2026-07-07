@@ -40,8 +40,11 @@ def run_2_2_probes(
     account_auths: list[dict[str, Any]] | None = None,
     unauth_probe_enabled: bool = True,
     idor_probe_enabled: bool = True,
+    forced_browse_enabled: bool = True,
     idor_seeds: dict[str, Any] | None = None,
     replay_session: ReplaySession | None = None,
+    auth_pool: Any | None = None,
+    login_report: dict[str, Any] | None = None,
     timeout: float = 12.0,
     on_progress: Callable[..., None] | None = None,
 ) -> tuple[list[DiagnosisFinding], dict[str, Any]]:
@@ -61,19 +64,28 @@ def run_2_2_probes(
     }
     record_replay = replay_session if engine == "httpx" else None
 
+    if auth_pool:
+        auth_pool.ensure_valid()
+        auth = auth_pool.primary()
+        account_auths = auth_pool.sessions()
+
     if unauth_probe_enabled and candidates:
         unauth_findings, unauth_stats = auth_access.run_unauth_download_probes(
             candidates,
-            auth=auth,
+            sessions=account_auths,
             transport=transport,
             engine=engine,
             timeout=timeout,
             replay_session=record_replay,
+            login_report=login_report,
         )
         findings.extend(unauth_findings)
         stats["unauth_probe"] = unauth_stats
 
     if idor_probe_enabled and account_auths and len(account_auths) >= 2 and candidates:
+        if auth_pool:
+            auth_pool.ensure_valid()
+            account_auths = auth_pool.sessions()
         idor = _load_local("idor_probe")
         idor_findings, idor_stats = idor.run_idor_probes(
             candidates,
@@ -83,6 +95,7 @@ def run_2_2_probes(
             idor_seeds=idor_seeds,
             timeout=timeout,
             replay_session=record_replay,
+            login_report=login_report,
         )
         findings.extend(idor_findings)
         stats["idor_probe"] = idor_stats
@@ -96,19 +109,24 @@ def run_2_2_probes(
             auth=auth,
             timeout=timeout,
             replay_session=record_replay,
+            auth_pool=auth_pool,
+            login_report=login_report,
             on_progress=on_progress,
         )
     )
-    findings.extend(
-        probes.run_forced_browse(
-            base_urls,
-            browse_paths,
-            transport=transport,
-            engine=engine,
-            auth=auth,
-            timeout=timeout,
-            replay_session=record_replay,
+    if forced_browse_enabled and browse_paths:
+        findings.extend(
+            probes.run_forced_browse(
+                base_urls,
+                browse_paths,
+                transport=transport,
+                engine=engine,
+                auth=auth,
+                timeout=timeout,
+                replay_session=record_replay,
+                auth_pool=auth_pool,
+            )
         )
-    )
+    stats["forced_browse_enabled"] = forced_browse_enabled
     stats["findings"] = len(findings)
     return findings, stats

@@ -234,6 +234,9 @@ def run_endpoints(
     check_response_body: bool,
     check_http_plain: bool,
     on_progress: Callable[..., None] | None = None,
+    auth_pool: Any | None = None,
+    build_passes: Callable[[Endpoint, list[dict[str, Any]]], list[tuple[str, dict[str, str], dict[str, Any] | None]]]
+    | None = None,
 ) -> tuple[list[DiagnosisFinding], int, int, dict[str, int]]:
     findings: list[DiagnosisFinding] = []
     errors = 0
@@ -242,7 +245,11 @@ def run_endpoints(
     coverage = _empty_coverage()
 
     for ep in endpoints:
-        for auth_mode, auth_headers, account_auth in passes:
+        current_passes = passes
+        if auth_pool is not None and build_passes is not None:
+            auth_pool.ensure_valid()
+            current_passes = build_passes(ep, auth_pool.sessions())
+        for auth_mode, auth_headers, account_auth in current_passes:
             batch, failed, cov = probe_endpoint(
                 ep,
                 transport=transport,
@@ -270,6 +277,47 @@ def run_endpoints(
     return findings, errors, done, coverage
 
 
+_RAW_FINDING_KEYS = (
+    "rule_id",
+    "category",
+    "method",
+    "url",
+    "direction",
+    "field_path",
+    "sample",
+    "marker",
+    "auth_mode",
+    "status_code",
+    "hint",
+    "endpoint_id",
+)
+
+
+import re
+
+
+def normalize_field_path_for_merge(field_path: str | None) -> str:
+    if not field_path:
+        return ""
+    return re.sub(r"\[\d+\]", "[*]", field_path)
+
+
+def serialize_raw_findings(items: list[DiagnosisFinding]) -> list[dict[str, Any]]:
+    """Compact pre-collapse hits for audit UI (account × sample breakdown)."""
+    rows: list[dict[str, Any]] = []
+    for f in items:
+        ev = f.evidence or {}
+        if not ev.get("rule_id"):
+            continue
+        rows.append(
+            {
+                "severity": f.severity,
+                "evidence": {key: ev[key] for key in _RAW_FINDING_KEYS if key in ev},
+            }
+        )
+    return rows
+
+
 def collapse_findings(
     items: list[DiagnosisFinding],
 ) -> tuple[list[DiagnosisFinding], dict[str, int]]:
@@ -288,7 +336,7 @@ def collapse_findings(
                 str(ev.get("rule_id")),
                 str(ev.get("endpoint_id")),
                 str(ev.get("direction")),
-                str(ev.get("field_path") or ""),
+                normalize_field_path_for_merge(str(ev.get("field_path") or "")),
                 str(ev.get("marker") or ""),
             ]
         )

@@ -318,19 +318,26 @@ def run_unauth_download_probes(
     transport: Any,
     engine: str,
     auth: dict[str, Any] | None = None,
+    sessions: list[dict[str, Any]] | None = None,
+    login_report: dict[str, Any] | None = None,
     timeout: float = 12.0,
     replay_session: ReplaySession | None = None,
 ) -> tuple[list[DiagnosisFinding], dict[str, Any]]:
-    """Probe each 2-2 candidate anonymously and with the primary logged-in account."""
+    """Probe each 2-2 candidate anonymously and with an origin-matched account."""
+    from diagnosis.endpoint_auth_passes import primary_session_for_endpoint
+
     _ = timeout
     findings: list[DiagnosisFinding] = []
+    session_list = list(sessions or [])
+    if auth and not session_list:
+        session_list = [auth]
     stats: dict[str, Any] = {
         "engine": engine,
         "candidates": len(candidates),
         "probed": 0,
         "findings": 0,
         "skipped_no_anon": 0,
-        "auth_configured": auth is not None,
+        "auth_configured": bool(session_list),
     }
 
     if not candidates:
@@ -339,13 +346,14 @@ def run_unauth_download_probes(
     for ep in candidates:
         anonymous = _probe_endpoint(transport, ep, auth=None, auth_mode="anonymous")
         authenticated: AuthProbeSnapshot | None = None
-        if auth:
+        ep_auth = primary_session_for_endpoint(ep, session_list, login_report)
+        if ep_auth:
             authenticated = _probe_endpoint(
                 transport,
                 ep,
-                auth=auth,
+                auth=ep_auth,
                 auth_mode="authenticated",
-                account_email=str(auth.get("email") or ""),
+                account_email=str(ep_auth.get("email") or ""),
             )
 
         stats["probed"] += 1
@@ -374,7 +382,7 @@ def run_unauth_download_probes(
                 anonymous=anonymous,
                 authenticated=authenticated,
                 engine=engine,
-                auth=auth,
+                auth=ep_auth,
                 replay_session=replay_session,
             )
         )

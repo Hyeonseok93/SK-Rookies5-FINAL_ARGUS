@@ -3,5 +3,5 @@ title: "소스코드 내 주요정보 노출 여부"
 chapter: 5
 implemented: false
 diagnosable: false
-review_later: true
-engine: n/a
+status_label: "수동 진단"
+engine: pending

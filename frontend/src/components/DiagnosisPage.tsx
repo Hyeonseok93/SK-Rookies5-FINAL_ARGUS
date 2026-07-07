@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ChevronDown, Loader2, Stethoscope } from "lucide-react";
+import { G12DiagnosisStartDialog } from "./G12DiagnosisStartDialog";
 import { G32DiagnosisStartDialog } from "./G32DiagnosisStartDialog";
 import { G34DiagnosisStartDialog } from "./G34DiagnosisStartDialog";
 import { G35DiagnosisStartDialog } from "./G35DiagnosisStartDialog";
@@ -12,10 +13,18 @@ import { G61DiagnosisStartDialog } from "./G61DiagnosisStartDialog";
 import { G62DiagnosisStartDialog } from "./G62DiagnosisStartDialog";
 import { G71DiagnosisStartDialog } from "./G71DiagnosisStartDialog";
 import { G22DiagnosisStartDialog } from "./G22DiagnosisStartDialog";
+import { G22SectionInfoPopover } from "./diagnosis/G22SectionInfoPopover";
+import { G21DiagnosisStartDialog } from "./G21DiagnosisStartDialog";
 import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
 import { G74DiagnosisStartDialog } from "./G74DiagnosisStartDialog";
-import { fetchDiagnosisCatalog, fetchDiagnosisProgress, fetchDiagnosisReport, runDiagnosisSection } from "../lib/api";
+import { fetchDiagnosisCatalog, cancelDiagnosisRun, fetchDiagnosisProgress, fetchDiagnosisReport, runDiagnosisSection, waitForDiagnosisComplete } from "../lib/api";
+import {
+  DEFAULT_G12_OPTIONS,
+  g12OptionsSummary,
+  g12OptionsToPayload,
+  type G12DiagnosisOptions,
+} from "../lib/g12DiagnosisOptions";
 import {
   DEFAULT_G15_OPTIONS,
   g15OptionsSummary,
@@ -30,10 +39,15 @@ import {
 } from "../lib/g41DiagnosisOptions";
 import {
   DEFAULT_G22_OPTIONS,
-  g22OptionsSummary,
   g22OptionsToPayload,
   type G22DiagnosisOptions,
 } from "../lib/g22DiagnosisOptions";
+import {
+  DEFAULT_G21_OPTIONS,
+  g21OptionsSummary,
+  g21OptionsToPayload,
+  type G21DiagnosisOptions,
+} from "../lib/g21DiagnosisOptions";
 import {
   DEFAULT_G52_OPTIONS,
   g52OptionsToPayload,
@@ -107,6 +121,7 @@ import {
   type G74DiagnosisOptions,
 } from "../lib/g74DiagnosisOptions";
 import { GUIDELINE_SECTIONS } from "../lib/guidelineSections";
+import { isManualDiagnosisSection } from "../lib/diagnosisRegistry";
 import type { DiagnosisCatalogModule, DiagnosisProgressResponse, DiagnosisSectionReport } from "../types";
 import { useProgressPoll } from "../hooks/useProgressPoll";
 import { DiagnosisReportPanel, StatusBadge } from "./diagnosis/DiagnosisReportPanel";
@@ -128,49 +143,41 @@ function DiagnosisStartButton({
   disabled,
   loading,
   implemented,
+  catalogLoaded = true,
   onClick,
 }: {
   compact?: boolean;
   disabled?: boolean;
   loading?: boolean;
   implemented?: boolean;
+  catalogLoaded?: boolean;
   onClick?: () => void;
 }) {
   const style = implemented ? START_BTN_ACTIVE : START_BTN_IDLE;
   return (
     <button
       type="button"
-      disabled={disabled || loading}
+      disabled={disabled || !catalogLoaded}
       onClick={onClick}
       title={
-        !implemented
-          ? "아직 구현되지 않은 항목입니다"
-          : loading
-            ? "진단 실행 중…"
-            : "이 항목 진단 시작"
+        !catalogLoaded
+          ? "진단 항목 목록을 불러오는 중…"
+          : !implemented
+            ? "아직 구현되지 않은 항목입니다 (백엔드 재시작 후 다시 시도)"
+            : loading
+              ? "다시 눌러 실행 중지"
+              : "이 항목 진단 시작"
       }
-      className={`${START_BTN} ${style} ${compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"}`}
+      className={`${START_BTN} ${style} ${compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"} ${
+        loading ? "ring-1 ring-amber-400/40" : ""
+      }`}
     >
-      {loading ? (
+      {loading || !catalogLoaded ? (
         <Loader2 className={`animate-spin ${compact ? "h-3 w-3" : "h-3.5 w-3.5"}`} />
       ) : (
         <Stethoscope className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
       )}
-      {loading ? "실행 중…" : "진단 시작"}
-    </button>
-  );
-}
-
-function DiagnosisReviewLaterButton({ compact = false }: { compact?: boolean }) {
-  return (
-    <button
-      type="button"
-      disabled
-      title="추후 검토 항목"
-      className={`${START_BTN} ${UNAVAILABLE_BTN} ${compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"}`}
-    >
-      <AlertCircle className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
-      추후 검토
+      {loading ? "실행 중…" : !catalogLoaded ? "불러오는 중…" : "진단 시작"}
     </button>
   );
 }
@@ -196,14 +203,13 @@ function DiagnosisManualCheckButton({
 }
 
 function moduleBadgeLabel(mod: {
+  sectionId: string;
   implemented: boolean;
   diagnosable: boolean;
-  review_later: boolean;
-  status_label: string | null;
   engine: string;
 }): string | null {
+  if (isManualDiagnosisSection(mod.sectionId)) return null;
   if (mod.implemented) return mod.engine;
-  if (mod.status_label || mod.review_later) return null;
   if (!mod.diagnosable) return "미구현";
   return mod.engine !== "pending" ? mod.engine : "미구현";
 }
@@ -212,15 +218,20 @@ function moduleBadgeLabel(mod: {
 export function DiagnosisPage() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<Record<string, DiagnosisCatalogModule>>({});
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [reports, setReports] = useState<Record<string, DiagnosisSectionReport>>({});
   const [runningId, setRunningId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [g12DialogOpen, setG12DialogOpen] = useState(false);
+  const [g12Options, setG12Options] = useState<G12DiagnosisOptions>(DEFAULT_G12_OPTIONS);
   const [g15DialogOpen, setG15DialogOpen] = useState(false);
   const [g15Options, setG15Options] = useState<G15DiagnosisOptions>(DEFAULT_G15_OPTIONS);
   const [g41DialogOpen, setG41DialogOpen] = useState(false);
   const [g41Options, setG41Options] = useState<G41DiagnosisOptions>(DEFAULT_G41_OPTIONS);
   const [g22DialogOpen, setG22DialogOpen] = useState(false);
   const [g22Options, setG22Options] = useState<G22DiagnosisOptions>(DEFAULT_G22_OPTIONS);
+  const [g21DialogOpen, setG21DialogOpen] = useState(false);
+  const [g21Options, setG21Options] = useState<G21DiagnosisOptions>(DEFAULT_G21_OPTIONS);
   const [g72DialogOpen, setG72DialogOpen] = useState(false);
   const [g72Options, setG72Options] = useState<G72DiagnosisOptions>(DEFAULT_G72_OPTIONS);
   const [g71DialogOpen, setG71DialogOpen] = useState(false);
@@ -247,26 +258,68 @@ export function DiagnosisPage() {
   const [g62Options, setG62Options] = useState<G62DiagnosisOptions>(DEFAULT_G62_OPTIONS);
   const [runningSummary, setRunningSummary] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState<DiagnosisProgressResponse | null>(null);
+  const resumeRunRef = useRef(false);
+
+  const diagnosisBusy = runningId !== null || Boolean(runProgress?.running);
+  const busySectionId =
+    runningId ?? (runProgress?.running ? runProgress.section_id : null);
 
   useProgressPoll(
-    runningId !== null,
+    catalogLoaded,
     fetchDiagnosisProgress,
     (p) => {
-      if (p.section_id === runningId || p.running) {
-        setRunProgress(p);
-      }
+      setRunProgress(p);
     },
     1200,
   );
 
+  const completeAsyncRun = useCallback(async (sectionId: string) => {
+    await waitForDiagnosisComplete(sectionId, {
+      onProgress: (p) => {
+        if (p.section_id === sectionId || p.running) {
+          setRunProgress(p);
+        }
+      },
+    });
+    const report = await fetchDiagnosisReport(sectionId);
+    setReports((prev) => ({ ...prev, [sectionId]: report }));
+  }, []);
+
   useEffect(() => {
+    if (!catalogLoaded || runningId || resumeRunRef.current) return;
+    void fetchDiagnosisProgress().then((p) => {
+      if (!p.running || !p.section_id) return;
+      resumeRunRef.current = true;
+      const sectionId = p.section_id;
+      setRunningId(sectionId);
+      setOpenId(sectionId);
+      setRunProgress(p);
+      void (async () => {
+        try {
+          await completeAsyncRun(sectionId);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+        } finally {
+          setRunningId(null);
+          setRunningSummary(null);
+          setRunProgress(null);
+          resumeRunRef.current = false;
+        }
+      })();
+    });
+  }, [catalogLoaded, completeAsyncRun, runningId]);
+
+  useEffect(() => {
+    setCatalogLoaded(false);
     fetchDiagnosisCatalog()
       .then((res) => {
         const map: Record<string, DiagnosisCatalogModule> = {};
         for (const m of res.modules) map[m.id] = m;
         setCatalog(map);
+        setError(null);
       })
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setCatalogLoaded(true));
   }, []);
 
   const catalogById = useMemo(() => catalog, [catalog]);
@@ -294,22 +347,27 @@ export function DiagnosisPage() {
   const handleRun = useCallback(
     async (
       sectionId: string,
-      options?: G15DiagnosisOptions | G41DiagnosisOptions | G42DiagnosisOptions | G22DiagnosisOptions | G32DiagnosisOptions | G34DiagnosisOptions | G35DiagnosisOptions | G36DiagnosisOptions | G52DiagnosisOptions | G61DiagnosisOptions | G62DiagnosisOptions | G71DiagnosisOptions | G72DiagnosisOptions | G73DiagnosisOptions | G74DiagnosisOptions,
+      options?: G12DiagnosisOptions | G15DiagnosisOptions | G21DiagnosisOptions | G41DiagnosisOptions | G42DiagnosisOptions | G22DiagnosisOptions | G32DiagnosisOptions | G34DiagnosisOptions | G35DiagnosisOptions | G36DiagnosisOptions | G52DiagnosisOptions | G61DiagnosisOptions | G62DiagnosisOptions | G71DiagnosisOptions | G72DiagnosisOptions | G73DiagnosisOptions | G74DiagnosisOptions,
     ) => {
       const mod = catalogById[sectionId];
       if (!mod?.diagnosable || !mod?.implemented) return;
+      if (runningId !== null || runProgress?.running) return;
 
       setError(null);
       setRunningId(sectionId);
       setOpenId(sectionId);
-      if (sectionId === "1-5" && options && "corsEnabled" in options) {
+      if (sectionId === "1-2" && options && "useDirect" in options) {
+        setRunningSummary(g12OptionsSummary(options as G12DiagnosisOptions));
+      } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
         setRunningSummary(g15OptionsSummary(options as G15DiagnosisOptions));
       } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
         setRunningSummary(g41OptionsSummary(options as G41DiagnosisOptions));
       } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
         setRunningSummary(g42OptionsSummary(options as G42DiagnosisOptions));
       } else if (sectionId === "2-2" && options && "useHttpx" in options) {
-        setRunningSummary(g22OptionsSummary(options as G22DiagnosisOptions));
+        setRunningSummary(null);
+      } else if (sectionId === "2-1" && options && "sellerEmail" in options) {
+        setRunningSummary(g21OptionsSummary(options as G21DiagnosisOptions));
       } else if (sectionId === "7-1" && options && "strictRisky" in options) {
         setRunningSummary(g71OptionsSummary(options as G71DiagnosisOptions));
       } else if (sectionId === "3-2" && options && "maxAttempts" in options) {
@@ -340,7 +398,9 @@ export function DiagnosisPage() {
 
       try {
         let body;
-        if (sectionId === "1-5" && options && "corsEnabled" in options) {
+        if (sectionId === "1-2" && options && "useDirect" in options) {
+          body = g12OptionsToPayload(options as G12DiagnosisOptions);
+        } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
           body = g15OptionsToPayload(options as G15DiagnosisOptions);
         } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
           body = g41OptionsToPayload(options as G41DiagnosisOptions);
@@ -348,6 +408,8 @@ export function DiagnosisPage() {
           body = g42OptionsToPayload(options as G42DiagnosisOptions);
         } else if (sectionId === "2-2" && options && "useHttpx" in options) {
           body = g22OptionsToPayload(options as G22DiagnosisOptions);
+        } else if (sectionId === "2-1" && options && "sellerEmail" in options) {
+          body = g21OptionsToPayload(options as G21DiagnosisOptions);
         } else if (sectionId === "7-1" && options && "strictRisky" in options) {
           body = g71OptionsToPayload(options as G71DiagnosisOptions);
         } else if (sectionId === "3-2" && options && "maxAttempts" in options) {
@@ -372,7 +434,13 @@ export function DiagnosisPage() {
           body = g74OptionsToPayload(options as G74DiagnosisOptions);
         }
         const res = await runDiagnosisSection(sectionId, body);
-        setReports((prev) => ({ ...prev, [sectionId]: res.report }));
+        if (res.async_run) {
+          await completeAsyncRun(sectionId);
+        } else if (res.report) {
+          setReports((prev) => ({ ...prev, [sectionId]: res.report! }));
+        } else {
+          throw new Error(`${sectionId}: diagnosis finished without a report`);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -381,13 +449,29 @@ export function DiagnosisPage() {
         setRunProgress(null);
       }
     },
-    [catalogById],
+    [catalogById, completeAsyncRun, runProgress?.running],
   );
+
+  const handleCancelRun = useCallback(async () => {
+    try {
+      await cancelDiagnosisRun();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
 
   const handleStartClick = useCallback(
     (sectionId: string) => {
+      if (busySectionId === sectionId) {
+        void handleCancelRun();
+        return;
+      }
       const mod = catalogById[sectionId];
-      if (!mod?.diagnosable || !mod?.implemented || runningId) return;
+      if (!mod?.diagnosable || !mod?.implemented || diagnosisBusy) return;
+      if (sectionId === "1-2") {
+        setG12DialogOpen(true);
+        return;
+      }
       if (sectionId === "1-5") {
         setG15DialogOpen(true);
         return;
@@ -398,6 +482,10 @@ export function DiagnosisPage() {
       }
       if (sectionId === "4-2") {
         setG42DialogOpen(true);
+        return;
+      }
+      if (sectionId === "2-1") {
+        setG21DialogOpen(true);
         return;
       }
       if (sectionId === "2-2") {
@@ -450,7 +538,16 @@ export function DiagnosisPage() {
       }
       void handleRun(sectionId);
     },
-    [catalogById, handleRun, runningId],
+    [busySectionId, catalogById, diagnosisBusy, handleCancelRun, handleRun],
+  );
+
+  const handleG12Start = useCallback(
+    (options: G12DiagnosisOptions) => {
+      setG12Options(options);
+      setG12DialogOpen(false);
+      void handleRun("1-2", options);
+    },
+    [handleRun],
   );
 
   const handleG15Start = useCallback(
@@ -543,6 +640,15 @@ export function DiagnosisPage() {
     [handleRun],
   );
 
+  const handleG21Start = useCallback(
+    (options: G21DiagnosisOptions) => {
+      setG21Options(options);
+      setG21DialogOpen(false);
+      void handleRun("2-1", options);
+    },
+    [handleRun],
+  );
+
   const handleG22Start = useCallback(
     (options: G22DiagnosisOptions) => {
       setG22Options(options);
@@ -619,20 +725,17 @@ export function DiagnosisPage() {
                 const mod = catalogById[section.id];
                 const implemented = mod?.implemented ?? false;
                 const diagnosable = mod?.diagnosable ?? true;
-                const reviewLater = mod?.review_later ?? false;
-                const statusLabel = mod?.status_label ?? null;
-                const running = runningId === section.id;
+                const manualSection = isManualDiagnosisSection(section.id);
+                const running = busySectionId === section.id;
                 const report = reports[section.id];
                 const badgeLabel = mod
                   ? moduleBadgeLabel({
+                      sectionId: section.id,
                       implemented,
                       diagnosable,
-                      review_later: reviewLater,
-                      status_label: statusLabel,
                       engine: mod.engine,
                     })
                   : null;
-
                 return (
                   <div key={section.id} className="border-b border-cyber-border/40 last:border-b-0">
                     <div className="flex items-center gap-2 px-4 py-3 transition hover:bg-cyber-accent/5">
@@ -644,7 +747,18 @@ export function DiagnosisPage() {
                         <span className="shrink-0 rounded border border-cyber-border/60 bg-cyber-bg px-2 py-0.5 font-mono text-[11px] text-cyber-accent">
                           {section.id}
                         </span>
-                        <span className="flex-1 text-sm text-white">{section.title}</span>
+                        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                          <span className="text-sm text-white">{section.title}</span>
+                          {section.id === "2-2" ? (
+                            <span
+                              className="shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              <G22SectionInfoPopover />
+                            </span>
+                          ) : null}
+                        </span>
                         {badgeLabel ? (
                           <span
                             className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] ${
@@ -658,18 +772,15 @@ export function DiagnosisPage() {
                         ) : null}
                         {report ? <StatusBadge status={report.status} /> : null}
                       </button>
-                      {reviewLater || (!diagnosable && !statusLabel) ? (
-                        <DiagnosisReviewLaterButton compact />
-                      ) : statusLabel ? (
-                        <DiagnosisManualCheckButton label={statusLabel} compact />
-                      ) : !diagnosable ? (
-                        <DiagnosisReviewLaterButton compact />
+                      {manualSection ? (
+                        <DiagnosisManualCheckButton label="수동 진단" compact />
                       ) : (
                         <DiagnosisStartButton
                           compact
                           implemented={implemented}
+                          catalogLoaded={catalogLoaded}
                           loading={running}
-                          disabled={!implemented || runningId !== null}
+                          disabled={!implemented || (diagnosisBusy && !running)}
                           onClick={() => handleStartClick(section.id)}
                         />
                       )}
@@ -685,18 +796,13 @@ export function DiagnosisPage() {
                       </button>
                     </div>
                     {open && report ? <DiagnosisReportPanel report={report} /> : null}
-                    {open && !report && !running && reviewLater ? (
+                    {open && !report && !running && manualSection ? (
                       <div className="border-t border-amber-400/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200/90">
-                        추후 검토 — 자동 진단 범위에 포함되지 않습니다.
-                      </div>
-                    ) : null}
-                    {open && !report && !running && statusLabel ? (
-                      <div className="border-t border-amber-400/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200/90">
-                        {statusLabel} — 회원가입 화면에서 패스워드 정책(길이·복잡도 등)을 직접
+                        수동 진단 — 자동 진단 범위에 포함되지 않습니다. 점검 가이드에 따라 수동으로
                         확인하세요.
                       </div>
                     ) : null}
-                    {open && !report && !running && diagnosable ? (
+                    {open && !report && !running && !manualSection && diagnosable ? (
                       <div className="border-t border-cyber-border/40 px-4 py-3 text-xs text-cyber-muted">
                         저장된 리포트 없음 — 「진단 시작」을 눌러 실행하세요.
                       </div>
@@ -710,12 +816,12 @@ export function DiagnosisPage() {
                             {runningSummary ? ` (${runningSummary})` : null}
                           </span>
                         </div>
-                        {runProgress && runProgress.section_id === section.id ? (
+                        {runProgress && busySectionId === section.id ? (
                           <>
                             <div className="h-1.5 overflow-hidden rounded-full bg-cyber-border/40">
                               <div
                                 className="h-full rounded-full bg-cyan-400/80 transition-all duration-500"
-                                style={{ width: `${Math.max(2, runProgress.percent)}%` }}
+                                style={{ width: `${runProgress.percent}%` }}
                               />
                             </div>
                             <p className="font-mono text-[10px] text-cyber-muted">
@@ -753,92 +859,104 @@ export function DiagnosisPage() {
         ))}
       </div>
 
+      <G12DiagnosisStartDialog
+        open={g12DialogOpen && !diagnosisBusy}
+        initialOptions={g12Options}
+        onClose={() => setG12DialogOpen(false)}
+        onStart={handleG12Start}
+      />
       <G15DiagnosisStartDialog
-        open={g15DialogOpen && !runningId}
+        open={g15DialogOpen && !diagnosisBusy}
         initialOptions={g15Options}
         onClose={() => setG15DialogOpen(false)}
         onStart={handleG15Start}
       />
       <G41DiagnosisStartDialog
-        open={g41DialogOpen && !runningId}
+        open={g41DialogOpen && !diagnosisBusy}
         initialOptions={g41Options}
         onClose={() => setG41DialogOpen(false)}
         onStart={handleG41Start}
       />
       <G42DiagnosisStartDialog
-        open={g42DialogOpen && !runningId}
+        open={g42DialogOpen && !diagnosisBusy}
         initialOptions={g42Options}
         onClose={() => setG42DialogOpen(false)}
         onStart={handleG42Start}
       />
+      <G21DiagnosisStartDialog
+        open={g21DialogOpen && !diagnosisBusy}
+        initialOptions={g21Options}
+        onClose={() => setG21DialogOpen(false)}
+        onStart={handleG21Start}
+      />
       <G22DiagnosisStartDialog
-        open={g22DialogOpen && !runningId}
+        open={g22DialogOpen && !diagnosisBusy}
         initialOptions={g22Options}
         onClose={() => setG22DialogOpen(false)}
         onStart={handleG22Start}
       />
       <G71DiagnosisStartDialog
-        open={g71DialogOpen && !runningId}
+        open={g71DialogOpen && !diagnosisBusy}
         initialOptions={g71Options}
         onClose={() => setG71DialogOpen(false)}
         onStart={handleG71Start}
       />
       <G72DiagnosisStartDialog
-        open={g72DialogOpen && !runningId}
+        open={g72DialogOpen && !diagnosisBusy}
         initialOptions={g72Options}
         onClose={() => setG72DialogOpen(false)}
         onStart={handleG72Start}
       />
       <G73DiagnosisStartDialog
-        open={g73DialogOpen && !runningId}
+        open={g73DialogOpen && !diagnosisBusy}
         initialOptions={g73Options}
         onClose={() => setG73DialogOpen(false)}
         onStart={handleG73Start}
       />
       <G74DiagnosisStartDialog
-        open={g74DialogOpen && !runningId}
+        open={g74DialogOpen && !diagnosisBusy}
         initialOptions={g74Options}
         onClose={() => setG74DialogOpen(false)}
         onStart={handleG74Start}
       />
       <G32DiagnosisStartDialog
-        open={g32DialogOpen && !runningId}
+        open={g32DialogOpen && !diagnosisBusy}
         initialOptions={g32Options}
         onClose={() => setG32DialogOpen(false)}
         onStart={handleG32Start}
       />
       <G34DiagnosisStartDialog
-        open={g34DialogOpen && !runningId}
+        open={g34DialogOpen && !diagnosisBusy}
         initialOptions={g34Options}
         onClose={() => setG34DialogOpen(false)}
         onStart={handleG34Start}
       />
       <G35DiagnosisStartDialog
-        open={g35DialogOpen && !runningId}
+        open={g35DialogOpen && !diagnosisBusy}
         initialOptions={g35Options}
         onClose={() => setG35DialogOpen(false)}
         onStart={handleG35Start}
       />
       <G36DiagnosisStartDialog
-        open={g36DialogOpen && !runningId}
+        open={g36DialogOpen && !diagnosisBusy}
         initialOptions={g36Options}
         onClose={() => setG36DialogOpen(false)}
         onStart={handleG36Start}
       />
       <G52DiagnosisStartDialog
-        open={g52DialogOpen && !runningId}
+        open={g52DialogOpen && !diagnosisBusy}
         initialOptions={g52Options}
         onClose={() => setG52DialogOpen(false)}
         onStart={handleG52Start}
       />
       <G61DiagnosisStartDialog
-        open={g61DialogOpen && !runningId}
+        open={g61DialogOpen && !diagnosisBusy}
         initialOptions={g61Options}
         onClose={() => setG61DialogOpen(false)}
         onStart={handleG61Start}
       />
       <G62DiagnosisStartDialog
-        open={g62DialogOpen && !runningId}
+        open={g62DialogOpen && !diagnosisBusy}
         initialOptions={g62Options}
         onClose={() => setG62DialogOpen(false)}
         onStart={handleG62Start}

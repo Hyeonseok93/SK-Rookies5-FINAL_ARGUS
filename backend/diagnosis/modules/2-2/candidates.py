@@ -119,3 +119,33 @@ def _count_by(items: list[Endpoint], key_fn: Any) -> dict[str, int]:
         k = str(key_fn(item))
         out[k] = out.get(k, 0) + 1
     return out
+
+
+def merge_dashboard_download_candidates(
+    candidates: list[Endpoint],
+    raw_config: dict[str, Any] | None,
+) -> list[Endpoint]:
+    """Prepend dashboard download endpoints (2-2 manual targets)."""
+    try:
+        from app.services.transfer_endpoints_service import dashboard_endpoints_as_inventory
+
+        extra = dashboard_endpoints_as_inventory("download", raw_config)
+    except Exception:
+        return candidates
+    seen = {ep.endpoint_id for ep in candidates}
+    merged = list(candidates)
+    for ep in extra:
+        if ep.endpoint_id not in seen:
+            merged.insert(0, ep)
+            seen.add(ep.endpoint_id)
+    return merged
+
+
+def select_dashboard_download_candidates_only(
+    raw_config: dict[str, Any] | None,
+) -> tuple[list[Endpoint], str]:
+    """Use only Attack Surface → Download Endpoints (no inventory scoring)."""
+    from app.services.transfer_endpoints_service import dashboard_endpoints_as_inventory
+
+    candidates = dashboard_endpoints_as_inventory("download", raw_config)
+    return candidates, "dashboard_download_only"

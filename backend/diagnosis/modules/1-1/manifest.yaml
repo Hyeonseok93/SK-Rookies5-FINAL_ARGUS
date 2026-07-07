@@ -1,0 +1,6 @@
+id: "1-1"
+title: "XSS / CSRF attack surface"
+chapter: 1
+implemented: true
+diagnosable: true
+engine: "zap+custom"

@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from app.services.auth_probe_service import (
     configured_login_entries,
@@ -15,13 +16,23 @@ from app.services.auth_probe_service import (
 from app.services.test_accounts_service import load_test_accounts
 from app.services.zap_util import probe_url
 from diagnosis.probe_auth import all_account_auths_with_meta
-from diagnosis.replay.normalize import collect_probe_base_urls, filter_endpoints_by_probe_bases
+from diagnosis.replay.normalize import (
+    collect_probe_base_urls,
+    filter_endpoints_by_probe_bases,
+    probe_base_key,
+)
 from diagnosis.result import DiagnosisFinding
 from inventory.schema import ApiTree, build_full_url
 from inventory.load import load_api_tree
 
 LOGOUT_PATH_RE = re.compile(r"(?i)(/(auth/)?(logout|sign-?out)(/|$)|/logout$)")
 LOGIN_PATH_RE = re.compile(r"(?i)(/(auth/)?(login|sign-?in)(/|$)|/login$)")
+REFRESH_PATH_RE = re.compile(
+    r"(?i)(/(auth/)?refresh(/|$)|/token/refresh|/oauth2?/refresh)"
+)
+REFRESH_PATH_NEGATIVE = re.compile(
+    r"(?i)(login|logout|sign-?up|register|password|verify|check-email|check-nickname)"
+)
 
 
 
@@ -43,7 +54,104 @@ def load_login_report(data_dir: Path, raw_config: dict[str, Any] | None) -> dict
 def load_sessions(
     raw_config: dict[str, Any] | None, data_dir: Path | None = None
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    return all_account_auths_with_meta(raw_config, data_dir=data_dir)
+    return all_account_auths_with_meta(raw_config, data_dir=data_dir, refresh=True)
+
+
+def _refresh_base_score(ep: Endpoint, preferred_bases: set[str]) -> int:
+    score = 0
+    base = ep.base_url.rstrip("/")
+    if probe_base_key(base) in preferred_bases:
+        score += 10
+    if ep.kind == "api":
+        score += 5
+    port = urlparse(base).port
+    if port in (8080, 8081, 8000, 3000):
+        score += 3
+    if port == 5173:
+        score -= 4
+    return score
+
+
+def discover_refresh_paths(
+    raw_config: dict[str, Any] | None,
+    *,
+    data_dir: Path | None = None,
+) -> list[dict[str, str]]:
+    """Refresh-token POST endpoints from api-tree (optional diagnosis_4_2.refresh_paths override)."""
+    cfg = (raw_config or {}).get("diagnosis_4_2") or {}
+    configured = [str(p).strip() for p in cfg.get("refresh_paths") or [] if str(p).strip()]
+    if cfg.get("refresh_path"):
+        configured.append(str(cfg["refresh_path"]).strip())
+
+    seen_paths: set[str] = set()
+    out: list[dict[str, str]] = []
+    for raw_path in configured:
+        path = raw_path if raw_path.startswith("/") else f"/{raw_path.lstrip('/')}"
+        key = path.lower()
+        if key in seen_paths:
+            continue
+        seen_paths.add(key)
+        out.append({"path": path, "base_url": "", "url": path, "source": "config"})
+
+    tree = load_api_tree(data_dir)
+    if tree is None:
+        return out
+
+    preferred = {probe_base_key(b) for b in collect_probe_base_urls(raw_config)}
+    best_by_path: dict[str, tuple[Endpoint, int]] = {}
+    for ep in filter_endpoints_by_probe_bases(tree.endpoints, raw_config):
+        if ep.method.upper() not in ("POST", "PUT", "PATCH"):
+            continue
+        path = ep.path.split("?")[0]
+        if REFRESH_PATH_NEGATIVE.search(path):
+            continue
+        if not REFRESH_PATH_RE.search(path):
+            continue
+        key = path.lower()
+        score = _refresh_base_score(ep, preferred)
+        prev = best_by_path.get(key)
+        if prev is None or score > prev[1]:
+            best_by_path[key] = (ep, score)
+
+    ranked = sorted(best_by_path.values(), key=lambda item: (-item[1], item[0].path))
+    for ep, _score in ranked:
+        path = ep.path.split("?")[0]
+        key = path.lower()
+        if key in seen_paths:
+            continue
+        seen_paths.add(key)
+        full = probe_url(build_full_url(ep.base_url, path))
+        out.append(
+            {
+                "path": path,
+                "base_url": ep.base_url.rstrip("/"),
+                "url": full,
+                "source": "inventory",
+            }
+        )
+    return out
+
+
+def resolve_refresh_path_for_base(
+    raw_config: dict[str, Any] | None,
+    *,
+    base_url: str,
+    data_dir: Path | None = None,
+) -> str | None:
+    """Pick refresh path for probe base — inventory match first, else first discovered path."""
+    entries = discover_refresh_paths(raw_config, data_dir=data_dir)
+    if not entries:
+        return None
+    target_key = probe_base_key(probe_url(base_url.rstrip("/")))
+    for entry in entries:
+        entry_base = str(entry.get("base_url") or "").strip()
+        if entry_base and probe_base_key(probe_url(entry_base)) == target_key:
+            return str(entry["path"])
+    for entry in entries:
+        path = str(entry.get("path") or "").strip()
+        if path:
+            return path
+    return None
 
 
 def discover_logout_urls(
@@ -139,7 +247,17 @@ def pick_probe_account(
     *,
     raw_config: dict[str, Any] | None = None,
     override_email: str | None,
+    probe_path: str = "/api/v1/members/me",
 ) -> tuple[dict[str, str] | None, dict[str, Any] | None]:
+    from diagnosis.endpoint_auth_passes import filter_sessions_for_probe, primary_session_for_probe
+
+    probe_base = resolve_probe_base(sessions[0] if sessions else None, None, raw_config)
+    matched = filter_sessions_for_probe(
+        base_url=probe_base,
+        path=probe_path,
+        sessions=sessions,
+        login_report=login_report,
+    )
     if override_email:
         for account in valid_login_accounts(accounts):
             if account.get("email") == override_email:
@@ -148,7 +266,14 @@ def pick_probe_account(
                         return account, session
         return None, None
 
-    for session in sessions:
+    session = primary_session_for_probe(probe_base, probe_path, sessions, login_report)
+    if session:
+        email = str(session.get("email") or "")
+        for account in valid_login_accounts(accounts):
+            if account.get("email") == email:
+                return account, session
+
+    for session in matched or sessions:
         email = str(session.get("email") or "")
         for account in valid_login_accounts(accounts):
             if account.get("email") != email:

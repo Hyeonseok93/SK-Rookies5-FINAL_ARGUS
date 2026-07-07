@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 import json
+import logging
 import yaml
 from pathlib import Path
 
@@ -51,6 +52,8 @@ from inventory.upload_batch import ensure_batch_dir, write_batch_manifest
 from inventory.upload_retention import prune_upload_batches
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
+logger = logging.getLogger("uvicorn.error")
+logger.setLevel(logging.INFO)
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
@@ -117,7 +120,7 @@ def get_tree(
 
 @router.get("/endpoints", response_model=EndpointListResponse)
 def list_endpoints(
-    q: str | None = Query(None, description="Filter by path/method/base_url"),
+    q: str | None = Query(None, description="Filter by path/method/base_url/request parameter"),
     source: str | None = Query(None, description="Filter by source id (url_list, api_list, openapi)"),
     inventory: str = Query("ready", description="ready (built) or verified (after verify)"),
     limit: int = Query(50, ge=1, le=500),
@@ -136,9 +139,15 @@ def list_endpoints(
             if needle in e.path.lower()
             or needle in e.method.lower()
             or needle in e.base_url.lower()
+            or any(needle in p.name.lower() for p in e.request_params)
         ]
     if source:
-        items = [e for e in items if source in e.sources]
+        items = [
+            e
+            for e in items
+            if source in e.sources
+            or (source == "openapi" and any(value.startswith("openapi:") for value in e.sources))
+        ]
 
     items = sorted(
         items,
@@ -360,7 +369,7 @@ async def build_attack_surface(
     openapi_enabled: bool = Form(False),
     url_list_file: UploadFile | None = File(None),
     api_list_file: UploadFile | None = File(None),
-    openapi_file: UploadFile | None = File(None),
+    openapi_files: list[UploadFile] | None = File(None),
 ) -> BuildInventoryResponse:
     if not any([url_list_enabled, api_list_enabled, openapi_enabled]):
         return BuildInventoryResponse(
@@ -373,10 +382,10 @@ async def build_attack_surface(
     batch_dir = ensure_batch_dir(UPLOAD_DIR, batch_id)
     url_list_path: Path | None = None
     api_list_path: Path | None = None
-    openapi_path: Path | None = None
+    openapi_paths: list[Path] = []
     url_list_name: str | None = None
     api_list_name: str | None = None
-    openapi_name: str | None = None
+    openapi_names: list[str] = []
 
     if url_list_enabled:
         if not url_list_file or not url_list_file.filename:
@@ -397,20 +406,31 @@ async def build_attack_surface(
         await _save_upload(api_list_file, api_list_path)
 
     if openapi_enabled:
-        if not openapi_file or not openapi_file.filename:
+        if not openapi_files:
             return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Swagger file required.")
-        if not _ext_ok(openapi_file.filename, {".json", ".yaml", ".yml"}):
-            return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Swagger file: use .json or .yaml")
-        openapi_name = f"openapi{Path(openapi_file.filename).suffix.lower()}"
-        openapi_path = batch_dir / openapi_name
-        await _save_upload(openapi_file, openapi_path)
+        for index, upload in enumerate(openapi_files):
+            if not upload.filename:
+                continue
+            if not _ext_ok(upload.filename, {".json", ".yaml", ".yml"}):
+                return BuildInventoryResponse(
+                    ok=False,
+                    stats=InventoryStats(),
+                    message=f"Swagger file: use .json or .yaml ({upload.filename})",
+                )
+            suffix = Path(upload.filename).suffix.lower()
+            stored_path = batch_dir / f"openapi_{index}{suffix}"
+            await _save_upload(upload, stored_path)
+            openapi_paths.append(stored_path)
+            openapi_names.append(upload.filename)
+        if not openapi_paths:
+            return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Swagger file required.")
 
     write_batch_manifest(
         batch_dir,
         batch_id=batch_id,
         url_list=url_list_name,
         api_list=api_list_name,
-        openapi=openapi_name,
+        openapi=openapi_names,
     )
 
     cfg = load_config()
@@ -436,7 +456,8 @@ async def build_attack_surface(
         openapi=openapi_enabled,
         url_list_path=url_list_path,
         api_list_path=api_list_path,
-        openapi_path=openapi_path,
+        openapi_paths=openapi_paths,
+        openapi_source_names=openapi_names,
         base_urls=build_bases or None,
     )
 
@@ -447,10 +468,12 @@ async def build_attack_surface(
             message="No endpoints collected from uploaded files.",
         )
 
-    artifacts = persist_inventory(tree, DATA_DIR, openapi_path)
+    artifacts = persist_inventory(tree, DATA_DIR, openapi_paths)
     artifacts["upload_batch"] = f"uploads/{batch_id}"
-    if openapi_path is not None:
-        artifacts["openapi_upload"] = f"uploads/{batch_id}/{openapi_name}"
+    if openapi_paths:
+        artifacts["openapi_uploads"] = [
+            f"uploads/{batch_id}/{path.name}" for path in openapi_paths
+        ]
     prune_upload_batches(UPLOAD_DIR)
     stats = InventoryStats(**compute_stats(tree))
     return BuildInventoryResponse(
@@ -508,6 +531,8 @@ def _build_verify_response(
                 f"Verified 0/{payload['total_checked']} endpoints.{hint} "
                 "Original inventory was kept (not wiped)."
             ),
+            warning=payload.get("warning"),
+            error=payload.get("error", "verify_empty_result"),
         )
 
     verified_tree: ApiTree = payload["verified_tree"]
@@ -576,7 +601,19 @@ async def verify_attack_surface(
                 spider_enabled=use_spider,
                 ajax_spider_enabled=use_ajax_spider,
             )
-            working_tree = payload["verified_tree"]
+            zap_tree = payload["verified_tree"]
+            if zap_tree.endpoints:
+                working_tree = zap_tree
+            else:
+                # A failed/empty ZAP pass must not prevent the independent
+                # httpx pass from probing the original inventory. Partial or
+                # complete httpx results can still be persisted safely.
+                logger.warning(
+                    "ZAP verify produced 0 endpoints; continuing httpx with the "
+                    "original inventory (%d endpoints)",
+                    len(tree.endpoints),
+                )
+                working_tree = tree
         except ZapNotAvailableError as exc:
             if not use_httpx:
                 return VerifyInventoryResponse(

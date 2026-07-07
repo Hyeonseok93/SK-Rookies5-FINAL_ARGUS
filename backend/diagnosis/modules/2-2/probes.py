@@ -47,20 +47,31 @@ def run_traversal_probes(
     auth: dict[str, Any] | None = None,
     timeout: float = 12.0,
     replay_session: ReplaySession | None = None,
+    auth_pool: Any | None = None,
+    login_report: dict[str, Any] | None = None,
     on_progress: Callable[..., None] | None = None,
 ) -> list[DiagnosisFinding]:
+    from diagnosis.endpoint_auth_passes import primary_session_for_endpoint
+
     _ = timeout
     findings: list[DiagnosisFinding] = []
     tf = _tf
+    session_list: list[dict[str, Any]] = []
+    if auth_pool is not None:
+        auth_pool.ensure_valid()
+        session_list = auth_pool.sessions()
+    elif auth:
+        session_list = [auth]
 
     for idx, ep in enumerate(candidates, 1):
+        current_auth = primary_session_for_endpoint(ep, session_list, login_report) if session_list else auth
         if on_progress:
             on_progress(
                 endpoints_done=idx,
                 endpoints_total=len(candidates),
                 endpoint_id=ep.path[:80] if ep.path else ep.id,
             )
-        probe = build_probe_request(ep, probe_base_fn=probe_url, account_auth=auth)
+        probe = build_probe_request(ep, probe_base_fn=probe_url, account_auth=current_auth)
         url = probe["url"]
         method = probe["method"]
         headers = dict(probe.get("headers") or {})
@@ -68,9 +79,16 @@ def run_traversal_probes(
         baseline_status: int | None = None
         baseline_body: bytes = b""
         baseline_headers: dict[str, str] = {}
-        baseline_body_obj = tf.build_body_object(ep) if tf.file_like_targets(ep) else {}
-        if tf.file_like_targets(ep):
-            baseline_probe = build_probe_request(ep, probe_base_fn=probe_url, account_auth=auth)
+        targets = tf.traversal_targets(ep)
+        baseline_body_obj = tf.build_body_object(ep) if targets else {}
+        baseline_path_defaults = tf.path_param_defaults(ep) if targets else {}
+        if targets:
+            baseline_probe = build_probe_request(
+                ep,
+                probe_base_fn=probe_url,
+                account_auth=current_auth,
+                path_param_defaults=baseline_path_defaults or None,
+            )
             if baseline_body_obj and ep.method.upper() in ("POST", "PUT", "PATCH"):
                 baseline_probe = dict(baseline_probe)
                 baseline_probe["body"] = json.dumps(baseline_body_obj, ensure_ascii=False)
@@ -87,7 +105,7 @@ def run_traversal_probes(
                 baseline_body = baseline_resp.body
                 baseline_headers = baseline_resp.headers
 
-        for param_in, pname in tf.file_like_targets(ep):
+        for param_in, pname in targets:
             payloads_tried: list[dict[str, Any]] = []
             path_traversal_hits: list[dict[str, Any]] = []
             input_validation_hits: list[dict[str, Any]] = []
@@ -98,14 +116,19 @@ def run_traversal_probes(
                     param_in=param_in,
                     param_name=pname,
                     payload=payload,
-                    auth=auth,
+                    auth=current_auth,
                     baseline_body=baseline_body_obj,
+                    baseline_path_defaults=baseline_path_defaults,
                 )
                 req_url = injected["url"]
+                req_method = str(injected.get("method") or method)
+                req_headers = dict(injected.get("headers") or headers)
                 req_body = injected.get("body") or ""
                 req_body_bytes = req_body.encode("utf-8") if req_body else None
 
-                resp = transport.request(method, req_url, headers, req_body_bytes, follow_redirects=True)
+                resp = transport.request(
+                    req_method, req_url, req_headers, req_body_bytes, follow_redirects=True
+                )
                 if resp.error or resp.status is None:
                     continue
                 resp_body = resp.body
@@ -201,7 +224,10 @@ def run_traversal_probes(
                     rec.set_auth(auth_mode, account_email=email)
                     rec.append_ui_flow(method=ep.method, path=ep.path)
                     baseline_probe = build_probe_request(
-                        ep, probe_base_fn=probe_url, account_auth=auth
+                        ep,
+                        probe_base_fn=probe_url,
+                        account_auth=current_auth,
+                        path_param_defaults=baseline_path_defaults or None,
                     )
                     if baseline_body_obj:
                         baseline_probe = dict(baseline_probe)
@@ -221,8 +247,9 @@ def run_traversal_probes(
                         param_in=param_in,
                         param_name=pname,
                         payload=str(primary.get("payload") or ""),
-                        auth=auth,
+                        auth=current_auth,
                         baseline_body=baseline_body_obj,
+                        baseline_path_defaults=baseline_path_defaults,
                     )
                     leak_markers: list[str] = []
                     meta = primary.get("meta") or {}
@@ -283,7 +310,10 @@ def run_traversal_probes(
                     rec.set_auth(auth_mode, account_email=email)
                     rec.append_ui_flow(method=ep.method, path=ep.path)
                     baseline_probe = build_probe_request(
-                        ep, probe_base_fn=probe_url, account_auth=auth
+                        ep,
+                        probe_base_fn=probe_url,
+                        account_auth=current_auth,
+                        path_param_defaults=baseline_path_defaults or None,
                     )
                     s_base = rec.record_http_from_probe(
                         "baseline",
@@ -300,8 +330,9 @@ def run_traversal_probes(
                         param_in=param_in,
                         param_name=pname,
                         payload=str(primary.get("payload") or ""),
-                        auth=auth,
+                        auth=current_auth,
                         baseline_body=baseline_body_obj,
+                        baseline_path_defaults=baseline_path_defaults,
                     )
                     s_payload = rec.record_http_from_probe(
                         "payload",
@@ -329,10 +360,14 @@ def run_forced_browse(
     auth: dict[str, Any] | None = None,
     timeout: float = 10.0,
     replay_session: ReplaySession | None = None,
+    auth_pool: Any | None = None,
 ) -> list[DiagnosisFinding]:
     _ = timeout
     findings: list[DiagnosisFinding] = []
     tf = _tf
+    if auth_pool is not None:
+        auth_pool.ensure_valid()
+        auth = auth_pool.primary()
     headers: dict[str, str] = {}
     if auth:
         if auth.get("delivery") == "cookie" and auth.get("token"):

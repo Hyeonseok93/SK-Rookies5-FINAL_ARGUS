@@ -206,6 +206,80 @@ def test_dashboard_login_entries_merge(tmp_path, monkeypatch):
     assert manual[0]["label"] == "custom-modal-login"
 
 
+def test_resolve_login_entries_includes_explicit_config_urls(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.login_discovery_service.DATA_DIR", tmp_path)
+    monkeypatch.setattr("app.services.login_endpoints_service.LOGIN_ENDPOINTS_PATH", tmp_path / "le.json")
+    monkeypatch.delenv("ARGUS_PROBE_HOST", raising=False)
+    _patch_dashboard(monkeypatch, ["http://localhost:8080"])
+    _write_tree(tmp_path)
+    raw = {"targets": [{"base_url": "http://localhost:8080"}]}
+    entries = resolve_login_entries(
+        {"login_urls": ["http://localhost:8080/api/v1/auth/login"]},
+        raw,
+        data_dir=tmp_path,
+    )
+    assert len(entries) == 1
+    assert entries[0]["url"] == "http://localhost:8080/api/v1/auth/login"
+    assert entries[0]["source"] == "config"
+
+
+def test_resolve_login_entries_dedupes_localhost_and_docker_probe_host(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.login_discovery_service.DATA_DIR", tmp_path)
+    monkeypatch.setenv("ARGUS_PROBE_HOST", "host.docker.internal")
+    monkeypatch.setattr(
+        "app.services.login_discovery_service.probe_url",
+        lambda url: url.replace("localhost", "host.docker.internal"),
+    )
+    monkeypatch.setattr(
+        "app.services.login_endpoints_service.probe_url",
+        lambda url: url.replace("localhost", "host.docker.internal"),
+    )
+    _patch_dashboard(monkeypatch, ["http://localhost:8080"])
+    _write_tree(
+        tmp_path,
+        _ep(
+            path="/api/v1/auth/login",
+            params=[
+                InputParam(in_="body", name="email"),
+                InputParam(in_="body", name="password"),
+            ],
+        ),
+        _ep(
+            path="/api/v1/auth/admin/login",
+            params=[
+                InputParam(in_="body", name="email"),
+                InputParam(in_="body", name="password"),
+            ],
+        ),
+    )
+    save_login_endpoints(
+        [
+            {
+                "id": "1",
+                "url": "http://localhost:8080/api/v1/auth/login",
+                "kind": "api",
+            }
+        ]
+    )
+    raw = {"targets": [{"base_url": "http://host.docker.internal:8080"}]}
+    entries = resolve_login_entries(
+        {
+            "login_urls": [
+                "http://localhost:8080/api/v1/auth/login",
+                "http://localhost:8080/api/v1/auth/admin/login",
+            ]
+        },
+        raw,
+        data_dir=tmp_path,
+    )
+    urls = {e["url"] for e in entries}
+    assert urls == {
+        "http://host.docker.internal:8080/api/v1/auth/login",
+        "http://host.docker.internal:8080/api/v1/auth/admin/login",
+    }
+    assert all("localhost" not in u for u in urls)
+
+
 def test_discover_limits_to_dashboard_production_bases(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.login_discovery_service.DATA_DIR", tmp_path)
     monkeypatch.setattr(

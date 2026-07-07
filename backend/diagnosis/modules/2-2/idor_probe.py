@@ -327,12 +327,16 @@ def run_idor_probes(
     idor_seeds: dict[str, Any] | None = None,
     timeout: float = 12.0,
     replay_session: ReplaySession | None = None,
+    login_report: dict[str, Any] | None = None,
 ) -> tuple[list[DiagnosisFinding], dict[str, Any]]:
     """Probe 2-2 candidates with owner account IDs, then replay as other accounts."""
+    from diagnosis.endpoint_auth_passes import filter_sessions_for_endpoint
+
     _ = timeout
     findings: list[DiagnosisFinding] = []
     seeds = _normalize_seeds(idor_seeds)
     idor_eps = [ep for ep in candidates if is_idor_candidate(ep)]
+
     accounts = _distinct_accounts(account_auths)
 
     stats: dict[str, Any] = {
@@ -348,11 +352,15 @@ def run_idor_probes(
     if len(accounts) < 2 or not idor_eps:
         return findings, stats
 
-    owner = accounts[0]
-    others = accounts[1:]
-    owner_email = str(owner.get("email") or "")
-
     for ep in idor_eps:
+        ep_accounts = _distinct_accounts(
+            filter_sessions_for_endpoint(ep, account_auths, login_report)
+        )
+        if len(ep_accounts) < 2:
+            continue
+        owner = ep_accounts[0]
+        others = ep_accounts[1:]
+        owner_email = str(owner.get("email") or "")
         param_sets = path_param_sets(ep, seeds=seeds)
         if not param_sets:
             continue

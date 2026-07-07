@@ -400,6 +400,113 @@ def test_unauth_download_no_account_medium():
     assert result[1] == "unauth_download_no_account"
 
 
+def test_traversal_targets_dashboard_download_all_params():
+    tf = _load("traversal_fuzz")
+    ep = _ep(
+        path="/api/v1/files/download",
+        tags=["2-2-candidate", "dashboard-download"],
+        request_params=[
+            InputParam(in_="query", name="file", sample="report.pdf"),
+            InputParam(in_="query", name="userId", sample="42"),
+            InputParam(in_="path", name="fileId", sample="7"),
+        ],
+    )
+    targets = tf.traversal_targets(ep)
+    assert ("query", "file") in targets
+    assert ("query", "userId") in targets
+    assert ("path", "fileId") in targets
+    assert len(targets) == 3
+
+
+def test_traversal_targets_inventory_file_like_only():
+    tf = _load("traversal_fuzz")
+    ep = _ep(
+        request_params=[
+            InputParam(in_="query", name="file", sample="a.pdf"),
+            InputParam(in_="query", name="page", sample="1"),
+        ],
+    )
+    targets = tf.traversal_targets(ep)
+    assert targets == [("query", "file")]
+
+
+def test_build_traversal_probe_path_param_changes_one_segment():
+    tf = _load("traversal_fuzz")
+    ep = _ep(
+        path="/api/v1/files/{fileId}/download",
+        request_params=[InputParam(in_="path", name="fileId", sample="99")],
+    )
+    baseline = tf.build_traversal_probe(
+        ep,
+        param_in="path",
+        param_name="fileId",
+        payload="../../../../etc/passwd",
+        auth=None,
+        baseline_path_defaults={"fileId": "99"},
+    )
+    assert "/etc/passwd" in baseline["url"] or "passwd" in baseline["url"]
+    assert "99" not in baseline["url"].split("/")[-2:] or ".." in baseline["url"]
+
+
+def test_build_traversal_probe_query_keeps_other_params():
+    tf = _load("traversal_fuzz")
+    ep = _ep(
+        path="/api/download",
+        request_params=[
+            InputParam(in_="query", name="file", sample="report.pdf"),
+            InputParam(in_="query", name="userId", sample="42"),
+        ],
+    )
+    injected = tf.build_traversal_probe(
+        ep,
+        param_in="query",
+        param_name="file",
+        payload="../etc/passwd",
+        auth=None,
+    )
+    assert "userId=42" in injected["url"]
+    assert "file=" in injected["url"]
+    assert "passwd" in injected["url"]
+
+
+def test_traversal_targets_post_download_without_params_is_empty():
+    tf = _load("traversal_fuzz")
+    ep = _ep(
+        method="POST",
+        path="/user-api/api/v1/report/integrated",
+        tags=["2-2-candidate", "dashboard-download"],
+        request_params=[],
+    )
+    assert tf.traversal_targets(ep) == []
+
+
+def test_traversal_targets_post_download_uses_request_params():
+    tf = _load("traversal_fuzz")
+    ep = _ep(
+        method="POST",
+        path="/user-api/api/v1/report/integrated",
+        tags=["2-2-candidate", "dashboard-download"],
+        request_params=[
+            InputParam(in_="body", name="template", sample="verification"),
+            InputParam(in_="body", name="memberId", sample="1"),
+        ],
+    )
+    targets = tf.traversal_targets(ep)
+    assert ("body", "template") in targets
+    assert ("body", "memberId") in targets
+
+
+def test_scan_options_registered_download_only_disables_extra_checks():
+    scanner = _load("scanner")
+    opts = scanner._scan_options({"diagnosis_2_2": {"dashboard_download_only": True}})
+    assert opts.dashboard_download_only is True
+    assert opts.unauth_probe_enabled is True
+    assert opts.idor_probe_enabled is False
+    assert opts.forced_browse_enabled is False
+    assert opts.design_review_enabled is False
+    assert opts.zap_supplemental_enabled is False
+
+
 def test_scanner_offline_design_only(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "diagnosis.replay.normalize.load_dashboard_base_urls",

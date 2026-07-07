@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -31,7 +31,7 @@ class InventoryStats(BaseModel):
 class BuildInventoryResponse(BaseModel):
     ok: bool
     stats: InventoryStats
-    artifacts: dict[str, str] = Field(default_factory=dict)
+    artifacts: dict[str, Any] = Field(default_factory=dict)
     message: str = ""
 
 
@@ -128,6 +128,8 @@ class VerifyInventoryResponse(BaseModel):
     summary: dict[str, int | str] = Field(default_factory=dict)
     artifacts: dict[str, str] = Field(default_factory=dict)
     message: str = ""
+    warning: str | None = None
+    error: str | None = None
 
 
 class VerifyResultSummary(BaseModel):
@@ -240,6 +242,37 @@ class SaveLoginEndpointsResponse(BaseModel):
     message: str = ""
 
 
+class TransferEndpointEntry(BaseModel):
+    id: str
+    url: str = ""
+    method: str = ""
+
+
+class TransferEndpointResolved(BaseModel):
+    url: str
+    label: str
+    source: str
+    method: str
+    path: str = ""
+    base_url: str = ""
+
+
+class TransferEndpointsResponse(BaseModel):
+    endpoints: list[TransferEndpointEntry]
+    resolved: list[TransferEndpointResolved] = Field(default_factory=list)
+
+
+class SaveTransferEndpointsRequest(BaseModel):
+    endpoints: list[TransferEndpointEntry]
+
+
+class SaveTransferEndpointsResponse(BaseModel):
+    ok: bool
+    endpoints: list[TransferEndpointEntry]
+    resolved: list[TransferEndpointResolved] = Field(default_factory=list)
+    message: str = ""
+
+
 class DiagnosisCatalogModule(BaseModel):
     id: str
     title: str
@@ -285,11 +318,69 @@ class DiagnosisSectionReportResponse(BaseModel):
     message: str = ""
     checked_at: str | None = None
     findings: list[DiagnosisFindingSummary] = Field(default_factory=list)
+    g61_summary: dict[str, Any] | None = None
+
+
+class G61SummaryTriggerFamily(BaseModel):
+    family: str
+    count: int
+
+
+class G61SummaryGroup(BaseModel):
+    group_key: str
+    severity: str
+    category: str
+    rule_id: str
+    category_label: str
+    rule_label: str
+    explanation: str = ""
+    origin: str
+    engine: str
+    count: int
+    sample_urls: list[str] = Field(default_factory=list)
+    sample_methods: list[str] = Field(default_factory=list)
+    sample_snippets: list[str] = Field(default_factory=list)
+    remediation: str | None = None
+    trigger_families: list[G61SummaryTriggerFamily] = Field(default_factory=list)
+    top_status_codes: list[str] = Field(default_factory=list)
+
+
+class G61ReportSummaryPayload(BaseModel):
+    total_issues: int = 0
+    by_severity: dict[str, int] = Field(default_factory=dict)
+    by_category: dict[str, int] = Field(default_factory=dict)
+    by_trigger_family: dict[str, int] = Field(default_factory=dict)
+    by_origin: list[dict[str, Any]] = Field(default_factory=list)
+    groups: list[G61SummaryGroup] = Field(default_factory=list)
+    stats: dict[str, Any] | None = None
+
+
+class DiagnosisArtifactSummary(BaseModel):
+    path: str
+    name: str
+    size: int = 0
+    modified_at: str | None = None
+
+
+class DiagnosisArtifactContentResponse(BaseModel):
+    section_id: str
+    path: str
+    name: str
+    size: int = 0
+    truncated: bool = False
+    content: str = ""
+
+
+class DiagnosisArtifactsResponse(BaseModel):
+    section_id: str
+    artifacts: list[DiagnosisArtifactSummary] = Field(default_factory=list)
 
 
 class DiagnosisRunSectionResponse(BaseModel):
     ok: bool
-    report: DiagnosisSectionReportResponse
+    accepted: bool = False
+    async_run: bool = False
+    report: DiagnosisSectionReportResponse | None = None
 
 
 class DiagnosisRunAllResponse(BaseModel):
@@ -329,6 +420,45 @@ class DiagnosisG15RunOptions(BaseModel):
     max_phase_b_jobs: int | None = Field(default=None, ge=20, le=10000)
 
 
+class DiagnosisG16RunOptions(BaseModel):
+    """Per-run overrides for guideline 1-6 input size/integrity scan."""
+
+    w16_root: str | None = None
+    python: str | None = None
+    target: str | None = None
+    api_spec: str | None = None
+    roles: list[str] | None = None
+    ui_target: str | None = None
+    login_spec: str | None = None
+    login_target: str | None = None
+    login_path: str | None = None
+    zap_host: str | None = None
+    zap_key: str | None = None
+    skip_zap: bool | None = None
+    skip_spider: bool | None = None
+    skip_selenium: bool | None = None
+    max_requests: int | None = Field(default=None, ge=0, le=500000)
+    max_requests_per_endpoint: int | None = Field(default=None, ge=0, le=50000)
+    max_workers: int | None = Field(default=None, ge=1, le=32)
+    timeout_sec: int | None = Field(default=None, ge=60, le=86400)
+    max_report_findings: int | None = Field(default=None, ge=0, le=5000)
+
+
+class DiagnosisG12RunOptions(BaseModel):
+    """Per-run overrides for guideline 1-2 injection scan (api-tree + ZAP + requests)."""
+
+    max_targets: int | None = Field(default=None, ge=5, le=500)
+    scan_all_inventory: bool | None = None
+    injector_enabled: bool | None = None
+    direct_enabled: bool | None = None
+    zap_enabled: bool | None = None
+    zap_max_minutes: int | None = Field(default=None, ge=1, le=120)
+    verification_mode: Literal["strict", "balanced", "aggressive"] | None = None
+    injection_types: list[str] | None = None
+    include_unsafe_methods: bool | None = None
+    keep_all_results: bool | None = None
+
+
 class DiagnosisG22RunOptions(BaseModel):
     """Per-run overrides for guideline 2-2 scan (merged into config for one execution)."""
 
@@ -338,6 +468,7 @@ class DiagnosisG22RunOptions(BaseModel):
     max_candidates: int | None = Field(default=None, ge=0, le=500)
     zap_max_minutes: int | None = Field(default=None, ge=1, le=120)
     scan_all_inventory: bool | None = None
+    dashboard_download_only: bool | None = None
     idor_probe_enabled: bool | None = None
 
 
@@ -405,16 +536,6 @@ class DiagnosisG61RunOptions(BaseModel):
     timeout: float | None = Field(default=None, ge=1.0, le=60.0)
     interval_sec: float | None = Field(default=None, ge=0.0, le=2.0)
     httpx_enabled: bool | None = None
-    zap_enabled: bool | None = None
-    zap_unified_enabled: bool | None = None
-    zap_supplemental_enabled: bool | None = None
-    zap_max_requests: int | None = Field(default=None, ge=0, description="0 = unlimited")
-    zap_max_minutes: int | None = Field(default=None, ge=1, le=480)
-    zap_seed_cap: int | None = Field(
-        default=None,
-        ge=0,
-        description="0 = seed every probe URL for ZAP supplemental",
-    )
 
 
 class DiagnosisG52RunOptions(BaseModel):
@@ -464,7 +585,7 @@ class DiagnosisG36RunOptions(BaseModel):
 class DiagnosisG32RunOptions(BaseModel):
     """Per-run overrides for guideline 3-2 auth failure count limit scan."""
 
-    max_attempts: int | None = Field(default=None, ge=3, le=25)
+    max_attempts: int | None = Field(default=None, ge=6, le=25)
     timeout: float | None = Field(default=None, ge=1.0, le=60.0)
     interval_sec: float | None = Field(default=None, ge=0.0, le=2.0)
     wrong_password: str | None = None
@@ -491,8 +612,22 @@ class DiagnosisG42RunOptions(BaseModel):
     probe_account_email: str | None = None
 
 
+class DiagnosisG21RunOptions(BaseModel):
+    """Per-run credentials for guideline 2-1 malicious file upload scan."""
+
+    seller_email: str = ""
+    seller_password: str = ""
+    seller_id: int = Field(default=0, ge=0)
+    user_email: str = ""
+    user_password: str = ""
+    timeout: float | None = Field(default=None, ge=3.0, le=60.0)
+
+
 class DiagnosisRunSectionRequest(BaseModel):
+    g12: DiagnosisG12RunOptions | None = None
     g15: DiagnosisG15RunOptions | None = None
+    g16: DiagnosisG16RunOptions | None = None
+    g21: DiagnosisG21RunOptions | None = None
     g41: DiagnosisG41RunOptions | None = None
     g22: DiagnosisG22RunOptions | None = None
     g32: DiagnosisG32RunOptions | None = None
@@ -547,3 +682,5 @@ class ReplayRunSectionResponse(BaseModel):
     ok: bool
     section_id: str
     results: list[ReplayRunResultResponse] = Field(default_factory=list)
+
+
