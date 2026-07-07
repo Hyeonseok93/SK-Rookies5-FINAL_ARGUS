@@ -111,7 +111,8 @@ def _collapse_findings(items: list[DiagnosisFinding]) -> tuple[list[DiagnosisFin
         ev["affected_extension_count"] = len(exts) if exts else 1
 
         message = f.message
-        if len(exts) > 1:
+        is_ext_bypass = str(ev.get("reason") or "").startswith("disallowed_extension_accepted")
+        if is_ext_bypass and len(exts) > 1:
             ext_display = ", ".join(f".{e}" for e in exts)
             label = f"{ev.get('method', '')} {urls[0] if urls else ev.get('url', '')}".strip()
             message = (
@@ -119,6 +120,9 @@ def _collapse_findings(items: list[DiagnosisFinding]) -> tuple[list[DiagnosisFin
                 f"허용되지 않은 확장자 {len(exts)}개({ext_display}) 업로드가 모두 차단되지 않음 — "
                 f"{ev.get('technique')} · {label}"
             )
+        elif len(exts) > 1:
+            message = f"{message} (동일 증상 {len(exts)}개 확장자에서 발생)"
+            
         if len(urls) > 1:
             message = f"{message} ({len(urls)} URL)"
         collapsed.append(DiagnosisFinding(severity=f.severity, message=message, evidence=ev))
