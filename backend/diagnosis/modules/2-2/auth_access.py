@@ -10,6 +10,7 @@ from typing import Any
 from app.services.zap_util import probe_url
 from diagnosis.replay.recorder import ReplaySession
 from diagnosis.result import DiagnosisFinding
+from inventory.net import probe_base_url
 from inventory.probe_build import build_probe_request
 from inventory.schema import Endpoint
 
@@ -250,7 +251,7 @@ def _build_finding(
         "related_sections": ["4-4"],
         "method": ep.method,
         "path": ep.path,
-        "base_url": ep.base_url,
+        "base_url": probe_base_url(ep.base_url or ""),
         "anonymous_http_status": anonymous.http_status,
         "http_status": anonymous.http_status,
         **snippet,
