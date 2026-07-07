@@ -2,7 +2,7 @@
   "endpoints": [
     {
       "id": "c92fcac4-a7a3-4d04-831c-e7cba6cefb60",
-      "url": "/user-api/api/v1/report/integrated",
+      "url": "/api/v1/report/integrated",
       "method": "POST"
     }
   ]

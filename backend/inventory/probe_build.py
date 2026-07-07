@@ -114,16 +114,9 @@ def sample_value(inp: InputParam, path: str = "") -> Any:
 
 
 def frontend_gateway_path(base_url: str, path: str) -> str:
-    """Vite dev server proxies API via /user-api or /admin-api."""
-    if ":5173" not in base_url:
-        return path
-    if path.startswith(GATEWAY_PREFIXES):
-        return path
-    if path.startswith("/api/v1/admin"):
-        return f"/admin-api{path}"
-    if path.startswith("/api/"):
-        return f"/user-api{path}"
-    return path
+    """Return the inventory path as-is (no per-app gateway rewriting)."""
+    _ = base_url
+    return path or "/"
 
 
 def _heuristic_query(path: str, method: str) -> dict[str, str]:
