@@ -1,4 +1,4 @@
-"""Orchestrate guideline 6-1 error-page information disclosure scan."""
+"""Orchestrate guideline 6-1 error-page information disclosure scan (httpx only)."""
 
 from __future__ import annotations
 
@@ -7,9 +7,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from app.services.zap_util import ZapNotAvailableError
+from diagnosis.auth_session_pool import DiagnosisAuthPool
 from diagnosis.context import DiagnosisContext
-from diagnosis.probe_auth import all_account_auths_with_meta, primary_account_auth, session_auth_mode
+from diagnosis.endpoint_auth_passes import (
+    build_probe_passes_headers_only,
+    load_login_report,
+)
+from diagnosis.exceptions import DiagnosisCancelled
 from diagnosis.probe_transport import HttpxTransport
 from diagnosis.result import DiagnosisFinding
 
@@ -30,8 +34,6 @@ def _load_local(name: str):
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot load {path}")
     mod = importlib.util.module_from_spec(spec)
-    import sys
-
     sys.modules[mod_name] = mod
     spec.loader.exec_module(mod)
     return mod
@@ -52,12 +54,6 @@ class ScanOptions:
     enable_header: bool = True
     enable_auth_modes: bool = True
     httpx_enabled: bool = True
-    zap_enabled: bool = True
-    zap_unified_enabled: bool = True
-    zap_supplemental_enabled: bool = True
-    zap_max_requests: int = 8000
-    zap_max_minutes: int = 15
-    zap_seed_cap: int = 200
 
 
 @dataclass
@@ -79,31 +75,18 @@ def _request_cap(raw_value: Any, default: int) -> int:
     return max(100, value)
 
 
-def _seed_cap(raw_value: Any, default: int) -> int:
-    """0 or negative = seed all probe URLs; positive = minimum 20."""
-    try:
-        value = int(raw_value if raw_value is not None else default)
-    except (TypeError, ValueError):
-        value = default
-    if value <= 0:
-        return 0
-    return max(20, value)
-
-
 def _scan_options(raw: dict[str, Any]) -> ScanOptions:
     cfg = raw.get("diagnosis_6_1") or raw.get("scan_6_1") or {}
     mode = str(cfg.get("probe_mode", "sample")).strip().lower()
     if mode not in ("sample", "full"):
         mode = "sample"
-    max_requests = _request_cap(cfg.get("max_requests"), 8000)
-    zap_default = max_requests if max_requests > 0 else 0
     return ScanOptions(
         timeout=float(cfg.get("timeout", 10.0)),
         interval_sec=max(0.0, min(float(cfg.get("interval_sec", 0.02)), 2.0)),
         probe_mode=mode,  # type: ignore[arg-type]
         sample_size=max(5, min(int(cfg.get("sample_size", 40)), 500)),
         max_endpoints=max(0, int(cfg.get("max_endpoints", 80))),
-        max_requests=max_requests,
+        max_requests=_request_cap(cfg.get("max_requests"), 8000),
         enable_param=bool(cfg.get("enable_param_fuzz", True)),
         enable_body=bool(cfg.get("enable_body_fuzz", True)),
         enable_path=bool(cfg.get("enable_path_fuzz", True)),
@@ -111,35 +94,110 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
         enable_header=bool(cfg.get("enable_header_fuzz", True)),
         enable_auth_modes=bool(cfg.get("enable_auth_modes", True)),
         httpx_enabled=bool(cfg.get("httpx_enabled", True)),
-        zap_enabled=bool(cfg.get("zap_enabled", True)),
-        zap_unified_enabled=bool(cfg.get("zap_unified_enabled", True)),
-        zap_supplemental_enabled=bool(cfg.get("zap_supplemental_enabled", True)),
-        zap_max_requests=_request_cap(cfg.get("zap_max_requests"), zap_default),
-        zap_max_minutes=max(1, min(int(cfg.get("zap_max_minutes", 15)), 480)),
-        zap_seed_cap=_seed_cap(cfg.get("zap_seed_cap"), 200),
     )
 
 
-def _overall_status(findings: list[DiagnosisFinding]) -> str:
-    if any(f.severity in ("high", "medium") for f in findings):
-        return "fail"
-    if any(f.severity == "low" for f in findings):
-        return "warn"
-    return "pass"
+def _overall_status(findings: list[DiagnosisFinding]) -> tuple[str, bool, list[str]]:
+    """Derive pass/warn/fail from finding severity, gated by evidence confidence.
+
+    High-confidence hits (deterministic signatures like SQL exception text or
+    Java stack frames) can never false-positive in practice, so they still
+    drive a hard "fail". Lower-confidence heuristic hits (path_disclosure,
+    verbose_error / verbose_500_body — generic substring/keyword matches that
+    can legitimately appear in clean responses) never fail the scan on their
+    own; they instead push the status to "warn" and are surfaced as items a
+    diagnostician needs to manually confirm, mirroring the pattern already
+    used by module 3-5's needs_review handling.
+    """
+    review_counts: dict[str, int] = {}
+    has_high_confidence_fail = False
+    for f in findings:
+        ev = f.evidence or {}
+        confidence = ev.get("confidence", "high")
+        rule_id = str(ev.get("rule_id") or "unknown")
+        if confidence == "review":
+            review_counts[rule_id] = review_counts.get(rule_id, 0) + 1
+        elif f.severity in ("high", "medium"):
+            has_high_confidence_fail = True
+
+    parts = [f"{rule_id} x{count}" for rule_id, count in review_counts.items()]
+    needs_review = bool(parts)
+
+    if has_high_confidence_fail:
+        status = "fail"
+    elif parts:
+        status = "warn"
+    else:
+        status = "pass"
+    return status, needs_review, parts
 
 
-def _build_passes(
-    auth_sessions: list[dict[str, Any]],
+def _build_scan_result(
     *,
-    enable_auth_modes: bool,
-) -> list[tuple[str, dict[str, str]]]:
-    from diagnosis.probe_auth import probe_request_headers
+    all_findings: list[DiagnosisFinding],
+    target_meta: dict[str, Any],
+    opts: ScanOptions,
+    endpoints_done: int,
+    budget: Any,
+    total_errors: int,
+    collapsed_count: int,
+    collapse_stats: dict[str, Any],
+    enable: dict[str, bool],
+    passes: list[tuple[str, dict[str, str]]],
+    auth_meta: dict[str, Any],
+    payloads: list[Any],
+    cancelled: bool = False,
+) -> ScanResult:
+    by_severity: dict[str, int] = {}
+    for f in all_findings:
+        by_severity[f.severity] = by_severity.get(f.severity, 0) + 1
 
-    passes: list[tuple[str, dict[str, str]]] = [("anonymous", {})]
-    if enable_auth_modes:
-        for session in auth_sessions:
-            passes.append((session_auth_mode(session), probe_request_headers(session)))
-    return passes
+    status_from_findings, needs_review, review_parts = _overall_status(all_findings)
+    review_items = sum(int(p.rsplit(" x", 1)[1]) for p in review_parts) if review_parts else 0
+
+    stats: dict[str, Any] = {
+        **target_meta,
+        "probe_mode": opts.probe_mode,
+        "payloads": len(payloads),
+        "endpoints_probed": endpoints_done,
+        "auth_passes": len(passes),
+        "auth_passes_scoped": True,
+        "sessions": auth_meta.get("sessions", 0),
+        "auth_source": auth_meta.get("source"),
+        "auth_refresh_count": auth_meta.get("refresh_count", 0),
+        "httpx_enabled": opts.httpx_enabled,
+        "requests_sent": budget.sent,
+        "requests_cap": budget.max_requests if budget.max_requests > 0 else None,
+        "requests_unlimited": budget.unlimited,
+        "budget_exhausted": budget.exhausted(),
+        "requests_by_family": budget.by_family,
+        "http_errors": total_errors,
+        "httpx_leaks": collapsed_count,
+        "leaks": len(all_findings),
+        "by_severity": by_severity,
+        "needs_review": needs_review,
+        "review_items": review_items,
+        "review_parts": review_parts,
+        **collapse_stats,
+        "triggers_enabled": enable,
+    }
+    if cancelled:
+        stats["cancelled"] = True
+
+    if cancelled:
+        status = "cancelled"
+        message = f"Cancelled after {endpoints_done} endpoint(s)"
+    else:
+        status = status_from_findings
+        message = f"Probed {endpoints_done} endpoint(s)"
+
+    if opts.httpx_enabled:
+        message += f", {budget.sent} httpx request(s), {collapsed_count} leak(s)"
+    if cancelled:
+        message += f" — {len(all_findings)} finding(s) collected before stop"
+    if not cancelled and needs_review:
+        message += f" — 진단자 확인 필요: {', '.join(review_parts)}"
+    return ScanResult(findings=all_findings, stats=stats, status=status, message=message)
 
 
 def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
@@ -186,8 +244,21 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         "header": opts.enable_header,
     }
 
-    auth_sessions, auth_meta = all_account_auths_with_meta(ctx.raw_config, data_dir=ctx.data_dir)
-    passes = _build_passes(auth_sessions, enable_auth_modes=opts.enable_auth_modes)
+    auth_pool = DiagnosisAuthPool(ctx.raw_config, data_dir=ctx.data_dir)
+    login_report = load_login_report(ctx.data_dir, ctx.raw_config)
+
+    def _snapshot_auth_meta() -> dict[str, Any]:
+        return {**auth_pool.meta, "refresh_count": auth_pool.refresh_count}
+
+    def _passes_for_ep(ep, sessions: list[dict[str, Any]]) -> list[tuple[str, dict[str, str]]]:
+        return build_probe_passes_headers_only(
+            ep,
+            sessions,
+            login_report=login_report,
+            enable_auth_modes=opts.enable_auth_modes,
+        )
+
+    sample_passes = _passes_for_ep(endpoints[0], auth_pool.sessions()) if endpoints else []
 
     raw_findings: list[DiagnosisFinding] = []
     total_errors = 0
@@ -216,8 +287,19 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             requests_cap=requests_cap,
         )
 
-    if opts.httpx_enabled:
-        dp.update(phase="httpx", message=f"httpx Phase A — {total_eps} API")
+    collapsed: list[DiagnosisFinding] = []
+    collapse_stats: dict[str, Any] = {}
+    all_findings: list[DiagnosisFinding] = []
+
+    try:
+        if not opts.httpx_enabled:
+            return ScanResult(
+                status="skipped",
+                message="httpx disabled — nothing to run",
+                stats={"reason": "httpx_enabled=false", **target_meta},
+            )
+
+        dp.update(phase="httpx", message=f"httpx — {total_eps} API")
         with HttpxTransport(timeout=opts.timeout) as transport:
             raw_findings, total_errors, endpoints_done = probes_mod.run_endpoints_probes(
                 endpoints,
@@ -227,97 +309,47 @@ def run_g61_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                 timeout=opts.timeout,
                 interval_sec=opts.interval_sec,
                 budget=budget,
-                passes=passes,
+                passes=sample_passes,
                 enable=enable,
                 on_progress=_probe_progress,
+                auth_pool=auth_pool,
+                build_passes=_passes_for_ep,
             )
 
-    collapsed, collapse_stats = probes_mod.collapse_auth_findings(raw_findings)
-    all_findings = list(collapsed)
-    priority_seed_urls: list[str] = []
-    for finding in all_findings:
-        url = str((finding.evidence or {}).get("url") or "").strip()
-        if url:
-            priority_seed_urls.append(url)
+        collapsed, collapse_stats = probes_mod.collapse_auth_findings(raw_findings)
+        all_findings = list(collapsed)
+    except DiagnosisCancelled:
+        if not collapsed and raw_findings:
+            collapsed, collapse_stats = probes_mod.collapse_auth_findings(raw_findings)
+        all_findings = list(collapsed)
+        return _build_scan_result(
+            all_findings=all_findings,
+            target_meta=target_meta,
+            opts=opts,
+            endpoints_done=endpoints_done,
+            budget=budget,
+            total_errors=total_errors,
+            collapsed_count=len(collapsed),
+            collapse_stats=collapse_stats,
+            enable=enable,
+            passes=sample_passes,
+            auth_meta=_snapshot_auth_meta(),
+            payloads=payloads,
+            cancelled=True,
+        )
 
-    zap_ran = False
-    zap_unified_count = 0
-    zap_native_count = 0
-    zap_stats: dict[str, Any] = {"zap": "skipped", "reason": "zap_enabled=false"}
-    if opts.zap_enabled:
-        from diagnosis.replay.normalize import collect_probe_base_urls
-
-        base_urls = collect_probe_base_urls(ctx.raw_config)
-        try:
-            dp.update(
-                phase="zap",
-                message="ZAP Phase B/C — unified fuzz + supplemental",
-                endpoints_done=endpoints_done,
-                endpoints_total=total_eps,
-            )
-            zap_mod = _load_local("zap_scan")
-            zap_findings, zap_stats = zap_mod.run_zap_phase(
-                ctx.raw_config,
-                endpoints,
-                base_urls,
-                primary_account_auth(ctx.raw_config, data_dir=ctx.data_dir),
-                probes_mod,
-                payloads=payloads,
-                passes=passes,
-                timeout=opts.timeout,
-                interval_sec=opts.interval_sec,
-                max_requests=opts.zap_max_requests,
-                enable=enable,
-                max_minutes=opts.zap_max_minutes,
-                seed_cap=opts.zap_seed_cap,
-                priority_seed_urls=priority_seed_urls,
-                zap_unified_enabled=opts.zap_unified_enabled,
-                zap_supplemental_enabled=opts.zap_supplemental_enabled,
-                on_progress=_probe_progress,
-            )
-            zap_unified_count = int(zap_stats.get("unified_findings") or 0)
-            zap_native_count = int(zap_stats.get("native_findings") or 0)
-            all_findings.extend(zap_findings)
-            zap_ran = True
-        except ZapNotAvailableError as exc:
-            zap_stats = {"error": str(exc)}
-        except Exception as exc:
-            zap_stats = {"error": str(exc)[:300]}
-
-    by_severity: dict[str, int] = {}
-    for f in all_findings:
-        by_severity[f.severity] = by_severity.get(f.severity, 0) + 1
-
-    stats: dict[str, Any] = {
-        **target_meta,
-        "probe_mode": opts.probe_mode,
-        "payloads": len(payloads),
-        "endpoints_probed": endpoints_done,
-        "auth_passes": len(passes),
-        "sessions": auth_meta.get("sessions", 0),
-        "httpx_enabled": opts.httpx_enabled,
-        "requests_sent": budget.sent,
-        "requests_cap": budget.max_requests if budget.max_requests > 0 else None,
-        "requests_unlimited": budget.unlimited,
-        "budget_exhausted": budget.exhausted(),
-        "requests_by_family": budget.by_family,
-        "http_errors": total_errors,
-        "httpx_leaks": len(collapsed),
-        "zap_unified_leaks": zap_unified_count,
-        "zap_native_alerts": zap_native_count,
-        "leaks": len(all_findings),
-        "by_severity": by_severity,
-        **collapse_stats,
-        "triggers_enabled": enable,
-        "zap": zap_stats,
-    }
-
-    status = _overall_status(all_findings)
-    message = f"Probed {endpoints_done} endpoint(s)"
-    if opts.httpx_enabled:
-        message += f", {budget.sent} httpx request(s), {len(collapsed)} httpx leak(s)"
-    if zap_ran:
-        message += f", ZAP unified {zap_unified_count} + native {zap_native_count}"
-    elif opts.zap_enabled:
-        message += " (ZAP skipped/unavailable)"
-    return ScanResult(findings=all_findings, stats=stats, status=status, message=message)
+    return _build_scan_result(
+        all_findings=all_findings,
+        target_meta=target_meta,
+        opts=opts,
+        endpoints_done=endpoints_done,
+        budget=budget,
+        total_errors=total_errors,
+        collapsed_count=len(collapsed),
+        collapse_stats=collapse_stats,
+        enable=enable,
+        passes=sample_passes,
+        auth_meta=_snapshot_auth_meta(),
+        payloads=payloads,
+        cancelled=False,
+    )

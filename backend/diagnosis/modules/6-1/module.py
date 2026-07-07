@@ -31,7 +31,7 @@ class G61Module(DiagnosisModule):
     title = "오류페이지를 통한 정보 노출 여부"
     chapter = 6
     implemented = True
-    engine = "httpx+zap"
+    engine = "httpx"
 
     def __init__(self, module_dir: Path) -> None:
         self.module_dir = module_dir
@@ -66,7 +66,17 @@ class G61Module(DiagnosisModule):
                     evidence={"stats": result.stats},
                 ),
             )
-        self.save_report(ctx, report)
+        path = self.save_report(ctx, report)
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "diag_g61_report_summary", self.module_dir / "report_summary.py"
+            )
+            if spec and spec.loader:
+                rs = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(rs)
+                rs.save_summary_cache(path, rs.build_g61_summary_from_findings(report.findings))
+        except Exception:
+            pass
         return report
 
 
