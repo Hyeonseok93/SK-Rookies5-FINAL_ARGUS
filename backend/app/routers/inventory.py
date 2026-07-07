@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import uuid
 import json
 import yaml
@@ -487,6 +488,24 @@ async def build_attack_surface(
         gradle_deps=gradle_dep_names if gradle_dep_names else None,
     )
 
+    # ── Gradle/Maven/pip/npm 의존성 파일만 올린 경우 ──────────────────────
+    # 엔드포인트 인벤토리(url_list/api_list/openapi)는 손대지 않고,
+    # 기존에 빌드돼 있던 api-tree를 그대로 둔 채 성공 처리한다.
+    if gradle_dep_names and not (url_list_enabled or api_list_enabled or openapi_enabled):
+        prune_upload_batches(UPLOAD_DIR)
+        existing_tree = _load_cached_tree("ready")
+        existing_stats = (
+            InventoryStats(**compute_stats(existing_tree))
+            if existing_tree
+            else InventoryStats()
+        )
+        return BuildInventoryResponse(
+            ok=True,
+            stats=existing_stats,
+            artifacts={"upload_batch": f"uploads/{batch_id}"},
+            message=f"Saved {len(gradle_dep_names)} dependency file(s) for scanning ({', '.join(gradle_dep_names)}).",
+        )
+
     cfg = load_config()
     saved_bases = resolved_base_url_strings()
     if saved_bases:
@@ -515,7 +534,7 @@ async def build_attack_surface(
         base_urls=build_bases or None,
     )
 
-    if not tree.endpoints:
+    if not tree.endpoints and not gradle_dep_names:
         return BuildInventoryResponse(
             ok=False,
             stats=InventoryStats(**compute_stats(tree)),
@@ -536,7 +555,6 @@ async def build_attack_surface(
         artifacts=artifacts,
         message=f"Built attack surface map with {stats.api_endpoints} API endpoints.",
     )
-
 
 def _config_path() -> Path:
     return CONFIG_PATH if CONFIG_PATH.is_file() else BACKEND_ROOT / "config.yaml"

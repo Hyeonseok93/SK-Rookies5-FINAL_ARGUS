@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Terminal, Copy } from "lucide-react"; // 💡 Terminal, Copy 추가
 import type { DiagnosisSectionReport } from "../../types";
+
 
 const STATUS_STYLES: Record<string, string> = {
   pass: "border-emerald-400/50 bg-emerald-500/10 text-emerald-300",
@@ -352,6 +353,97 @@ function CollapsibleFindingsSection({
   );
 }
 
+function Gradle74Guide() {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState<"unix" | "windows" | null>(null);
+
+  const unixCmd =
+    "./gradlew :api-module:dependencies --configuration runtimeClasspath > deps.txt";
+  const winCmd =
+    "gradlew.bat :api-module:dependencies --configuration runtimeClasspath > deps.txt";
+
+  const handleCopy = async (cmd: string, key: "unix" | "windows") => {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setCopied(key);
+      setTimeout(() => setCopied((v) => (v === key ? null : v)), 1500);
+    } catch {
+      // 클립보드 접근 실패 시 조용히 무시
+    }
+  };
+
+  return (
+    <div className="mb-3 overflow-hidden rounded-lg border border-cyber-border/50 bg-cyber-bg/20">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition hover:bg-cyber-accent/5"
+      >
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-cyber-muted transition ${open ? "rotate-180" : ""}`}
+        />
+        <Terminal className="h-3.5 w-3.5 shrink-0 text-cyan-300/80" />
+        <span className="text-xs font-semibold text-white">Gradle 의존성 트리 추출 가이드</span>
+        <span className="ml-1 text-[10px] text-cyber-muted">deps.txt 생성 명령어</span>
+      </button>
+      {open ? (
+        <div className="space-y-3 border-t border-cyber-border/30 px-3 py-3">
+          <GuideCommandBlock
+            label="Linux / macOS"
+            command={unixCmd}
+            copied={copied === "unix"}
+            onCopy={() => handleCopy(unixCmd, "unix")}
+          />
+          <GuideCommandBlock
+            label="Windows (cmd / PowerShell)"
+            command={winCmd}
+            copied={copied === "windows"}
+            onCopy={() => handleCopy(winCmd, "windows")}
+          />
+          <p className="text-[10px] text-cyber-muted">
+            생성된{" "}
+            <code className="rounded bg-cyber-bg/60 px-1 font-mono text-cyan-300/90">
+              deps.txt
+            </code>{" "}
+            파일을 업로드하면 자동으로 취약점 진단이 진행됩니다.
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function GuideCommandBlock({
+  label,
+  command,
+  copied,
+  onCopy,
+}: {
+  label: string;
+  command: string;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  return (
+    <div>
+      <div className="mb-1 text-[10px] uppercase tracking-wide text-cyber-muted">{label}</div>
+      <div className="flex items-center justify-between gap-2 rounded border border-cyber-border/40 bg-black/30 px-2 py-1.5">
+        <code className="overflow-x-auto whitespace-nowrap font-mono text-[11px] text-cyan-300/90">
+          {command}
+        </code>
+        <button
+          type="button"
+          onClick={onCopy}
+          className="flex shrink-0 items-center gap-1 rounded border border-cyber-border/50 px-1.5 py-0.5 text-[10px] text-cyber-muted transition hover:bg-cyber-accent/10 hover:text-cyan-300"
+        >
+          <Copy className="h-3 w-3" />
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function GroupedFindingsPanel({
   findings,
   sectionId,
@@ -565,6 +657,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const isG35Stats = statsFinding?.message === "3-5 scan statistics";
   const isG36Stats = statsFinding?.message === "3-6 scan statistics";
 
+
   return (
     <div className="border-t border-cyber-border/40 bg-cyber-bg/30 px-4 py-3">
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -576,6 +669,8 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
           <span className="text-xs text-cyber-muted">{report.message}</span>
         ) : null}
       </div>
+
+      {report.section_id === "7-4" ? <Gradle74Guide /> : null}
 
       {stats ? (
         <div className="mb-3 rounded border border-cyber-border/40 bg-cyber-panel/40 px-3 py-2 text-[11px] text-cyber-muted">

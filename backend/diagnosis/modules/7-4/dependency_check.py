@@ -80,21 +80,36 @@ def parse_gradle_dependencies(text: str) -> list[tuple[str, str, str]]:
     result: list[tuple[str, str, str]] = []
     for raw in text.splitlines():
         line = raw.strip()
-        if not line or line.startswith(("project ", "\\--- project", "+--- project")):
+        if not line:
             continue
-        if "(*)" in line or "(c)" in line:
-            continue
+        # 트리 프리픽스(+---, \---, |    등) 제거
         cleaned = re.sub(r"^[\s|+\\\-]+", "", line)
+        if not cleaned or cleaned.startswith("project "):
+            continue
+        # (*) 재귀 생략 마커, (c) 제약(constraint) 마커는 좌표 자체가 아니므로
+        # 줄 전체를 버리지 않고 마커만 제거한 뒤 계속 진행
+        cleaned = re.sub(r"\s*\((?:\*|c)\)\s*$", "", cleaned).strip()
+        if not cleaned:
+            continue
+
         if "->" in cleaned:
-            left, right = cleaned.split("->", 1)
-            ga_m = re.match(r"([A-Za-z0-9_.\-]+:[A-Za-z0-9_.\-]+)", left.strip())
-            ver = right.strip().split()[0] if right.strip() else ""
+            # a:b:1.0 -> 2.0 -> 3.0 처럼 화살표가 여러 번 나올 수 있으므로
+            # 가장 마지막 화살표 뒤 값을 최종 강제(resolved) 버전으로 사용
+            parts = [p.strip() for p in cleaned.split("->")]
+            left = parts[0]
+            ver = ""
+            for p in reversed(parts[1:]):
+                if p:
+                    ver = p.split()[0]
+                    break
+            ga_m = re.match(r"([A-Za-z0-9_.\-]+:[A-Za-z0-9_.\-]+)", left)
             if ga_m and re.match(r"^[0-9]", ver):
                 key = (ga_m.group(1), ver)
                 if key not in seen:
                     seen.add(key)
                     result.append((key[0], key[1], "Maven"))
                 continue
+
         m = _GRADLE_COORD_RE.match(cleaned)
         if m:
             key = (m.group(1), m.group(2))
@@ -102,7 +117,6 @@ def parse_gradle_dependencies(text: str) -> list[tuple[str, str, str]]:
                 seen.add(key)
                 result.append((key[0], key[1], "Maven"))
     return result
-
 
 # ──────────────────────────────────────────────
 # 파서 2: Maven
@@ -139,24 +153,32 @@ def parse_maven_dependencies(text: str) -> list[tuple[str, str, str]]:
 # ──────────────────────────────────────────────
 
 # pip freeze: Package==1.2.3  또는 Package==1.2.3+local
-_PIP_RE = re.compile(r"^([A-Za-z0-9_.\-]+)==([A-Za-z0-9_.\-+]+)", re.MULTILINE)
-# requirements.txt 핀드 버전 (== 만)
+# requirements.txt: Package>=1.2.3, Package~=1.2.3, Package<=1.2.3 등도 지원
+# (단, ==가 아닌 경우 "명시된 최소/기준 버전"일 뿐 실제 설치 버전과 다를 수 있음)
+_PIP_RE = re.compile(
+    r"^([A-Za-z0-9_.\-]+)(?:\[[^\]]*\])?\s*(==|>=|<=|~=)\s*([A-Za-z0-9_.\-+]+)"
+)
 _PIP_SKIP_PREFIXES = ("#", "-r ", "-c ", "git+", "http://", "https://")
 
 
 def parse_pip_dependencies(text: str) -> list[tuple[str, str, str]]:
-    """pip freeze / requirements.txt → [(package, version, 'PyPI')] (중복 제거)."""
+    """pip freeze / requirements.txt → [(package, version, 'PyPI')] (중복 제거).
+
+    ==, >=, <=, ~= 를 모두 인식한다. ==가 아닌 경우 정확한 설치 버전이 아니라
+    파일에 명시된 기준 버전으로 스캔하므로, 실제 설치 버전과 다를 수 있다는 점에
+    주의가 필요하다 (정확도를 높이려면 `pip freeze` 결과를 사용할 것).
+    """
     seen: set[str] = set()
     result: list[tuple[str, str, str]] = []
     for line in text.splitlines():
-        stripped = line.strip()
+        stripped = line.split("#", 1)[0].strip()  # 인라인 주석 제거
         if not stripped or any(stripped.startswith(p) for p in _PIP_SKIP_PREFIXES):
             continue
         m = _PIP_RE.match(stripped)
         if m:
-            pkg, ver = m.group(1), m.group(2)
-            # +local 태그 제거 (OSV는 base version 만 인식)
-            ver = ver.split("+")[0]
+            pkg, ver = m.group(1), m.group(3)
+            # "Django>=3.2,<4.0" 처럼 여러 조건이 붙은 경우 첫 조건의 버전만 사용
+            ver = ver.split(",")[0].split("+")[0]
             name_lower = pkg.lower()
             if name_lower not in seen:
                 seen.add(name_lower)
