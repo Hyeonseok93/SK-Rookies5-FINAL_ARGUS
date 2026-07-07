@@ -121,6 +121,14 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         "cors_probe_origin": cors_origin,
     }
 
+    # account_auth 없이 프로브를 보내면 로그인이 필요한 엔드포인트는 컨트롤러 로직에
+    # 도달하기도 전에 401로 막혀, 페이로드가 반사/리다이렉트될 여지 자체가 없어져 실제
+    # 취약점이 있어도 절대 못 잡는다 — phase A/B 모두 로그인 세션을 붙여서 보낸다.
+    try:
+        auth_session = _primary_auth(raw, data_dir=ctx.data_dir)
+    except Exception:
+        auth_session = None
+
     phase_a = targets.build_phase_a_jobs(
         tree,
         raw_config=raw,
@@ -130,6 +138,7 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         sample_size=opts.sample_size,
         max_params_per_endpoint=opts.max_params_per_endpoint,
         max_jobs=opts.max_phase_a_jobs,
+        account_auth=auth_session,
     )
     phase_b = targets.build_phase_b_jobs(
         tree,
@@ -139,6 +148,7 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         probe_mode=opts.probe_mode,
         sample_size=opts.sample_size,
         max_jobs=opts.max_phase_b_jobs,
+        account_auth=auth_session,
     )
     redirect_jobs = phase_a + phase_b
     stats["phase_a_jobs"] = len(phase_a)
@@ -148,7 +158,13 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     cors_targets = targets.build_cors_targets(bases) if opts.cors_enabled and bases else []
     xd_targets = targets.build_crossdomain_targets(bases) if opts.crossdomain_enabled and bases else []
-    grand_total = len(redirect_jobs) + len(cors_targets) + len(xd_targets)
+    # redirect_jobs는 실제로 세 번 순회된다 — sink 기반 확정 검증(run_redirect_jobs),
+    # reflected_bridge의 META_REFRESH/JS_REDIRECT/REFLECTED_VALUE 보강 검증(run_on_jobs),
+    # 그리고 그중 로그인 문맥만 추린 소수 후보에 대한 브라우저 검증. 이 셋을 모두
+    # grand_total에 포함해야 진행률이 각 단계에서 실제로 올라간다.
+    reflected_bridge = _load_local("reflected_bridge")
+    login_candidate_count = reflected_bridge.count_login_redirect_candidates(redirect_jobs) if redirect_jobs else 0
+    grand_total = len(redirect_jobs) * 2 + login_candidate_count + len(cors_targets) + len(xd_targets)
     prepare(grand_total, f"1-5: {grand_total} probe(s)")
     progress_offset = 0
 
@@ -176,6 +192,35 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         findings.extend(rf)
         stats["redirect"] = rstats
         progress_offset += len(redirect_jobs)
+
+        # sink 기반 검증은 Location 헤더(서버 사이드 리다이렉트)만 확인한다 — meta refresh /
+        # JS location 대입 / 리다이렉트 실행 증거 없이 값만 반사되는 케이스는 다루지 않으므로
+        # reflected_bridge로 같은 job 목록을 재사용해 그 세 가지만 보강 확인한다.
+        vf, vstats = reflected_bridge.run_on_jobs(
+            redirect_jobs,
+            on_progress=_seg_progress(len(redirect_jobs), "reflected "),
+        )
+        findings.extend(vf)
+        stats["reflected_probe"] = vstats
+        progress_offset += len(redirect_jobs)
+
+        # SPA는 로그인 성공 후 클라이언트 JS가 ?next=/?returnUrl= 값을 읽어 location을
+        # 대입하는 경우가 흔한데, 이건 정적 응답 문자열 매칭(위 reflected_bridge)으로는
+        # 원리적으로 못 잡는다 — 로그인/인증 문맥 후보만 추려 실제 헤드리스 브라우저로
+        # 검증한다 (느리므로 소수 후보에만 적용).
+        # auth_session은 위에서 이미 조회했다 — phase A/B job 생성에 쓴 것과 같은
+        # 세션을 재사용해 여기서 다시 로그인하지 않는다.
+        browser_cookies = None
+        if auth_session and auth_session.get("delivery") == "cookie" and auth_session.get("token"):
+            browser_cookies = {auth_session.get("cookie_name", "accessToken"): auth_session["token"]}
+        bf, bstats = reflected_bridge.run_login_redirect_browser_check(
+            redirect_jobs,
+            cookies=browser_cookies,
+            on_progress=_seg_progress(login_candidate_count, "browser "),
+        )
+        findings.extend(bf)
+        stats["reflected_browser"] = bstats
+        progress_offset += login_candidate_count
 
     if opts.cors_enabled and bases:
         cf, cstats = probes.run_cors_probes(

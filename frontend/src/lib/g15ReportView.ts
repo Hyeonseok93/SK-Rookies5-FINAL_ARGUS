@@ -6,7 +6,7 @@ export type G15Finding = {
   evidence?: Record<string, unknown>;
 };
 
-export type G15Category = "redirect" | "cors" | "crossdomain";
+export type G15Category = "redirect" | "cors" | "crossdomain" | "reflected";
 
 export type G15DetailField = { label: string; value: string };
 
@@ -31,6 +31,7 @@ const CATEGORY_LABELS: Record<G15Category, string> = {
   redirect: "외부 리다이렉트",
   cors: "CORS",
   crossdomain: "crossdomain.xml",
+  reflected: "반사(Reflected) 확인",
 };
 
 type ReasonCopy = { label: string; summary: string; headline: string; detail: string };
@@ -77,6 +78,30 @@ const CROSSDOMAIN_REASON_COPY: Record<string, ReasonCopy> = {
     summary: "allow-access-from 규칙 존재",
     headline: "crossdomain.xml에 외부 도메인 허용 규칙이 있음",
     detail: "crossdomain.xml에 allow-access-from 규칙이 있습니다. 필요 최소 범위인지 확인하세요.",
+  },
+};
+
+const REFLECTED_DETECTION_COPY: Record<string, ReasonCopy> = {
+  meta_refresh: {
+    label: "meta refresh 리다이렉트",
+    summary: "meta refresh 태그로 외부 이동",
+    headline: "meta refresh 태그에 외부 주소가 그대로 반영됨",
+    detail:
+      "응답 본문의 <meta http-equiv=\"refresh\"> 태그에 주입한 외부 주소가 그대로 반영되어, 브라우저가 자동으로 외부 사이트로 이동할 수 있습니다.",
+  },
+  js_redirect: {
+    label: "JS location 리다이렉트",
+    summary: "JS location 대입으로 외부 이동",
+    headline: "JavaScript location 대입 코드에 외부 주소가 그대로 반영됨",
+    detail:
+      "응답에 포함된 JavaScript의 location 대입 코드(location.href/.replace()/.assign())에 주입한 외부 주소가 그대로 반영되어, 페이지 로드 시 브라우저가 외부 사이트로 이동될 수 있습니다.",
+  },
+  reflected_value: {
+    label: "값 반사만 확인됨 (참고)",
+    summary: "리다이렉트 실행 증거 없이 값만 반사",
+    headline: "입력값이 검증 없이 응답에 그대로 반사됨 (리다이렉트 실행 증거 없음)",
+    detail:
+      "주입한 값이 응답 본문에 그대로 나타나지만, 실제 리다이렉트 실행(Location 헤더/meta refresh/JS location 대입) 증거는 없습니다. 타입 검증 실패 에러 메시지 등에서도 흔히 발생하는 패턴이라 1-5 확정 취약점은 아니며, 참고용 정보 노출 신호로만 취급해야 합니다.",
   },
 };
 
@@ -256,6 +281,51 @@ export function parseG15Row(f: G15Finding): G15Row | null {
     };
   }
 
+  if (ruleId === "1-5-reflected-probe") {
+    const trigger = ev.trigger != null ? String(ev.trigger) : "";
+    const url = String(ev.url ?? "");
+    const param = ev.param_name != null ? String(ev.param_name) : null;
+    const path = pathFromUrl(url);
+    const confirmed = ev.confirmed_redirect === true;
+    const testStatus = ev.test_status;
+    const copy = REFLECTED_DETECTION_COPY[trigger] ?? {
+      label: "반사(Reflected) 확인",
+      summary: "값이 응답에 그대로 반사됨",
+      headline: "주입한 값이 응답에 그대로 반사됨",
+      detail: "주입한 값이 응답에 그대로 반사되는지만 결정적 규칙으로 확인한 결과입니다.",
+    };
+
+    addField(detailFields, "요청 URL", url);
+    addField(detailFields, "메서드", ev.method);
+    addField(detailFields, "파라미터", param);
+    addField(detailFields, "주입 payload", ev.payload_used);
+    addField(detailFields, "우회 기법", ev.payload_description);
+    addField(detailFields, "HTTP (baseline)", ev.baseline_status);
+    addField(detailFields, "HTTP (test)", testStatus);
+    addField(detailFields, "반사된 응답 스니펫", ev.evidence_snippet);
+    addField(detailFields, "조치 방안", ev.recommendation);
+    addField(detailFields, "요청 바디/쿼리", ev.request_body);
+
+    return {
+      rowKey: `${engine}|${url}|${param ?? ""}|${trigger}|${ev.payload_used ?? ""}`,
+      category: "reflected",
+      categoryLabel: CATEGORY_LABELS.reflected,
+      checkLabel: param ? `${path} · ${param}` : path,
+      issueLabel: confirmed ? copy.label : `${copy.label} — 미확정`,
+      headline: copy.headline,
+      scaleSummary: confirmed
+        ? `HTTP ${testStatus ?? "—"} · 리다이렉트 실행 증거 있음`
+        : `HTTP ${testStatus ?? "—"} · 반사만 확인, 리다이렉트 실행 증거 없음`,
+      plainExplanation: ev.description != null ? String(ev.description) : copy.detail,
+      targetHint: null,
+      severity: f.severity,
+      severityLabel: sevLabel,
+      engine,
+      message: f.message,
+      detailFields,
+    };
+  }
+
   return null;
 }
 
@@ -270,7 +340,7 @@ export function parseG15Findings(findings: G15Finding[]): {
     if (row) rows.push(row);
     else if (f.message !== "1-5 scan statistics") other.push(f);
   }
-  const catOrder: Record<G15Category, number> = { redirect: 0, cors: 1, crossdomain: 2 };
+  const catOrder: Record<G15Category, number> = { redirect: 0, reflected: 1, cors: 2, crossdomain: 3 };
   rows.sort((a, b) => {
     const sev = severityRank(b.severity) - severityRank(a.severity);
     if (sev !== 0) return sev;

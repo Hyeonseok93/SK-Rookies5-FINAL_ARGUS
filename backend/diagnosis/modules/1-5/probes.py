@@ -18,7 +18,15 @@ def _request(
 ) -> tuple[int | None, dict[str, str], str | None]:
     method = str(job.get("method") or "GET").upper()
     url = str(job["url"])
-    headers = dict(job.get("headers") or {})
+    # job["headers"]는 원본 baseline 요청 시점에 캡처된 헤더라 Content-Length가 그 body 기준으로
+    # 박혀 있다. 여기서 body를 페이로드로 교체하면 길이가 달라져 h11이
+    # "Too much data for declared Content-Length"로 요청 자체를 거부한다 — httpx가 content=로
+    # 실제 길이를 다시 계산하도록 stale Content-Length/Transfer-Encoding은 제거한다.
+    headers = {
+        k: v
+        for k, v in (job.get("headers") or {}).items()
+        if k.lower() not in ("content-length", "transfer-encoding")
+    }
     body = job.get("body") or ""
     try:
         resp = client.request(

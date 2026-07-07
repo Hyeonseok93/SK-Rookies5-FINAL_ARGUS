@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import parse_qs, urlencode, urlparse
 
+from inventory.auth_util import auth_headers
 from inventory.load import load_api_tree
 from inventory.net import probe_base_url, probe_url
 from diagnosis.replay.normalize import collect_probe_base_urls as collect_base_urls, filter_endpoints_by_probe_bases
@@ -135,6 +136,7 @@ def build_phase_a_jobs(
     sample_size: int,
     max_params_per_endpoint: int,
     max_jobs: int,
+    account_auth: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if tree is None:
         return []
@@ -158,7 +160,10 @@ def build_phase_a_jobs(
             continue
 
         try:
-            baseline_probe = build_probe_request(ep, probe_base_fn=_probe_base_fn)
+            # account_auth 없이 보내면 인증이 필요한 엔드포인트는 컨트롤러 로직에
+            # 도달하기도 전에 401로 막혀, 페이로드가 반사/리다이렉트될 여지 자체가
+            # 없다 — 로그인된 세션으로 보내야 실제 취약점 여부를 판단할 수 있다.
+            baseline_probe = build_probe_request(ep, probe_base_fn=_probe_base_fn, account_auth=account_auth)
         except Exception:
             continue
 
@@ -256,6 +261,7 @@ def build_phase_b_jobs(
     probe_mode: ProbeMode,
     sample_size: int,
     max_jobs: int,
+    account_auth: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if tree is None or probe_mode == "base_only":
         return []
@@ -267,6 +273,12 @@ def build_phase_b_jobs(
         mode=probe_mode,
         sample_size=max(sample_size * 3, sample_size),
     )
+
+    # phase A(build_probe_request 경유)와 동일하게, 인증 없이 보내면 로그인이 필요한
+    # 엔드포인트는 컨트롤러 로직에 도달하기 전에 401로 막혀 리다이렉트 여부를 판단할
+    # 수 없다 — 여기는 build_probe_request를 거치지 않고 헤더를 직접 구성하므로
+    # auth_headers()로 동일한 인증 헤더를 수동으로 얹어준다.
+    base_headers = {"Accept": "*/*", "User-Agent": "ARGUS-1-5/1.0", **auth_headers(account_auth)}
 
     probe_counter = 0
     for ep in endpoints:
@@ -300,7 +312,7 @@ def build_phase_b_jobs(
                     "test_url": test_url,
                     "param_name": param_name,
                     "param_in": "query",
-                    "headers": {"Accept": "*/*", "User-Agent": "ARGUS-1-5/1.0"},
+                    "headers": dict(base_headers),
                     "body": "",
                     "base_url": ep.base_url,
                     "path": clean_path,
