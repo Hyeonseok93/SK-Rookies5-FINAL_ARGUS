@@ -79,6 +79,9 @@ def endpoint_to_scan_target(ep: Endpoint) -> ScanTarget:
 def load_scan_targets(
     data_dir: Path,
     raw_config: dict[str, Any],
+    *,
+    max_targets: int,
+    scan_all: bool,
 ) -> tuple[list[ScanTarget], dict[str, Any]]:
     tree = load_api_tree(data_dir)
     if tree is None or not tree.endpoints:
@@ -96,6 +99,9 @@ def load_scan_targets(
         api_eps = [ep for ep in scoped if ep.kind == "api"]
 
     ranked = sorted(api_eps, key=_endpoint_rank, reverse=True)
+    if not scan_all and max_targets > 0:
+        ranked = ranked[:max_targets]
+
     targets = [endpoint_to_scan_target(ep) for ep in ranked]
     with_params = sum(1 for t in targets if t.params)
 

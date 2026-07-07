@@ -59,12 +59,20 @@ class _Tee:
 
     def write(self, data):
         for stream in self.streams:
-            stream.write(data)
-            stream.flush()
+            try:
+                if not getattr(stream, "closed", False):
+                    stream.write(data)
+                    stream.flush()
+            except (ValueError, OSError):
+                pass
 
     def flush(self):
         for stream in self.streams:
-            stream.flush()
+            try:
+                if not getattr(stream, "closed", False):
+                    stream.flush()
+            except (ValueError, OSError):
+                pass
 
 
 @dataclass
@@ -814,16 +822,26 @@ def _scan_accounts(target_url: str, auth_tokens: list[dict], zap=None) -> list[d
 
 def scan_target(target_url: str, auth_tokens: list[dict] | None = None, result_dir: Path | None = None, endpoints: dict | None = None, components: dict | None = None) -> list[dict]:
     update_status(is_running=True, progress=0, message="ARGUS 1-1 backend scanner starting", result_file=None, total_alerts=0)
+    
+    if os.path.exists("/.dockerenv"):
+        target_url = target_url.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
+        if auth_tokens:
+            for token in auth_tokens:
+                if "target_url" in token:
+                    token["target_url"] = token["target_url"].replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
+
     auth_tokens = auth_tokens or []
     result_dir = result_dir or Path("scanner_app/results")
     _log(f"[G11] scan starting target={target_url.rstrip('/')} accounts={len(auth_tokens) or 1}")
 
     zap = None
-    for port in [8889, 8090]:
+    zap_proxy_env = os.environ.get("ZAP_PROXY")
+    proxy_urls = [zap_proxy_env] if zap_proxy_env else [f"http://127.0.0.1:{p}" for p in [8889, 8090]]
+    for proxy_url in proxy_urls:
         try:
-            zap = zap_adapter.connect_zap(f"http://127.0.0.1:{port}")
+            zap = zap_adapter.connect_zap(proxy_url)
             zap.core.version
-            _log(f"[ZAP] connected on port {port}")
+            _log(f"[ZAP] connected to {proxy_url}")
             break
         except Exception:
             zap = None
@@ -983,6 +1001,7 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
     g11_config = raw_config.get("diagnosis_1_1") or raw_config.get("g11") or {}
     target_url = g11_config.get("target_url") or raw_config.get("target_url")
     auth_tokens = g11_config.get("auth_tokens") or raw_config.get("auth_tokens") or []
+
     data_dir = Path(getattr(ctx, "data_dir", "data"))
     dashboard_base_urls: list[str] = []
     if not target_url and auth_tokens:
@@ -990,7 +1009,6 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
     if not target_url:
         try:
             from diagnosis.replay.normalize import collect_probe_base_urls, dedupe_probe_bases
-
             dashboard_base_urls, _ = dedupe_probe_bases(collect_probe_base_urls(raw_config))
             if dashboard_base_urls:
                 target_url = dashboard_base_urls[0]
@@ -998,13 +1016,10 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
             target_url = None
     if not target_url:
         return ScanResult(status="skipped", message="No target_url found for diagnosis 1-1.")
-    allowed_base_urls = dashboard_base_urls or [target_url]
-    api_tree, source_name = _load_api_tree(data_dir)
-    endpoints_by_base, components = _endpoints_by_base_from_api_tree(api_tree, allowed_base_urls) if api_tree else ({}, {})
+
     if not auth_tokens:
         try:
             from diagnosis.probe_auth import all_account_auths_with_meta
-
             sessions, _meta = all_account_auths_with_meta(raw_config, data_dir=data_dir, refresh=True)
             auth_tokens = [
                 {
@@ -1025,6 +1040,22 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
             ]
         except Exception:
             auth_tokens = []
+
+    import os
+    if os.path.exists("/.dockerenv"):
+        if isinstance(target_url, str):
+            target_url = target_url.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
+        dashboard_base_urls = [u.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal") for u in dashboard_base_urls if isinstance(u, str)]
+        if isinstance(auth_tokens, list):
+            for token in auth_tokens:
+                for k in ["target_url", "base_url"]:
+                    if k in token and isinstance(token[k], str):
+                        token[k] = token[k].replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
+
+    allowed_base_urls = dashboard_base_urls or [target_url]
+    api_tree, source_name = _load_api_tree(data_dir)
+    endpoints_by_base, components = _endpoints_by_base_from_api_tree(api_tree, allowed_base_urls) if api_tree else ({}, {})
+
     allowed_keys = {_base_key(u) for u in allowed_base_urls if str(u or "").strip()}
     if allowed_keys:
         auth_tokens = [

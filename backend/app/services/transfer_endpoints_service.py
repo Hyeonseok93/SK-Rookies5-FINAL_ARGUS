@@ -10,6 +10,7 @@ import re
 from urllib.parse import parse_qs, urlparse
 
 from diagnosis.replay.normalize import collect_probe_base_urls
+from inventory.probe_build import frontend_gateway_path
 from app.services.zap_util import probe_url
 
 TransferKind = Literal["upload", "download"]
@@ -29,19 +30,52 @@ def _default_bases(raw_config: dict[str, Any] | None) -> list[str]:
     return collect_probe_base_urls(raw_config)
 
 
-def resolve_transfer_endpoint_url(raw: str, raw_config: dict[str, Any] | None = None) -> str:
+def _logical_transfer_path(raw: str) -> str:
+    """Normalize a dashboard transfer path (leading slash only)."""
+    path = str(raw or "").strip()
+    if not path:
+        return "/"
+    return path if path.startswith("/") else f"/{path}"
+
+
+def _resolved_probe_url(base_url: str, logical_path: str) -> str:
+    base = base_url.rstrip("/")
+    path = frontend_gateway_path(base, _logical_transfer_path(logical_path))
+    return probe_url(f"{base}{path}")
+
+
+def resolve_transfer_targets(
+    raw: str,
+    raw_config: dict[str, Any] | None = None,
+) -> list[tuple[str, str, str]]:
+    """
+    Expand a dashboard transfer row to probe targets.
+
+    Returns (base_url, logical_path, resolved_probe_url) per dashboard Base URL.
+    Absolute URLs stay a single target; relative paths fan out to every base.
+    """
     s = str(raw).strip()
     if not s:
-        return ""
+        return []
     if s.startswith("http://") or s.startswith("https://"):
-        return probe_url(s.rstrip("/"))
+        parsed = urlparse(s)
+        base = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+        logical = _logical_transfer_path(parsed.path or "/")
+        return [(base, logical, _resolved_probe_url(base, logical))]
+    logical = _logical_transfer_path(s)
     bases = _default_bases(raw_config)
     if not bases:
-        return ""
-    base = bases[0].rstrip("/")
-    if s.startswith("/"):
-        return probe_url(f"{base}{s}")
-    return probe_url(f"{base}/{s.lstrip('/')}")
+        return []
+    return [
+        (base.rstrip("/"), logical, _resolved_probe_url(base, logical))
+        for base in bases
+    ]
+
+
+def resolve_transfer_endpoint_url(raw: str, raw_config: dict[str, Any] | None = None) -> str:
+    """First resolved probe URL (backward-compatible helper)."""
+    targets = resolve_transfer_targets(raw, raw_config)
+    return targets[0][2] if targets else ""
 
 
 def _normalize_method(raw: str | None, *, kind: TransferKind) -> str:
@@ -100,29 +134,22 @@ def dashboard_transfer_entries(
         raw_url = str(row.get("url") or "").strip()
         if not raw_url:
             continue
-        if raw_url.startswith("http://") or raw_url.startswith("https://"):
-            parsed = urlparse(raw_url)
-            logical_base = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
-        else:
-            bases = collect_probe_base_urls(raw_config)
-            logical_base = bases[0].rstrip("/") if bases else ""
-        resolved = resolve_transfer_endpoint_url(raw_url, raw_config)
-        if not resolved or resolved in seen:
-            continue
-        seen.add(resolved)
-        parsed = urlparse(resolved)
-        path = parsed.path or "/"
-        label = path.rstrip("/").split("/")[-1] or kind
-        entries.append(
-            {
-                "url": resolved,
-                "label": label,
-                "base_url": logical_base or f"{parsed.scheme}://{parsed.netloc}",
-                "path": path,
-                "method": str(row.get("method") or _DEFAULT_METHOD[kind]).upper(),
-                "source": "dashboard",
-            }
-        )
+        method = str(row.get("method") or _DEFAULT_METHOD[kind]).upper()
+        for base_url, logical_path, resolved in resolve_transfer_targets(raw_url, raw_config):
+            if not resolved or resolved in seen:
+                continue
+            seen.add(resolved)
+            label = logical_path.rstrip("/").split("/")[-1] or kind
+            entries.append(
+                {
+                    "url": resolved,
+                    "label": label,
+                    "base_url": base_url,
+                    "path": logical_path,
+                    "method": method,
+                    "source": "dashboard",
+                }
+            )
     return entries
 
 

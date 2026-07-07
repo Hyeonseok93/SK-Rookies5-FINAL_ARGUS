@@ -17,6 +17,7 @@ UNSAFE_METHODS = {"DELETE", "PATCH"}
 DEFAULT_TYPES = (
     InjectionType.SQL,
     InjectionType.NOSQL,
+    InjectionType.SSTI,
     InjectionType.COMMAND,
     InjectionType.XPATH,
 )
@@ -31,9 +32,7 @@ def parse_injection_types(raw: Iterable[str] | None) -> list[InjectionType]:
         if not key:
             continue
         if key == "ALL":
-            return list(DEFAULT_TYPES)
-        if key == "SSTI":
-            continue
+            return list(InjectionType)
         try:
             selected.append(InjectionType[key])
         except KeyError:
@@ -207,8 +206,8 @@ EXCLUDED_FROM_INJECTION_REPORT = frozenset(
     {
         "SUSPECTED_SERVER_ERROR_SIGNAL",
         "SUSPECTED_INJECTION",
-        "WEAK_SERVER_ERROR_CONFIRMED_LEGACY",
         "VERIFICATION_ERROR",
+        "WEAK_SERVER_ERROR_CONFIRMED_LEGACY",
     }
 )
 
@@ -253,10 +252,10 @@ def annotate_result(result: DetectionResult) -> DetectionResult:
         result.classification = "CONFIRMED_INJECTION_BOOLEAN_BASED"
         result.confidence = "MEDIUM"
         result.argus_risk = "MEDIUM"
-        result.related_issue = "Potential Injection / Boolean-based Response Difference"
+        result.related_issue = "SQL Injection / Boolean-based Blind SQL Injection"
         result.why_injection = "True/false payloads produced stable response differences."
-        result.risk_comment = "Boolean-only evidence can overlap with validation or business-rule differences."
-        result.reporting_guidance = "Report as a reproducible candidate; confirm with logs/query tracing before calling it high risk."
+        result.risk_comment = "Reproducible response delta, but validation/auth/error handling can also cause boolean-like differences."
+        result.reporting_guidance = "Report as weak positive; re-check with logs or parameterized query tracing."
     elif result.verification_status == VerificationStatus.VERIFIED and error_verified and matched_patterns:
         result.classification = "CONFIRMED_INJECTION_ERROR_PATTERN"
         result.confidence = "HIGH"

@@ -13,6 +13,7 @@ from app.services.zap_util import (
     zap_send_raw_request_full,
 )
 from diagnosis.result import DiagnosisFinding
+from inventory.net import probe_base_url
 from inventory.probe_build import build_body_object, build_probe_request, format_raw_http_request, sample_value
 from inventory.schema import Endpoint
 from inventory.tags import PATH_LIKE_NAMES
@@ -367,6 +368,7 @@ def build_probe_result_evidence(
         "endpoint_id": ep.endpoint_id,
         "method": ep.method,
         "path": ep.path,
+        "base_url": probe_base_url(ep.base_url or ""),
         "param": param_name,
         "param_in": param_in,
         "payload": primary.get("payload"),

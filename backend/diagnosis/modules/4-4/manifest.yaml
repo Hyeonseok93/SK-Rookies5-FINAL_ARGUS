@@ -1,5 +1,5 @@
 id: "4-4"
 title: "비인증 상태로 중요 page접근 가능성"
 chapter: 4
-implemented: false
-engine: pending
+implemented: true
+engine: httpx

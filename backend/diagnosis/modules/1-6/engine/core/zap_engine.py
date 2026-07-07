@@ -3,8 +3,10 @@
 # OWASP ZAP 을 제어해 Spider(크롤링) → Active Scan(취약점 탐지) 순서로 실행합니다.
 # =============================================================================
 
+import json
 import time
 import logging
+from urllib.parse import urlparse, parse_qsl
 from zapv2 import ZAPv2
 from config import Config
 
@@ -256,3 +258,126 @@ class ZAPEngine:
         alerts = self.zap.core.alerts(baseurl=target)
         logger.info(f"[ZAP] 경보 수집 완료 ─ 총 {len(alerts)} 건")
         return alerts
+
+    # -------------------------------------------------------------------------
+    # ZAP HTTP history에서 "사람이 실제로 성공시킨" 요청을 뽑아 템플릿화.
+    #
+    # 판단 기준: 응답 상태코드가 200<=status<400 인 것만 "정상 요청"으로
+    # 인정한다. 이 기준은 fuzzer.Config.BASELINE_VALID_STATUS_MIN/MAX와
+    # 반드시 동일하게 맞춰야 함 (두 곳이 어긋나면 fuzzer가 baseline_ok로
+    # 판단한 값인데 애초에 템플릿으로는 안 만들어지는 모순이 생김).
+    # -------------------------------------------------------------------------
+    def collect_request_templates(self, target: str, output_path: str = "", limit: int = 500) -> list:
+        templates = []
+        seen = set()
+        try:
+            messages = self.zap.core.messages(baseurl=target, start=0, count=limit)
+        except TypeError:
+            messages = self.zap.core.messages(target, 0, limit)
+        except Exception as e:
+            logger.warning(f"[ZAP] request template collection failed: {e}")
+            messages = []
+
+        for msg in messages or []:
+            template = self._message_to_template(msg, target)
+            if not template:
+                continue
+            key = (template["method"], template["path"])
+            if key in seen:
+                continue
+            seen.add(key)
+            templates.append(template)
+
+        if output_path:
+            try:
+                with open(output_path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "schema_version": "1.0",
+                            "source": "zap_http_history",
+                            "target": target,
+                            "valid_status_range": [Config.BASELINE_VALID_STATUS_MIN, Config.BASELINE_VALID_STATUS_MAX],
+                            "templates": templates,
+                        },
+                        f,
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+            except Exception as e:
+                logger.warning(f"[ZAP] request template write failed: {e}")
+
+        logger.info(f"[ZAP] request templates collected: {len(templates)}")
+        return templates
+
+    def _message_to_template(self, msg: dict, target: str):
+        try:
+            method, url = self._request_line(msg.get("requestHeader", ""))
+            if not method or not url or not url.startswith(target):
+                return None
+            status = self._response_status(msg.get("responseHeader", ""))
+            if status is not None and not (Config.BASELINE_VALID_STATUS_MIN <= status < Config.BASELINE_VALID_STATUS_MAX):
+                return None
+
+            parsed = urlparse(url)
+            headers = self._headers_from_request(msg.get("requestHeader", ""))
+            body_text = msg.get("requestBody", "") or ""
+            body = self._parse_body(body_text, headers)
+            return {
+                "method": method.upper(),
+                "url": url,
+                "path": parsed.path or "/",
+                "query": dict(parse_qsl(parsed.query, keep_blank_values=True)),
+                "headers": self._safe_headers(headers),
+                "body": body,
+                "body_text": "" if body is not None else body_text[:4000],
+                "status_code": status,
+            }
+        except Exception:
+            return None
+
+    @staticmethod
+    def _request_line(header: str):
+        first = (header or "").splitlines()[0] if header else ""
+        parts = first.split()
+        if len(parts) < 2:
+            return "", ""
+        return parts[0], parts[1]
+
+    @staticmethod
+    def _response_status(header: str):
+        first = (header or "").splitlines()[0] if header else ""
+        parts = first.split()
+        if len(parts) >= 2 and parts[1].isdigit():
+            return int(parts[1])
+        return None
+
+    @staticmethod
+    def _headers_from_request(header: str) -> dict:
+        headers = {}
+        for line in (header or "").splitlines()[1:]:
+            if ":" not in line:
+                continue
+            k, v = line.split(":", 1)
+            headers[k.strip()] = v.strip()
+        return headers
+
+    @staticmethod
+    def _safe_headers(headers: dict) -> dict:
+        blocked = {"authorization", "cookie", "host", "content-length"}
+        return {k: v for k, v in (headers or {}).items() if k.lower() not in blocked}
+
+    @staticmethod
+    def _parse_body(body_text: str, headers: dict):
+        if not body_text:
+            return None
+        content_type = ""
+        for k, v in (headers or {}).items():
+            if k.lower() == "content-type":
+                content_type = v.lower()
+                break
+        if "application/json" in content_type:
+            try:
+                return json.loads(body_text)
+            except Exception:
+                return None
+        return None

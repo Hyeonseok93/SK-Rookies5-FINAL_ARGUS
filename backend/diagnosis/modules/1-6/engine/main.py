@@ -51,6 +51,11 @@ def parse_args():
                         help="UI URL for Selenium login and screenshot capture")
     parser.add_argument("--api-spec",   default="",
                         help="Swagger/OpenAPI JSON file path or URL")
+    parser.add_argument("--admin-api-spec", default="",
+                        help="Separate Swagger/OpenAPI JSON for an admin backend served on a different host/port")
+    parser.add_argument("--admin-target", default="",
+                        help="Admin API base URL override, e.g. http://localhost:8081. "
+                             "If omitted, uses the servers[0].url found in --admin-api-spec.")
     parser.add_argument("--login-spec", default="",
                         help="Separate Swagger/OpenAPI JSON used to detect the login endpoint")
     parser.add_argument("--login-target", default="",
@@ -75,6 +80,12 @@ def parse_args():
                         help="Maximum requests per role/method/endpoint/payload stage; 0 means unlimited")
     parser.add_argument("--circuit-breaker-failures", default=None, type=int,
                         help="Consecutive timeout/5xx count before blocking an endpoint")
+    parser.add_argument("--resume-dir", default="",
+                        help="Resume a previously interrupted run by pointing at its "
+                             "existing W16_* output directory (e.g. "
+                             "./output/W16_20260706_045927_6f9138c6). Reuses that folder's "
+                             "temp_progress.txt / temp_findings.jsonl instead of starting a "
+                             "brand-new run directory, so already-completed test cases are skipped.")
     return parser.parse_args()
 
 
@@ -105,6 +116,8 @@ def main():
     cfg.TARGET_URL = args.target
     cfg.UI_TARGET_URL = args.ui_target or args.target
     cfg.API_SPEC = args.api_spec
+    cfg.ADMIN_API_SPEC = args.admin_api_spec
+    cfg.ADMIN_TARGET = args.admin_target
     cfg.LOGIN_SPEC = args.login_spec
     cfg.LOGIN_TARGET = args.login_target
     cfg.LOGIN_PATH = args.login_path
@@ -129,12 +142,33 @@ def main():
     cfg.validate()
 
     output_base_dir = cfg.OUTPUT_DIR
-    os.makedirs(output_base_dir, exist_ok=True)
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + str(uuid.uuid4())[:8]
-    run_output_dir = os.path.join(output_base_dir, f"W16_{run_id}")
-    os.makedirs(run_output_dir, exist_ok=True)
+    if args.resume_dir:
+        # ← ADDED: Task Resume - reuse an existing run directory instead of
+        # always minting a fresh W16_{timestamp}_{uuid} folder. Without this,
+        # the skip-completed-tasks logic in fuzzer.py._run_payload_set()
+        # (temp_progress.txt / temp_findings.jsonl) never had a chance to
+        # fire, because every run looked in a brand-new, empty directory.
+        run_output_dir = os.path.abspath(args.resume_dir)
+        if not os.path.isdir(run_output_dir):
+            logger.error(f"[MAIN] --resume-dir does not exist: {run_output_dir}")
+            sys.exit(1)
+        output_base_dir = os.path.dirname(run_output_dir)
+        run_id = os.path.basename(run_output_dir.rstrip("/\\")).replace("W16_", "", 1)
+        existing_progress = os.path.join(run_output_dir, "temp_progress.txt")
+        existing_findings = os.path.join(run_output_dir, "temp_findings.jsonl")
+        logger.info(f"[MAIN] --resume-dir given: {run_output_dir}")
+        logger.info(
+            f"[MAIN] progress file present: {os.path.exists(existing_progress)}, "
+            f"findings file present: {os.path.exists(existing_findings)}"
+        )
+    else:
+        os.makedirs(output_base_dir, exist_ok=True)
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + str(uuid.uuid4())[:8]
+        run_output_dir = os.path.join(output_base_dir, f"W16_{run_id}")
+        os.makedirs(run_output_dir, exist_ok=True)
     cfg.OUTPUT_BASE_DIR = output_base_dir
     cfg.OUTPUT_DIR = run_output_dir
+    cfg.REQUEST_TEMPLATES = os.path.join(run_output_dir, "request_templates.json")
     logger.info(f"[MAIN] ARGUS W-1-6 v3 started - run_id: {run_id}")
     logger.info(f"[MAIN] output dir: {cfg.OUTPUT_DIR}")
     logger.info(f"[MAIN] target: {cfg.TARGET_URL}")
@@ -151,7 +185,9 @@ def main():
         logger.info("[MAIN] === Step 1: Parse Swagger/OpenAPI spec ===")
         try:
             parser = SwaggerParser(cfg.API_SPEC)
-            fuzz_targets = parser.get_fuzz_targets()
+            # override_host=cfg.TARGET_URL: 스펙에 적힌 서버 주소가 오래됐어도
+            # 항상 --target이 우선하는 기존 동작을 유지한다.
+            fuzz_targets = parser.get_fuzz_targets(override_host=cfg.TARGET_URL)
             login_info = parser.get_login_info()
             auth_type = parser.get_auth_type()
             swagger_endpoints = [t["path"] for t in fuzz_targets]
@@ -161,6 +197,24 @@ def main():
             logger.warning("[MAIN] Falling back to Selenium-discovered endpoints.")
     else:
         logger.info("[MAIN] === Step 1: --api-spec not provided; Selenium fallback may be used ===")
+
+    # admin처럼 별도 호스트/포트에서 서비스되는 백엔드가 있으면 스펙을 따로
+    # 파싱해서 fuzz_targets에 합친다. override_host를 안 주면 admin 스펙의
+    # servers[0].url(예: swagger_admin.json의 http://localhost:8081)을
+    # 그대로 사용한다.
+    if cfg.ADMIN_API_SPEC:
+        logger.info("[MAIN] === Step 1b: Parse admin Swagger/OpenAPI spec ===")
+        try:
+            admin_parser = SwaggerParser(cfg.ADMIN_API_SPEC)
+            admin_fuzz_targets = admin_parser.get_fuzz_targets(override_host=cfg.ADMIN_TARGET)
+            fuzz_targets.extend(admin_fuzz_targets)
+            swagger_endpoints.extend(t["path"] for t in admin_fuzz_targets)
+            admin_base = admin_fuzz_targets[0]["base_url"] if admin_fuzz_targets else "(unknown)"
+            logger.info(
+                f"[MAIN] Admin spec parsed: endpoints={len(admin_fuzz_targets)}, base_url={admin_base}"
+            )
+        except Exception as e:
+            logger.error(f"[MAIN] Admin spec parse failed: {e}")
 
     if cfg.LOGIN_SPEC:
         try:
@@ -258,6 +312,14 @@ def main():
 
                 logger.info("[MAIN] === Run ZAP Active Scan ===")
                 zap.run_active_scan(cfg.TARGET_URL)
+
+                # 사람이 로그인해서 정상 플로우를 클릭해둔 히스토리를 여기서
+                # 템플릿으로 뽑는다. 이 파일이 없으면 fuzzer는 스키마 추측값으로
+                # 폴백하고, request_context.zap_template_used=False로 남는다.
+                try:
+                    zap.collect_request_templates(cfg.TARGET_URL, cfg.REQUEST_TEMPLATES)
+                except Exception as e:
+                    logger.warning(f"[MAIN] request template collection failed: {e}")
             except Exception as e:
                 logger.error(f"[MAIN] ZAP failed: {e}; continuing with fuzzer only")
                 zap = None
@@ -547,6 +609,7 @@ def _classify_finding(finding, exception_type, system_message):
     status_code = str(finding.get("status_code", ""))
     source = finding.get("source", "")
     url = finding.get("url", "")
+    snippet = str(finding.get("response_text_snippet") or "").lower()
     evidence_flags = []
     noise_flags = []
     final_status = "potential_vulnerable"
@@ -562,6 +625,36 @@ def _classify_finding(finding, exception_type, system_message):
         evidence_flags.append("internal_error_message_exposed")
     if exception_type:
         evidence_flags.append(exception_type)
+    benign_4xx_exceptions = {
+        "HttpRequestMethodNotSupported",
+        "NoStaticResource",
+        "NoResourceFoundException",
+    }
+    meaningful_4xx_exception = bool(exception_type) and exception_type not in benign_4xx_exceptions
+    has_4xx_leak = status_code.startswith("4") and (
+        meaningful_4xx_exception
+        or any(
+            marker in snippet
+            for marker in (
+                "stack trace",
+                "stacktrace",
+                "traceback (most recent call last)",
+                "exception in thread",
+                "sql syntax",
+                "sqlstate",
+                "sql exception",
+                "syntax error at or near",
+                "select * from",
+                "insert into",
+                "delete from",
+                "/var/",
+                "/usr/",
+                "/home/",
+                "c:\\",
+                "root:x:",
+            )
+        )
+    )
 
     if source == "cdp" and status_code == "200":
         final_status = "not_vulnerable"
@@ -575,6 +668,14 @@ def _classify_finding(finding, exception_type, system_message):
     elif status_code == "TIMEOUT":
         final_status = "potential_vulnerable"
         confidence = "low"
+    elif status_code == "413":
+        final_status = "not_vulnerable"
+        confidence = "medium"
+        noise_flags.append("payload_size_limit_rejected")
+    elif has_4xx_leak:
+        final_status = "potential_vulnerable"
+        confidence = "medium"
+        evidence_flags.append("4xx_internal_information_exposed")
     elif exception_type in {
         "MethodArgumentTypeMismatchException",
         "MethodArgumentTypeMismatch",
@@ -586,7 +687,7 @@ def _classify_finding(finding, exception_type, system_message):
         final_status = "vulnerable"
         confidence = "high" if status_code.startswith("5") else "medium"
     elif exception_type in {"NoStaticResource", "NoResourceFoundException"}:
-        final_status = "potential_vulnerable"
+        final_status = "potential_vulnerable" if status_code.startswith("5") else "not_vulnerable"
         confidence = "medium" if status_code.startswith("5") else "low"
     elif status_code.startswith("5"):
         final_status = "potential_vulnerable"
@@ -615,6 +716,7 @@ def _review_finding(finding):
     source = finding.get("source", "")
     evidence_reason = finding.get("evidence_reason", "")
     classification = finding.get("classification", {})
+    evidence_flags = set(classification.get("evidence_flags") or [])
 
     tags = []
     bucket = "manual_review"
@@ -648,6 +750,20 @@ def _review_finding(finding):
         priority = "EXCLUDE"
         reason = "Endpoint is an exploratory scanner path, not a confirmed Swagger operation."
         report_group = "exploratory_path_noise"
+    elif status_code == "413":
+        tags.append("payload_size_limit")
+        bucket = "noise"
+        action = "exclude_from_report"
+        priority = "EXCLUDE"
+        reason = "Server rejected the oversized payload with a request size limit."
+        report_group = "payload_size_limit_rejection"
+    elif status_code.startswith("4") and "4xx_internal_information_exposed" in evidence_flags:
+        tags.extend(["client_error", "information_disclosure"])
+        bucket = "manual_review"
+        action = "manual_validate_only"
+        priority = "B"
+        reason = "The request was rejected, but the 4xx response body contains internal information."
+        report_group = "4xx_information_disclosure_manual_review"
     elif source == "zap" and status_code.startswith("4"):
         tags.extend(["zap", "client_error"])
         bucket = "noise"

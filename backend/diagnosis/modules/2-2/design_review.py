@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from diagnosis.result import DiagnosisFinding
+from inventory.net import probe_base_url
 from inventory.schema import Endpoint
 
 # Guideline 2-2: prefer opaque fileId over direct path/filename composition
@@ -58,7 +59,7 @@ def review_design(candidates: list[Endpoint]) -> list[DiagnosisFinding]:
                         "endpoint_id": ep.endpoint_id,
                         "method": ep.method,
                         "path": ep.path,
-                        "base_url": ep.base_url,
+                        "base_url": probe_base_url(ep.base_url or ""),
                         "param_in": inp.in_,
                         "param_name": name,
                     },

@@ -7,7 +7,12 @@ export interface GuidelineSection {
 }
 
 export const GUIDELINE_SECTIONS: GuidelineSection[] = [
-  { id: "1-1", title: "XSS / CSRF 공격 가능성", chapter: 1 },
+  { 
+    id: "1-1", 
+    title: "XSS / CSRF 공격 가능성", 
+    chapter: 1, 
+    description: "• XSS (교차 사이트 스크립팅)\n  공격자가 웹 페이지에 악성 스크립트를 삽입하여, 다른 사용자가 해당 페이지를 열람할 때 브라우저에서 스크립트가 실행되도록 하는 취약점입니다. 주로 세션 쿠키 탈취나 권한 도용에 악용됩니다.\n\n• CSRF (교차 사이트 요청 위조)\n  사용자가 자신의 의지와는 무관하게, 공격자가 의도한 특정 요청(수정, 삭제 등)을 웹 서버로 전송하게 만드는 취약점입니다. 사용자가 이미 인증된 상태(로그인 상태)일 때 피해가 발생합니다." 
+  },
   { id: "1-2", title: "삽입(Injection) 공격 가능성", chapter: 1 },
   { id: "1-3", title: "파라미터 값 및 히든(Hidden) 필드 조작 가능성", chapter: 1 },
   { id: "1-4", title: "SSRF / File Inclusion 공격 가능성", chapter: 1 },

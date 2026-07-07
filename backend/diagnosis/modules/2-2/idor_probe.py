@@ -10,6 +10,7 @@ from typing import Any
 from app.services.zap_util import probe_url
 from diagnosis.replay.recorder import ReplaySession
 from diagnosis.result import DiagnosisFinding
+from inventory.net import probe_base_url
 from inventory.probe_build import build_probe_request
 from inventory.schema import Endpoint
 from parsers.parse_endpoints import DEFAULT_PATH_PARAMS
@@ -246,7 +247,7 @@ def _build_idor_finding(
         "related_sections": ["4-4", "4-5"],
         "method": ep.method,
         "path": ep.path,
-        "base_url": ep.base_url,
+        "base_url": probe_base_url(ep.base_url or ""),
         "http_status": other.http_status,
         **snippet,
         **meta,

@@ -58,6 +58,7 @@ export function buildInventory(payload: BuildInventoryPayload): Promise<BuildRes
   fd.append("url_list_enabled", String(selection.url_list_enabled));
   fd.append("api_list_enabled", String(selection.api_list_enabled));
   fd.append("openapi_enabled", String(selection.openapi_enabled));
+  fd.append("gradle_deps_enabled", String(selection.gradle_deps_enabled));
   if (selection.url_list_enabled && files.url_list) {
     fd.append("url_list_file", files.url_list);
   }
@@ -67,6 +68,11 @@ export function buildInventory(payload: BuildInventoryPayload): Promise<BuildRes
   if (selection.openapi_enabled && files.openapi.length > 0) {
     for (const file of files.openapi) {
       fd.append("openapi_files", file);
+    }
+  }
+  if (selection.gradle_deps_enabled && files.gradle_deps.length > 0) {
+    for (const file of files.gradle_deps) {
+      fd.append("gradle_deps_files", file);
     }
   }
   return request("/inventory/build", { method: "POST", body: fd });
