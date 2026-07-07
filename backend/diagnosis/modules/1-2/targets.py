@@ -11,7 +11,7 @@ from diagnosis.replay.normalize import FRONTEND_PORTS, filter_endpoints_by_probe
 from inventory.load import load_api_tree
 from inventory.schema import Endpoint, InputParam
 
-from models import InputSource, ParamLocation, ScanParam, ScanTarget
+from g12_models import InputSource, ParamLocation, ScanParam, ScanTarget
 from sample_values import pick_sample_value
 
 _LOCATION_MAP = {

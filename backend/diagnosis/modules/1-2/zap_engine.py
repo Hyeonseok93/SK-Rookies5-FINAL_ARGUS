@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import requests
 from zapv2 import ZAPv2
 
-from models import DetectionResult, InjectionType
+from g12_models import DetectionResult, InjectionType
 
 
 class ZapEngine:

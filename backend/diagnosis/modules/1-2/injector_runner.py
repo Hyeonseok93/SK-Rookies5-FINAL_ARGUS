@@ -10,7 +10,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 import requests
 
 from app.services.zap_util import probe_url
-from models import DetectionResult, InjectionType, ScanParam, ScanTarget, VerificationStatus
+from g12_models import DetectionResult, InjectionType, ScanParam, ScanTarget, VerificationStatus
 from sample_values import alternate_samples, is_generic_sample
 
 UNSAFE_METHODS = {"DELETE", "PATCH"}

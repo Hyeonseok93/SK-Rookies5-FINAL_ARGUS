@@ -53,6 +53,7 @@ def test_secure_headers_pass():
         "x-content-type-options": "nosniff",
         "referrer-policy": "strict-origin-when-cross-origin",
         "permissions-policy": "geolocation=()",
+        "x-xss-protection": "1; mode=block",
     }
     issues = rules.scan_response_security(
         "https://example.com/",

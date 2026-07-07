@@ -23,12 +23,12 @@ def _load_g12(name: str):
         sv_mod = importlib.util.module_from_spec(sv_spec)
         sys.modules["sample_values"] = sv_mod
         sv_spec.loader.exec_module(sv_mod)
-    if "models" not in sys.modules and name not in ("models", "sample_values"):
-        models_path = _MODULE_DIR / "models.py"
-        models_spec = importlib.util.spec_from_file_location("models", models_path)
+    if "g12_models" not in sys.modules and name not in ("g12_models", "sample_values"):
+        models_path = _MODULE_DIR / "g12_models.py"
+        models_spec = importlib.util.spec_from_file_location("g12_models", models_path)
         assert models_spec and models_spec.loader
         models_mod = importlib.util.module_from_spec(models_spec)
-        sys.modules["models"] = models_mod
+        sys.modules["g12_models"] = models_mod
         models_spec.loader.exec_module(models_mod)
     spec = importlib.util.spec_from_file_location(mod_name, path)
     assert spec and spec.loader
@@ -113,7 +113,7 @@ def test_restore_reference_samples_fills_missing_type_sample():
 
 def test_should_keep_direct_unstable_baseline_as_suspected_in_aggressive_mode():
     payload_injector = _load_g12("payload_injector")
-    models = _load_g12("models")
+    models = _load_g12("g12_models")
     inj = payload_injector.BaseInjector(verification_mode="aggressive")
     result = models.DetectionResult(
         method="GET",
@@ -169,7 +169,7 @@ def test_should_keep_direct_unstable_baseline_as_suspected_in_aggressive_mode():
 
 def test_generic_5xx_without_sql_pattern_is_not_suspected():
     payload_injector = _load_g12("payload_injector")
-    models = _load_g12("models")
+    models = _load_g12("g12_models")
 
     class FakeInjector(payload_injector.SqliInjector):
         def send_probe(self, method, url, body, headers):
@@ -198,7 +198,7 @@ def test_generic_5xx_without_sql_pattern_is_not_suspected():
 
 def test_excluded_server_error_classification_not_reported():
     injector_runner = _load_g12("injector_runner")
-    models = _load_g12("models")
+    models = _load_g12("g12_models")
     result = models.DetectionResult(
         method="GET",
         url="http://example.test",
@@ -230,7 +230,7 @@ def test_excluded_server_error_classification_not_reported():
 
 def test_strict_mode_rejects_boolean_only_as_false_positive():
     payload_injector = _load_g12("payload_injector")
-    models = _load_g12("models")
+    models = _load_g12("g12_models")
     inj = payload_injector.BaseInjector(verification_mode="strict")
     result = models.DetectionResult(
         method="GET",
