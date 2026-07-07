@@ -29,8 +29,8 @@ def _load_local(name: str):
 
 
 def _bootstrap_locals():
-    models = _load_local("models")
-    sys.modules["models"] = models
+    models = _load_local("g12_models")
+    sys.modules["g12_models"] = models
     sample_values = _load_local("sample_values")
     sys.modules["sample_values"] = sample_values
     targets = _load_local("targets")

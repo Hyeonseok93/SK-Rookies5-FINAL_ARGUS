@@ -1,4 +1,4 @@
-"""Orchestrate guideline diagnosis modules (1-1 … 8-1)."""
+"""Orchestrate guideline diagnosis modules (1-1 ??8-1)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from diagnosis.context import DiagnosisContext
 from diagnosis.registry import get_module, get_modules, list_registered_ids
 from diagnosis.exceptions import DiagnosisCancelled
 from diagnosis.result import SectionReport
-
 
 def _inject_gradle_dep_files(raw: dict) -> dict:
     """data/gradle_dep_files.json에 저장된 경로를 diagnosis_7_4.gradle_dep_files에 주입한다.
@@ -43,6 +42,7 @@ def _inject_gradle_dep_files(raw: dict) -> dict:
 
     base_g74["gradle_dep_files"] = paths
     return {**raw, "diagnosis_7_4": base_g74}
+
 
 
 def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
@@ -144,7 +144,7 @@ def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
     return DiagnosisContext(
         data_dir=BACKEND_ROOT / "data",
         config=config_to_inventory_dict(cfg),
-        raw_config=_inject_gradle_dep_files(raw),
+        raw_config=raw,
     )
 
 
@@ -262,6 +262,8 @@ def _build_overrides(
     g41_options: dict | None = None,
     g42_options: dict | None = None,
     g21_options: dict | None = None,
+    g45_options: dict | None = None,
+    **kwargs: Any,
 ) -> dict | None:
     if g22_options and section_id == "2-2":
         return {"diagnosis_2_2": {k: v for k, v in g22_options.items() if v is not None}}
@@ -299,6 +301,8 @@ def _build_overrides(
         return {"diagnosis_4_2": {k: v for k, v in g42_options.items() if v is not None}}
     if g21_options and section_id == "2-1":
         return {"diagnosis_2_1": {k: v for k, v in g21_options.items() if v is not None}}
+    if g45_options and section_id == "4-5":
+        return {"diagnosis_4_5": {k: v for k, v in g45_options.items() if v is not None}}
     return None
 
 
@@ -333,6 +337,8 @@ def _run_options_kwargs(
     g41_options: dict | None = None,
     g42_options: dict | None = None,
     g21_options: dict | None = None,
+    g45_options: dict | None = None,
+    **kwargs: Any,
 ) -> dict[str, dict | None]:
     return {
         "g22_options": g22_options,
@@ -353,6 +359,7 @@ def _run_options_kwargs(
         "g41_options": g41_options,
         "g42_options": g42_options,
         "g21_options": g21_options,
+        "g45_options": g45_options,
     }
 
 
@@ -418,6 +425,8 @@ def start_section_run_background(
     g41_options: dict | None = None,
     g42_options: dict | None = None,
     g21_options: dict | None = None,
+    g45_options: dict | None = None,
+    **kwargs: Any,
 ) -> None:
     """Start a diagnosis run on a background thread (for long scans such as 6-1)."""
     from app.services import diagnosis_progress as dp
@@ -446,6 +455,7 @@ def start_section_run_background(
         g41_options=g41_options,
         g42_options=g42_options,
         g21_options=g21_options,
+        g45_options=g45_options,
     )
     overrides = _build_overrides(section_id, **option_kwargs)
     ctx = _context(overrides)
@@ -488,6 +498,8 @@ def run_section(
     g41_options: dict | None = None,
     g42_options: dict | None = None,
     g21_options: dict | None = None,
+    g45_options: dict | None = None,
+    **kwargs: Any,
 ) -> SectionReport:
     mod = _resolve_module(section_id)
     option_kwargs = _run_options_kwargs(
@@ -509,6 +521,7 @@ def run_section(
         g41_options=g41_options,
         g42_options=g42_options,
         g21_options=g21_options,
+        g45_options=g45_options,
     )
     overrides = _build_overrides(section_id, **option_kwargs)
     ctx = _context(overrides)
@@ -565,3 +578,5 @@ def run_replay(section_id: str, *, finding_id: str | None = None, use_playwright
         raw_config=raw,
         use_playwright=use_playwright,
     )
+
+

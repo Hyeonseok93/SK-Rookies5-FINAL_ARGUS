@@ -1,4 +1,4 @@
-﻿"""
+"""
 ARGUS v2 - Injection Payload Injector (Custom Multi-Signal Verification)
 """
 
@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-from models import DetectionResult, VerificationStatus
+from g12_models import DetectionResult, VerificationStatus
 
 
 @dataclass
