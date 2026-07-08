@@ -59,7 +59,7 @@ diagnosis_1_6:
   timeout_sec: 36000
   max_report_findings: 50
   role_login_targets:
-    admin: "http://localhost:8081"
+    admin: "http://localhost:8080"
   role_login_paths:
     admin: "/api/v1/auth/admin/login"
 
