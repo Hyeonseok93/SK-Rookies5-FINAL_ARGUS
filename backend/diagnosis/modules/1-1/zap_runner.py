@@ -971,15 +971,56 @@ def find_readable_endpoints_for_post(post_path: str, validated_endpoints: dict) 
 
     return candidates
 
+def is_resource_identifier_key(key: str = "") -> bool:
+    normalized = normalized_field_name(key)
+    return normalized == "id" or normalized.endswith("id") or normalized in {"uuid", "key", "no", "seq"}
+
+def is_resource_identifier_value(value) -> bool:
+    if value is None or isinstance(value, bool):
+        return False
+    text = str(value).strip()
+    if not text or len(text) > 128:
+        return False
+    return bool(
+        re.fullmatch(r"\d+", text)
+        or re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", text)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}", text)
+    )
+
 def extract_id_from_response(resp_json, depth=0):
     if depth > 3:
         return None
     if isinstance(resp_json, dict):
-        for key in ["id", "uuid", "key", "no", "seq"]:
-            if key in resp_json and resp_json[key] is not None:
-                return resp_json[key]
+        for key, value in resp_json.items():
+            if is_resource_identifier_key(key) and is_resource_identifier_value(value):
+                return value
         for value in resp_json.values():
             result = extract_id_from_response(value, depth + 1)
+            if result is not None:
+                return result
+    elif isinstance(resp_json, list):
+        for value in resp_json:
+            result = extract_id_from_response(value, depth + 1)
+            if result is not None:
+                return result
+    return None
+
+def extract_id_near_payload(value, payload: str, depth=0):
+    if depth > 6 or value is None:
+        return None
+    if isinstance(value, dict):
+        contains_payload = bool(payload and payload in json.dumps(value, ensure_ascii=False))
+        if contains_payload:
+            found = extract_id_from_response(value)
+            if found is not None:
+                return found
+        for child in value.values():
+            result = extract_id_near_payload(child, payload, depth + 1)
+            if result is not None:
+                return result
+    elif isinstance(value, list):
+        for child in value:
+            result = extract_id_near_payload(child, payload, depth + 1)
             if result is not None:
                 return result
     return None
@@ -993,6 +1034,18 @@ def extract_id_from_url(url: str):
         if re.fullmatch(r"\d+", segment or ""):
             return segment
     return None
+
+def extract_id_from_location(response):
+    if response is None:
+        return None
+    location = ""
+    try:
+        location = response.headers.get("Location") or response.headers.get("location") or ""
+    except Exception:
+        return None
+    if not location:
+        return None
+    return extract_id_from_url(location)
 
 def extract_session_cookie_name(set_cookie_header: str) -> str | None:
     if not set_cookie_header:
@@ -1402,6 +1455,119 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 resolved = resolved.replace(f"{{{param}}}", str(known_values[param]))
             return resolved
 
+        def path_param_matches_identifier(param_name: str, value) -> bool:
+            if value is None or isinstance(value, bool):
+                return False
+            return is_resource_identifier_value(value)
+
+        def request_parts_from_openapi(details: dict | None, components: dict | None, account: dict, token: str, base_url: str):
+            details = details or {}
+            req_params = build_query_defaults_from_details(details, components)
+            for query_param in list(req_params):
+                resolved_identity = resolve_identity_query_param(query_param, account, token, base_url)
+                if resolved_identity is not None:
+                    req_params[query_param] = resolved_identity
+
+            req_json = None
+            req_data = None
+            req_files = None
+            req_headers = build_auth_headers(token, account)
+            body_spec = details.get("requestBody", {}) or {}
+            content = body_spec.get("content", {}) or {}
+            if "application/json" in content:
+                json_schema = content.get("application/json", {}).get("schema", {}) or {}
+                req_json = build_default_payload_from_schema(resolve_schema_ref(json_schema, components), components)
+                if req_json:
+                    req_headers["Content-Type"] = "application/json"
+            elif "multipart/form-data" in content:
+                multipart_schema = resolve_schema_ref(
+                    content.get("multipart/form-data", {}).get("schema", {}) or {},
+                    components,
+                )
+                req_data = {}
+                file_keys = []
+                for prop_name, prop_meta in (multipart_schema.get("properties") or {}).items():
+                    if looks_like_file_field(prop_name, prop_meta, components):
+                        file_keys.append(prop_name)
+                        continue
+                    default_value = default_value_for_schema(prop_meta, components, prop_name)
+                    if default_value is not None:
+                        req_data[prop_name] = default_value
+                if file_keys:
+                    png_1x1 = base64.b64decode(
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ax"
+                        "p3n8AAAAASUVORK5CYII="
+                    )
+                    req_files = {key: ("argus-test.png", png_1x1, "image/png") for key in file_keys}
+                for ct_key in [k for k in req_headers.keys() if k.lower() == "content-type"]:
+                    req_headers.pop(ct_key, None)
+            return req_headers, req_params, req_json, req_data, req_files
+
+        def extract_id_from_response_or_location(response, param_name: str):
+            found = extract_id_from_url(getattr(response, "url", ""))
+            if path_param_matches_identifier(param_name, found):
+                return found
+            found = extract_id_from_location(response)
+            if path_param_matches_identifier(param_name, found):
+                return found
+            try:
+                for candidate in extract_id_candidates_from_json(response.json(), param_name):
+                    if path_param_matches_identifier(param_name, candidate):
+                        return candidate
+            except Exception:
+                pass
+            return None
+
+        def discover_path_param_values_by_create(param_name: str, t_base: str, token: str, account: dict, known_values: dict, endpoints: dict, hint_variants: list) -> list:
+            role = (account or {}).get("role", "account")
+            auth_components = account.get("swagger_components") or swagger_components
+            created = []
+
+            for ep_path, ep_methods in (endpoints or {}).items():
+                post_details = ep_methods.get("post")
+                if not post_details:
+                    continue
+                if hint_variants and not any(h in ep_path.lower() for h in hint_variants):
+                    continue
+                resolved_ep_path = resolve_path_with_known_values(ep_path, known_values)
+                if not resolved_ep_path:
+                    continue
+                normalized_path = resolved_ep_path.lower()
+                if any(marker in normalized_path for marker in ["/auth/", "/login", "/logout", "/password", "/payment", "/cancel", "/approve", "/reject", "/delete"]):
+                    continue
+
+                headers, req_params, req_json, req_data, req_files = request_parts_from_openapi(
+                    post_details,
+                    auth_components,
+                    account,
+                    token,
+                    t_base,
+                )
+                if not (req_json or req_data or req_files or req_params):
+                    continue
+                try:
+                    create_res = requests.post(
+                        f"{t_base}{resolved_ep_path}",
+                        headers=headers,
+                        params=req_params or None,
+                        json=req_json if req_json is not None else None,
+                        data=req_data if req_data else None,
+                        files=req_files if req_files else None,
+                        timeout=4,
+                    )
+                except Exception as exc:
+                    print(f"[PathParam] create probe failed for {param_name} via {resolved_ep_path}: {exc}")
+                    continue
+                if not (200 <= create_res.status_code < 300):
+                    continue
+                found = extract_id_from_response_or_location(create_res, param_name)
+                if found is not None:
+                    created.append(str(found))
+                    print(f"[PathParam] {param_name} created candidate for '{role}' via {resolved_ep_path}: {found}")
+                    break
+
+            return created
+
         def discover_path_param_values(param_name: str, t_base: str, token: str, account: dict, known_values: dict, endpoints: dict) -> list:
             role = (account or {}).get("role", "account")
             cache_key = f"{role}:{t_base}:{param_name}:{json.dumps(known_values, sort_keys=True, default=str)}"
@@ -1431,7 +1597,20 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                     continue
 
                 try:
-                    resp = requests.get(f"{t_base}{resolved_ep_path}", headers=auth_headers, timeout=3)
+                    probe_params = build_query_defaults_from_details(
+                        ep_methods.get("get") or {},
+                        account.get("swagger_components") or swagger_components,
+                    )
+                    for query_param in list(probe_params):
+                        resolved_identity = resolve_identity_query_param(query_param, account, token, t_base)
+                        if resolved_identity is not None:
+                            probe_params[query_param] = resolved_identity
+                    resp = requests.get(
+                        f"{t_base}{resolved_ep_path}",
+                        headers=auth_headers,
+                        params=probe_params or None,
+                        timeout=3,
+                    )
                     if not (200 <= resp.status_code < 400):
                         continue
                     discovered.extend(extract_id_candidates_from_json(resp.json(), param_name))
@@ -1440,6 +1619,19 @@ def run_zap_scan(target_url: str, auth_tokens: list):
 
                 if discovered:
                     break
+
+            if not discovered:
+                discovered.extend(
+                    discover_path_param_values_by_create(
+                        param_name,
+                        t_base,
+                        token,
+                        account,
+                        known_values,
+                        endpoints,
+                        hint_variants,
+                    )
+                )
 
             deduped = []
             for value in discovered:
@@ -1452,7 +1644,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 print(f"[PathParam] {param_name} no candidates for '{role}' via {', '.join(list(dict.fromkeys(probe_paths))[:5])}")
             return deduped
 
-        def build_resolved_path_candidates(path_only: str, t_base: str, token: str, account: dict, endpoints: dict) -> list:
+        def build_resolved_path_candidates(path_only: str, t_base: str, token: str, account: dict, endpoints: dict, allow_static_fallback: bool = True) -> list:
             params = re.findall(r"\{([^}]+)\}", path_only)
             if not params:
                 return [path_only]
@@ -1462,8 +1654,14 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 next_candidates = []
                 for _, known_values in candidates:
                     values = discover_path_param_values(param, t_base, token, account, known_values, endpoints)
-                    if "1" not in values:
+                    if allow_static_fallback and "1" not in values:
                         values.append("1")
+                    if not values:
+                        print(
+                            f"[PathParam] unresolved {param} for {path_only}; "
+                            "skip unresolved template instead of using static fallback"
+                        )
+                        continue
                     for value in values[:5]:
                         updated_values = dict(known_values)
                         updated_values[param] = value
@@ -1477,7 +1675,9 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             for resolved, _ in candidates:
                 if "{" not in resolved and resolved not in resolved_paths:
                     resolved_paths.append(resolved)
-            return resolved_paths or [re.sub(r"\{[^}]+\}", "1", path_only)]
+            if resolved_paths:
+                return resolved_paths
+            return [re.sub(r"\{[^}]+\}", "1", path_only)] if allow_static_fallback else []
 
         def select_token(api_url: str, method: str, preferred_account: dict | None = None) -> tuple:
             """각 엔드포인트에 대해 접근 가능한 (token, base_url, role) 튜플 반환.
@@ -1510,7 +1710,14 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                     print(f"[TokenSelect] {method} {t_base}{path_only} → '{role}' (no auth)")
                     return result
                 # 1. Path parameters translation using account-readable IDs when possible.
-                resolved_path_candidates = build_resolved_path_candidates(path_only, t_base, token, t, t.get("validated_endpoints", {}))
+                resolved_path_candidates = build_resolved_path_candidates(
+                    path_only,
+                    t_base,
+                    token,
+                    t,
+                    t.get("validated_endpoints", {}),
+                    allow_static_fallback=method.upper() not in {"POST", "PUT", "PATCH"},
+                )
                 t_endpoints = t.get("validated_endpoints", {})
                 t_swagger = t.get("swagger_components", {}) or swagger_components
 
@@ -1621,15 +1828,10 @@ def run_zap_scan(target_url: str, auth_tokens: list):
 
         def extract_identity_value(data, param_name: str):
             wanted = normalized_field_name(param_name)
-            generic_keys = {"id", "userid", "memberid", "adminid", "accountid"}
             if isinstance(data, dict):
                 for key, value in data.items():
                     normalized_key = normalized_field_name(key)
                     if value is not None and normalized_key == wanted:
-                        return value
-                for key, value in data.items():
-                    normalized_key = normalized_field_name(key)
-                    if value is not None and normalized_key in generic_keys:
                         return value
                 for value in data.values():
                     found = extract_identity_value(value, param_name)
@@ -1701,6 +1903,71 @@ def run_zap_scan(target_url: str, auth_tokens: list):
         update_status(progress=5, message="입력된 API/URL 리스트 분석 및 취합 중...")
         
         # --- 계정별 개별 API 명세 수집 함수 정의 ---
+        def candidate_data_dirs() -> list[str]:
+            dirs = []
+            for value in [result_dir_override, os.environ.get("ARGUS_DATA_DIR"), os.environ.get("DATA_DIR")]:
+                if not value:
+                    continue
+                normalized = os.path.abspath(value)
+                parts = normalized.split(os.sep)
+                if "report" in parts:
+                    normalized = os.sep.join(parts[:parts.index("report")])
+                dirs.append(normalized)
+            cwd = os.getcwd()
+            dirs.extend([
+                os.path.abspath(os.path.join(cwd, "data")),
+                os.path.abspath(os.path.join(cwd, "backend", "data")),
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "data")),
+            ])
+            deduped = []
+            for path_value in dirs:
+                if path_value and path_value not in deduped:
+                    deduped.append(path_value)
+            return deduped
+
+        def load_openapi_catalog_from_uploads() -> tuple[dict, dict]:
+            catalog_endpoints = {}
+            catalog_components = {}
+            newest_specs = []
+            for data_dir in candidate_data_dirs():
+                uploads_dir = os.path.join(data_dir, "uploads")
+                if not os.path.isdir(uploads_dir):
+                    continue
+                specs = []
+                for root, _, files in os.walk(uploads_dir):
+                    for filename in files:
+                        lowered = filename.lower()
+                        if lowered.startswith("openapi") and lowered.endswith(".json"):
+                            specs.append(os.path.join(root, filename))
+                if specs:
+                    newest_parent = os.path.dirname(max(specs, key=lambda p: os.path.getmtime(p)))
+                    newest_specs = sorted(p for p in specs if os.path.dirname(p) == newest_parent)
+                    break
+
+            for spec_path in newest_specs:
+                try:
+                    with open(spec_path, "r", encoding="utf-8") as spec_file:
+                        sw_data = json.load(spec_file)
+                except Exception:
+                    continue
+                for path_key, methods in (sw_data.get("paths") or {}).items():
+                    if not isinstance(methods, dict):
+                        continue
+                    catalog_endpoints.setdefault(path_key, {})
+                    for method_key, details in methods.items():
+                        if str(method_key).lower() in ["get", "post", "put", "delete", "options", "head", "patch"]:
+                            catalog_endpoints[path_key][str(method_key).lower()] = details
+                components = sw_data.get("components")
+                if isinstance(components, dict):
+                    for comp_type, comp_schemas in components.items():
+                        if isinstance(comp_schemas, dict):
+                            catalog_components.setdefault(comp_type, {}).update(comp_schemas)
+            if catalog_endpoints:
+                print(f"[OpenAPI] enriched endpoint details from uploaded specs: {len(catalog_endpoints)} paths")
+            return catalog_endpoints, catalog_components
+
+        uploaded_openapi_endpoints, uploaded_openapi_components = load_openapi_catalog_from_uploads()
+
         def build_endpoints_for_account(account: dict) -> tuple[dict, dict]:
             c_endpoints = {}
             s_components = {}
@@ -1781,8 +2048,13 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             merged_endpoints = dict(existing_endpoints)
             for ep_path, methods in c_end.items():
                 merged_endpoints.setdefault(ep_path, {}).update(methods or {})
+            for ep_path, methods in uploaded_openapi_endpoints.items():
+                merged_endpoints.setdefault(ep_path, {}).update(methods or {})
             merged_components = dict(existing_components)
             for comp_type, comp_schemas in s_comp.items():
+                if isinstance(comp_schemas, dict):
+                    merged_components.setdefault(comp_type, {}).update(comp_schemas)
+            for comp_type, comp_schemas in uploaded_openapi_components.items():
                 if isinstance(comp_schemas, dict):
                     merged_components.setdefault(comp_type, {}).update(comp_schemas)
             account["validated_endpoints"] = merged_endpoints
@@ -2333,6 +2605,49 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             end_clip = min(len(response_text), idx + 750)
             return payload in response_text[start_clip:end_clip]
 
+        def discover_resource_id_from_readers(post_path: str, payload: str, writer_account: dict | None, get_endpoint_items: list[tuple[str, dict]]) -> tuple[object | None, str]:
+            post_tokens = resource_tokens_from_path(post_path)
+            reader_base = (writer_account or {}).get("base_url", target_url).rstrip("/")
+            reader_headers = build_auth_headers((writer_account or {}).get("token"), writer_account)
+            for get_path, get_methods in get_endpoint_items:
+                if "get" not in get_methods or "{" in get_path:
+                    continue
+                get_tokens = resource_tokens_from_path(get_path)
+                if post_tokens and not (post_tokens & get_tokens):
+                    continue
+                reader_url = f"{reader_base}/{get_path.lstrip('/')}"
+                reader_params = build_query_defaults_from_details(get_methods.get("get") or {}, swagger_components)
+                for param_name in list(reader_params):
+                    resolved_identity = resolve_identity_query_param(
+                        param_name,
+                        writer_account,
+                        (writer_account or {}).get("token"),
+                        reader_base,
+                    )
+                    if resolved_identity is not None:
+                        reader_params[param_name] = resolved_identity
+                try:
+                    reader_res = _bounded_get(
+                        reader_url,
+                        headers=reader_headers,
+                        params=reader_params or None,
+                        timeout=4,
+                    )
+                except Exception as exc:
+                    print(f"[STORED XSS DEBUG] resource-id discovery GET fail on {reader_url}: {exc}")
+                    continue
+                if not (200 <= reader_res.status_code < 400):
+                    continue
+                if not is_payload_reflected(payload, reader_res.text):
+                    continue
+                try:
+                    found_id = extract_id_near_payload(reader_res.json(), payload)
+                except Exception:
+                    found_id = None
+                if found_id is not None:
+                    return found_id, reader_url
+            return None, ""
+
         def verify_cross_account_stored_xss(post_path: str, post_url: str, resource_id, payload: str, param_name: str, writer_account: dict | None, writer_role: str):
             if not auth_tokens or len(auth_tokens) < 2:
                 return
@@ -2405,6 +2720,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
 
         for scan_account in scan_accounts:
             account_endpoints = scan_account.get("validated_endpoints", validated_endpoints)
+            account_swagger_components = scan_account.get("swagger_components") or swagger_components
             ordered_account_endpoints = sorted(
                 account_endpoints.items(),
                 key=lambda item: endpoint_role_priority(item[0], scan_account),
@@ -2437,8 +2753,8 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                         if "application/json" in csrf_content:
                             csrf_schema = csrf_content.get("application/json", {}).get("schema", {})
                             csrf_json_body = build_default_payload_from_schema(
-                                resolve_schema_ref(csrf_schema, swagger_components),
-                                swagger_components,
+                                resolve_schema_ref(csrf_schema, account_swagger_components),
+                                account_swagger_components,
                             )
                             
                         # 기본 인증 헤더에서 쿠키만 분리하여 준비
@@ -2584,12 +2900,12 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                         p_in = param_meta.get("in", "query")
                         p_schema = param_meta.get("schema")
                         if p_name and p_in == "query":
-                            default_value = default_value_for_query_param(p_name, p_schema, swagger_components)
+                            default_value = default_value_for_query_param(p_name, p_schema, account_swagger_components)
                             if default_value is not None:
                                 base_param_defaults[p_name] = default_value
-                            if is_xss_injectable_schema(p_schema, p_name, swagger_components):
+                            if is_xss_injectable_schema(p_schema, p_name, account_swagger_components):
                                 base_test_params[p_name] = None  # XSS payload is injected only into string query params.
-                                base_test_param_schemas[p_name] = resolve_schema_ref(p_schema or {}, swagger_components)
+                                base_test_param_schemas[p_name] = resolve_schema_ref(p_schema or {}, account_swagger_components)
     
                     base_test_enum_defaults = {}
                     is_multipart_request = False
@@ -2599,34 +2915,34 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                             is_multipart_request = True
                             multipart_schema = resolve_schema_ref(
                                 content.get("multipart/form-data", {}).get("schema", {}),
-                                swagger_components,
+                                account_swagger_components,
                             )
                             required_multipart_props = set(multipart_schema.get("required") or [])
                             for prop_name, prop_meta in multipart_schema.get("properties", {}).items():
-                                default_multipart_value = default_value_for_schema(prop_meta, swagger_components, prop_name)
+                                default_multipart_value = default_value_for_schema(prop_meta, account_swagger_components, prop_name)
                                 base_multipart_defaults[prop_name] = default_multipart_value
                                 if prop_name in required_multipart_props:
                                     base_multipart_required_defaults[prop_name] = default_multipart_value
-                                prop_type = get_schema_type(prop_meta, swagger_components)
-                                items_schema = resolve_schema_ref(prop_meta.get("items", {}), swagger_components)
+                                prop_type = get_schema_type(prop_meta, account_swagger_components)
+                                items_schema = resolve_schema_ref(prop_meta.get("items", {}), account_swagger_components)
                                 item_format = (items_schema.get("format") or "").lower() if isinstance(items_schema, dict) else ""
-                                if looks_like_file_field(prop_name, prop_meta, swagger_components):
+                                if looks_like_file_field(prop_name, prop_meta, account_swagger_components):
                                     base_multipart_file_keys.append(prop_name)
-                                if is_xss_injectable_schema(prop_meta, prop_name, swagger_components):
+                                if is_xss_injectable_schema(prop_meta, prop_name, account_swagger_components):
                                     base_test_multipart_keys.append(prop_name)
-                                    base_test_multipart_schemas[prop_name] = resolve_schema_ref(prop_meta, swagger_components)
+                                    base_test_multipart_schemas[prop_name] = resolve_schema_ref(prop_meta, account_swagger_components)
                                 if "enum" in prop_meta and prop_meta["enum"]:
                                     base_test_enum_defaults[prop_name] = prop_meta["enum"][0]
                         elif "application/json" in content:
                             json_schema = content.get("application/json", {}).get("schema", {})
-                            resolved_json_schema = resolve_schema_ref(json_schema, swagger_components)
-                            base_test_json_keys = extract_injectable_keypaths(resolved_json_schema, components=swagger_components)
+                            resolved_json_schema = resolve_schema_ref(json_schema, account_swagger_components)
+                            base_test_json_keys = extract_injectable_keypaths(resolved_json_schema, components=account_swagger_components)
                             base_test_json_schemas = {
-                                keypath: schema_for_keypath(resolved_json_schema, keypath, swagger_components)
+                                keypath: schema_for_keypath(resolved_json_schema, keypath, account_swagger_components)
                                 for keypath in base_test_json_keys
                             }
-                            base_json_defaults = build_default_payload_from_schema(resolved_json_schema, swagger_components)
-                            base_json_required_defaults = build_required_payload_from_schema(resolved_json_schema, swagger_components)
+                            base_json_defaults = build_default_payload_from_schema(resolved_json_schema, account_swagger_components)
+                            base_json_required_defaults = build_required_payload_from_schema(resolved_json_schema, account_swagger_components)
                             for prop_name, prop_meta in resolved_json_schema.get("properties", {}).items():
                                 if "enum" in prop_meta and prop_meta["enum"]:
                                     base_test_enum_defaults[prop_name] = prop_meta["enum"][0]
@@ -2655,19 +2971,19 @@ def run_zap_scan(target_url: str, auth_tokens: list):
 
                     # 고도화 6: Baseline 사전 요청 전송 (Diff 기반 오탐 방지 목적)
                     baseline_params = dict(base_param_defaults)
-                    baseline_json = copy.deepcopy(base_json_required_defaults)
+                    baseline_json = copy.deepcopy(base_json_defaults or base_json_required_defaults)
                     for k in base_test_json_keys:
                         top_key = k.split(".", 1)[0].replace("[0]", "")
-                        if top_key not in base_json_required_defaults:
+                        if top_key not in baseline_json:
                             continue
                         prop_name = k.split(".")[-1]
-                        dummy_val = default_value_for_schema(base_test_json_schemas.get(k, {"type": "string"}), swagger_components, prop_name)
+                        dummy_val = default_value_for_schema(base_test_json_schemas.get(k, {"type": "string"}), account_swagger_components, prop_name)
                         set_nested_value_by_keypath(baseline_json, k, dummy_val)
-                    baseline_multipart = dict(base_multipart_required_defaults)
+                    baseline_multipart = dict(base_multipart_defaults or base_multipart_required_defaults)
                     for k in base_test_multipart_keys:
-                        if k not in base_multipart_required_defaults:
+                        if k not in baseline_multipart:
                             continue
-                        dummy_val = default_value_for_schema({"type": "string"}, swagger_components, k)
+                        dummy_val = default_value_for_schema({"type": "string"}, account_swagger_components, k)
                         baseline_multipart[k] = base_test_enum_defaults.get(k, dummy_val)
     
                     baseline_body = None
@@ -3041,7 +3357,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                             stored_targets.append(("multipart", m_key, base_test_multipart_schemas.get(m_key, {"type": "string"})))
                         stored_trials = []
                         for target_type, target_param, target_schema in stored_targets:
-                            for base_stored_payload in payloads_for_xss_field(target_param, target_schema, swagger_components)[:4]:
+                            for base_stored_payload in payloads_for_xss_field(target_param, target_schema, account_swagger_components)[:4]:
                                 stored_payload = make_unique_xss_payload(base_stored_payload, target_param)
                                 stored_trials.append((target_type, target_param, stored_payload))
                         # Stored XSS는 원인 필드 추적을 위해 한 번에 하나의 파라미터에만 payload를 저장한다.
@@ -3050,22 +3366,22 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                             if target_type == "query":
                                 store_params[target_param] = stored_payload
 
-                            store_json = copy.deepcopy(base_json_required_defaults)
+                            store_json = copy.deepcopy(base_json_defaults or base_json_required_defaults)
                             for k in base_test_json_keys:
                                 top_key = k.split(".", 1)[0].replace("[0]", "")
-                                if target_type != "json" and top_key not in base_json_required_defaults:
+                                if target_type != "json" and top_key not in store_json:
                                     continue
                                 prop_name = k.split(".")[-1]
-                                dummy_val = default_value_for_schema(base_test_json_schemas.get(k, {"type": "string"}), swagger_components, prop_name)
+                                dummy_val = default_value_for_schema(base_test_json_schemas.get(k, {"type": "string"}), account_swagger_components, prop_name)
                                 set_nested_value_by_keypath(store_json, k, base_test_enum_defaults.get(prop_name, dummy_val))
                             if target_type == "json":
                                 set_nested_value_by_keypath(store_json, target_param, stored_payload)
                             
-                            store_multipart = dict(base_multipart_required_defaults)
+                            store_multipart = dict(base_multipart_defaults or base_multipart_required_defaults)
                             for k in base_test_multipart_keys:
-                                if target_type != "multipart" and k not in base_multipart_required_defaults:
+                                if target_type != "multipart" and k not in store_multipart:
                                     continue
-                                dummy_val = default_value_for_schema({"type": "string"}, swagger_components, k)
+                                dummy_val = default_value_for_schema({"type": "string"}, account_swagger_components, k)
                                 store_multipart[k] = base_test_enum_defaults.get(k, dummy_val)
                             if target_type == "multipart":
                                 store_multipart[target_param] = stored_payload
@@ -3107,7 +3423,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                     import re as _re
                                     tmp_path = _re.sub(r"\{[^}]+\}", "1", get_path)
                                     tmp_url = f"{best_base.rstrip('/')}/{tmp_path.lstrip('/')}"
-                                    tmp_params = build_query_defaults_from_details(get_methods.get("get") or {}, swagger_components)
+                                    tmp_params = build_query_defaults_from_details(get_methods.get("get") or {}, account_swagger_components)
                                     try:
                                         tmp_res = _bounded_get(
                                             tmp_url,
@@ -3132,14 +3448,27 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 )
                                 if post_res.status_code in [200, 201]:
                                     # 생성된 리소스 ID 추출
-                                    resource_id = None
+                                    resource_id = extract_id_from_url(api_url)
+                                    if not resource_id:
+                                        resource_id = extract_id_from_location(post_res)
                                     try:
                                         resp_json = post_res.json()
-                                        resource_id = extract_id_from_response(resp_json)
+                                        if not resource_id:
+                                            resource_id = extract_id_from_response(resp_json)
                                     except Exception:
                                         pass
                                     if not resource_id:
-                                        resource_id = extract_id_from_url(api_url)
+                                        resource_id, discovery_url = discover_resource_id_from_readers(
+                                            path,
+                                            stored_payload,
+                                            scan_account,
+                                            get_endpoint_items,
+                                        )
+                                        if resource_id:
+                                            print(
+                                                f"[STORED XSS DEBUG] resource_id discovered from list GET "
+                                                f"{discovery_url}: {resource_id}"
+                                            )
                                     verify_cross_account_stored_xss(
                                         post_path=path,
                                         post_url=api_url,
@@ -3163,11 +3492,17 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                         # 경로 변수가 존재하는 경우 resource_id로 대입 치환
                                         if resource_id and "{" in get_path:
                                             resolved_path = _re.sub(r"\{[^}]+\}", str(resource_id), get_path)
+                                        elif "{" in get_path:
+                                            print(
+                                                f"[STORED XSS DEBUG] skip templated GET without resource_id: "
+                                                f"{get_path}"
+                                            )
+                                            continue
                                         else:
                                             resolved_path = get_path
 
                                         get_url = f"{best_base.rstrip('/')}/{resolved_path.lstrip('/')}"
-                                        get_params = build_query_defaults_from_details(get_methods.get("get") or {}, swagger_components)
+                                        get_params = build_query_defaults_from_details(get_methods.get("get") or {}, account_swagger_components)
                                         try:
                                             print(
                                                 f"[STORED XSS DEBUG] broadcast GET {idx_get}/{len(get_endpoint_items)} "
