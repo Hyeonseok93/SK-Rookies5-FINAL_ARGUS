@@ -46,10 +46,22 @@ auth:
     - "http://localhost:8080/api/v1/auth/login"
     - "http://localhost:8080/api/v1/auth/admin/login"
 
+diagnosis_1_3:
+  min_score: 2
+  max_candidates: 80
+  max_mutations_per_param: 5
+  httpx_enabled: true
+  scan_all_inventory: false
+  llm_interpret_enabled: true
+  ollama_base_url: "http://host.docker.internal:11434"
+  ollama_model: "qwen2.5:7b"
+
 diagnosis_1_5:
   redirect_sink_base: "http://host.docker.internal:8001/argus-redirect-sink"
-  probe_mode: sample
+  probe_mode: full
   sample_size: 60
+  max_phase_a_jobs: 5000
+  max_phase_b_jobs: 10000
   zap_enabled: false
 
 diagnosis_1_6:

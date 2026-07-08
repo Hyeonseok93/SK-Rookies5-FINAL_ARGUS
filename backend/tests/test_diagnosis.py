@@ -31,10 +31,22 @@ def test_catalog_matches_modules():
 
 
 def test_run_module_stub():
-    import pytest
+    from diagnosis.context import DiagnosisContext
+    from diagnosis.paths import diagnosis_report_path
+    from diagnosis.registry import get_module
 
-    with pytest.raises(ValueError, match="not diagnosable"):
-        diagnosis_service.run_section("1-3")
+    # 3-3 is still a StubDiagnosisModule (review_later + diagnosable: false) — 1-3 was
+    # the last diagnosable review_later stub before it got a real v1 implementation.
+    # diagnosis_service.run_section() gates non-diagnosable sections (see
+    # test_not_diagnosable_sections), so exercise the module directly here.
+    data_dir = Path(__file__).resolve().parents[1] / "data"
+    mod = get_module("3-3")
+    assert mod is not None
+    report = mod.run(DiagnosisContext(data_dir=data_dir))
+    assert report.section_id == "3-3"
+    assert report.status == "not_diagnosable"
+    assert report.implemented is False
+    assert diagnosis_report_path(data_dir, "3-3").is_file()
 
 
 def test_not_diagnosable_sections():
@@ -47,8 +59,9 @@ def test_not_diagnosable_sections():
 
 def test_no_review_later_sections():
     catalog = diagnosis_service.catalog()
-    for row in catalog:
-        assert row["review_later"] is False
+    for section_id in ("3-3", "4-3", "4-4", "4-5", "5-1", "8-1"):
+        row = next(r for r in catalog if r["id"] == section_id)
+        assert row["review_later"] is True
 
 
 def test_manual_diagnosis_sections():

@@ -91,7 +91,7 @@ function G15IssueSummaryTable({ rows }: { rows: G15Row[] }) {
       <div className="mb-3 rounded-lg border border-emerald-400/25 bg-emerald-500/5 px-3 py-2.5">
         <p className="text-xs font-medium text-emerald-200/95">검토 필요 항목 없음</p>
         <p className="mt-1 text-[10px] text-emerald-300/80">
-          외부 리다이렉트 · CORS · crossdomain — 이상 없음
+          외부 리다이렉트 · 반사(Reflected) · CORS · crossdomain — 이상 없음
         </p>
       </div>
     );
