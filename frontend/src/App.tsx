@@ -791,7 +791,7 @@ function App() {
           <Panel
             title={`ENDPOINTS (${total})`}
             action={
-              <div className="flex flex-wrap items-center justify-center gap-2">
+              <>
                 <OutcomeTag
                   active={inventoryView === "ready"}
                   label="Ready"
@@ -830,7 +830,7 @@ function App() {
                   onChange={(e) => setFilter(e.target.value)}
                   className="rounded border border-cyber-border bg-cyber-bg px-3 py-1.5 text-xs text-white placeholder:text-cyber-muted focus:border-cyber-accent/50 focus:outline-none"
                 />
-              </div>
+              </>
             }
             trailing={
               <button

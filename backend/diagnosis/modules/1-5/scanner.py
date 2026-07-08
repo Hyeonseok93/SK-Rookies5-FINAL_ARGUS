@@ -84,7 +84,17 @@ def _dedupe_redirect_findings(items: list[DiagnosisFinding]) -> list[DiagnosisFi
     out: list[DiagnosisFinding] = []
     for f in items:
         ev = f.evidence or {}
-        key = f"{ev.get('rule_id')}|{ev.get('engine')}|{ev.get('test_url') or ev.get('url')}|{ev.get('location')}"
+        # confirmed_redirect=False인 항목(REFLECTED_VALUE/REFLECTED_XSS 후보)은 어떤
+        # payload를 썼는지만 다를 뿐 같은 endpoint+파라미터에 대해 같은 결론("이스케이프
+        # 없이 반사됨")을 payload 개수(리다이렉트 13종/XSS 4종)만큼 반복 생성한다 — 이미
+        # 하나로 결론이 났으면 나머지는 대표 finding 하나로 합친다. 확정 취약점
+        # (LOCATION_HEADER/META_REFRESH/JS_REDIRECT/CLIENT_JS_CONFIRMED, 그리고
+        # confirmed_redirect 필드가 없는 CORS/crossdomain/sink 기반 open redirect)은
+        # payload/위치별로 구분 가치가 있으므로 기존대로 location까지 키에 포함한다.
+        if ev.get("confirmed_redirect") is False:
+            key = f"{ev.get('rule_id')}|{ev.get('engine')}|{ev.get('test_url') or ev.get('url')}"
+        else:
+            key = f"{ev.get('rule_id')}|{ev.get('engine')}|{ev.get('test_url') or ev.get('url')}|{ev.get('location')}"
         if key in seen:
             continue
         seen.add(key)
@@ -164,7 +174,16 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     # grand_total에 포함해야 진행률이 각 단계에서 실제로 올라간다.
     reflected_bridge = _load_local("reflected_bridge")
     login_candidate_count = reflected_bridge.count_login_redirect_candidates(redirect_jobs) if redirect_jobs else 0
-    grand_total = len(redirect_jobs) * 2 + login_candidate_count + len(cors_targets) + len(xd_targets)
+    # redirect_jobs(phase A+B)는 sink 기반 확정 검증(run_redirect_jobs)과 reflected_bridge의
+    # 리다이렉트 반사 보강 검증(run_on_jobs) 두 번 순회된다. XSS 반사 검증(run_xss_on_jobs)은
+    # phase A(실제 선언된 endpoint 파라미터: posts/comments/profile 등)에만 적용한다 —
+    # phase B는 GET 엔드포인트에 추측성 redirect 파라미터명(REDIRECT_PARAM_NAMES)을 쿼리로
+    # 덧붙이는 것이라 서버가 아예 읽지 않는 파라미터일 가능성이 높아 XSS 관점에서는 값이
+    # 거의 없는데 job 수만 크게 늘려(phase B가 보통 더 큼) 스캔 시간을 불필요하게 늘린다.
+    grand_total = (
+        len(redirect_jobs) * 2 + len(phase_a) + login_candidate_count
+        + len(cors_targets) + len(xd_targets)
+    )
     prepare(grand_total, f"1-5: {grand_total} probe(s)")
     progress_offset = 0
 
@@ -203,6 +222,21 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         findings.extend(vf)
         stats["reflected_probe"] = vstats
         progress_offset += len(redirect_jobs)
+
+        # 위 두 검증은 리다이렉트 실행 여부만 본다 — posts/comments/profile 같은 일반
+        # CRUD 필드에 스크립트/HTML이 이스케이프 없이 반사되는지(반사형 XSS)는 별도
+        # 판별 규칙이 필요하므로 phase A job(실제 선언된 파라미터)만 xss_detector로
+        # 재사용해 확인한다 — phase B(추측성 redirect 파라미터명)는 XSS 관점에서 값이
+        # 거의 없어 제외한다(위 grand_total 주석 참고).
+        if phase_a:
+            xf, xstats = reflected_bridge.run_xss_on_jobs(
+                phase_a,
+                marker=run_id,
+                on_progress=_seg_progress(len(phase_a), "xss "),
+            )
+            findings.extend(xf)
+            stats["reflected_xss"] = xstats
+            progress_offset += len(phase_a)
 
         # SPA는 로그인 성공 후 클라이언트 JS가 ?next=/?returnUrl= 값을 읽어 location을
         # 대입하는 경우가 흔한데, 이건 정적 응답 문자열 매칭(위 reflected_bridge)으로는

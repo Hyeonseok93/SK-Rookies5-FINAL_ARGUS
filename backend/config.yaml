@@ -58,8 +58,10 @@ diagnosis_1_3:
 
 diagnosis_1_5:
   redirect_sink_base: "http://127.0.0.1:8001/argus-redirect-sink"
-  probe_mode: sample
+  probe_mode: full
   sample_size: 60
+  max_phase_a_jobs: 5000
+  max_phase_b_jobs: 10000
   zap_enabled: false
 
 diagnosis_1_6:

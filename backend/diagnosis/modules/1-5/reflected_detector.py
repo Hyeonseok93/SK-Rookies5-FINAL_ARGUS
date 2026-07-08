@@ -141,6 +141,17 @@ def _judge(
         return None
 
     host_needle = payload_host.lower()
+    # baseline은 원본 파라미터 값으로 보낸 "이번 job의" 응답이다 — 여기 이미 payload_host
+    # 문자열이 있다면 이 job의 페이로드 주입과 무관하게 이미 존재하던 값이라는 뜻이다.
+    # 흔한 원인: 같은 스캔 실행에서 다른 job(예: content 필드에 페이로드를 저장하는 게시글/
+    # 댓글 작성)이 남긴 값을 목록 조회 응답이 그대로 되돌려주는 경우 — 이걸 걸러내지 않으면
+    # 전혀 무관한 파라미터(예: memberId)에서도 "반사됨"으로 오탐되고, job마다 다른 페이로드를
+    # 시도하므로 사실상 같은 오탐이 페이로드 개수만큼 중복 생성된다.
+    baseline_body_lower = str(baseline.get("body") or "").lower()
+    baseline_location_lower = str(baseline.get("location") or "").lower()
+    already_in_baseline = host_needle in baseline_body_lower or host_needle in baseline_location_lower
+    if already_in_baseline:
+        return None
 
     # ── 패턴 1: Location 헤더 반영 (서버 사이드 리다이렉트 — 가장 확실한 증거) ──
     location = test.get("location", "")
@@ -275,7 +286,11 @@ def _send(c: ReflectedParam, value: str, custom_header: str = None) -> dict:
     리다이렉트를 자동으로 따라가지 않아야 Location 헤더를 확인할 수 있으므로
     allow_redirects=False로 고정한다. 요청 실패 시 status=-1.
     """
-    req_headers = {}
+    # job의 원본 헤더(Authorization/Cookie 등)를 먼저 깔아준다 — 인증이 필요한
+    # 엔드포인트는 이게 없으면 401로 막혀 반사/리다이렉트 판별 자체가 불가능해진다.
+    # Content-Type/custom_header는 이 함수의 판단(페이로드 인코딩, 수동 지정 인증)이
+    # 더 구체적이므로 아래에서 덮어쓴다.
+    req_headers = dict(getattr(c, "extra_headers", None) or {})
     if "application/json" in (c.content_type or ""):
         req_headers["Content-Type"] = "application/json"
 
@@ -327,12 +342,13 @@ def _send(c: ReflectedParam, value: str, custom_header: str = None) -> dict:
             "status":       resp.status_code,
             "body":         resp.text,
             "location":     resp.headers.get("Location", ""),  # CaseInsensitiveDict이므로 단일 조회로 충분
+            "content_type": resp.headers.get("Content-Type", ""),
             "request_body": request_body_repr,
         }
 
     except requests.RequestException as e:
         logger.warning(f"요청 실패 ({c.method} {c.url} [{c.param_name}={value!r}]): {e}")
-        return {"status": -1, "body": str(e), "location": "", "request_body": request_body_repr}
+        return {"status": -1, "body": str(e), "location": "", "content_type": "", "request_body": request_body_repr}
 
 
 def _apply_json(raw_body: str, param_name: str, value: str) -> dict:

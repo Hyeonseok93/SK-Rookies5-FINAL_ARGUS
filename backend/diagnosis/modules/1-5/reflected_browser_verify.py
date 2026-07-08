@@ -117,7 +117,7 @@ def verify_client_redirect(
             # DOM 로드 이후 클라이언트 JS가 location을 대입할 시간만 있으면 충분하므로
             # "domcontentloaded"로 대기하고 짧게 한 번 더 유예를 준다.
             page.goto(test_url, wait_until="domcontentloaded", timeout=timeout_ms)
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(500)
             final_url = page.url
         finally:
             context.close()
@@ -160,6 +160,42 @@ def verify_client_redirect(
     )
 
 
+_BROWSER_WORKERS = 8
+
+
+def _run_chunk(
+    chunk: list[Any],
+    *,
+    payload_host: str,
+    cookies: dict[str, str] | None,
+    on_done: Any,
+) -> tuple[list[Any], int, str | None]:
+    """워커 스레드 하나가 자기 몫의 후보를 전담 — Playwright sync API는 브라우저/인스턴스를
+    여러 스레드가 동시에 공유하며 호출하는 걸 지원하지 않으므로, 스레드마다 별도의
+    sync_playwright()+browser를 새로 launch해 완전히 독립적으로 처리한다(스레드 수만큼만
+    launch — 후보 수만큼이 아니므로 오버헤드는 무시할 만하다).
+    """
+    from playwright.sync_api import sync_playwright
+
+    findings: list[Any] = []
+    confirmed = 0
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            try:
+                for candidate in chunk:
+                    finding = verify_client_redirect(candidate, payload_host, browser=browser, cookies=cookies)
+                    if finding:
+                        findings.append(finding)
+                        confirmed += 1
+                    on_done(str(candidate.collected.url))
+            finally:
+                browser.close()
+        return findings, confirmed, None
+    except Exception as exc:
+        return findings, confirmed, str(exc)[:200]
+
+
 def run_login_redirect_browser_check(
     candidates: list[Any],
     *,
@@ -167,7 +203,12 @@ def run_login_redirect_browser_check(
     cookies: dict[str, str] | None = None,
     on_progress: Any = None,
 ) -> tuple[list[Any], dict[str, Any]]:
-    """로그인/인증 문맥 후보만 추려 브라우저 검증을 수행한다."""
+    """로그인/인증 문맥 후보만 추려 브라우저 검증을 수행한다.
+
+    후보 하나당 페이지 로드+대기로 1~2초가 걸려 순차 처리하면 후보 수(수백~천 단위)에
+    비례해 스캔 전체 시간을 지배한다 — 후보를 워커 스레드 수만큼 나눠, 스레드마다 자기
+    몫을 처리하는 독립된 브라우저 인스턴스를 하나씩 띄워 병렬로 처리한다.
+    """
     login_candidates = select_login_redirect_candidates(candidates)
     stats: dict[str, Any] = {"candidates": len(login_candidates), "confirmed": 0}
     findings: list[Any] = []
@@ -176,10 +217,28 @@ def run_login_redirect_browser_check(
         return findings, stats
 
     try:
-        from playwright.sync_api import sync_playwright
+        import playwright.sync_api  # noqa: F401
     except ImportError:
         logger.warning("[1-5][browser-verify] playwright 미설치 — 클라이언트 리다이렉트 검증 건너뜀")
         return findings, stats
+
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Lock
+
+    worker_count = max(1, min(_BROWSER_WORKERS, len(login_candidates)))
+    chunks: list[list[Any]] = [login_candidates[i::worker_count] for i in range(worker_count)]
+
+    done = 0
+    lock = Lock()
+
+    def _on_done(endpoint_id: str) -> None:
+        nonlocal done
+        if not on_progress:
+            return
+        with lock:
+            done += 1
+            local_done = done
+        on_progress(endpoints_done=local_done, endpoints_total=len(login_candidates), endpoint_id=endpoint_id)
 
     # 브라우저 launch 자체가 실패할 수 있다 (브라우저 바이너리 미설치, 스캔이 메인 스레드가
     # 아닌 워커 스레드에서 실행되어 Playwright의 시그널 핸들러 등록이 거부되는 경우 등).
@@ -188,22 +247,19 @@ def run_login_redirect_browser_check(
     # 예외가 run_g15_scan까지 그대로 전파돼 CORS/crossdomain 결과까지 통째로 사라진다 —
     # 그래서 launch 실패도 다른 브라우저 오류와 동일하게 조용히 건너뛰도록 감싼다.
     try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            try:
-                for i, candidate in enumerate(login_candidates):
-                    finding = verify_client_redirect(candidate, payload_host, browser=browser, cookies=cookies)
-                    if finding:
-                        findings.append(finding)
-                        stats["confirmed"] += 1
-                    if on_progress:
-                        on_progress(
-                            endpoints_done=i + 1,
-                            endpoints_total=len(login_candidates),
-                            endpoint_id=str(candidate.collected.url),
-                        )
-            finally:
-                browser.close()
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            futures = [
+                pool.submit(_run_chunk, chunk, payload_host=payload_host, cookies=cookies, on_done=_on_done)
+                for chunk in chunks
+                if chunk
+            ]
+            for future in futures:
+                chunk_findings, chunk_confirmed, error = future.result()
+                findings.extend(chunk_findings)
+                stats["confirmed"] += chunk_confirmed
+                if error:
+                    logger.warning(f"[1-5][browser-verify] 워커 브라우저 실행 실패 — 해당 몫 건너뜀: {error}")
+                    stats["browser_error"] = error
     except Exception as exc:
         logger.warning(f"[1-5][browser-verify] 브라우저 실행 실패 — 클라이언트 리다이렉트 검증 건너뜀: {exc}")
         stats["browser_error"] = str(exc)[:200]

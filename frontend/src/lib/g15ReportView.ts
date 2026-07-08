@@ -6,7 +6,7 @@ export type G15Finding = {
   evidence?: Record<string, unknown>;
 };
 
-export type G15Category = "redirect" | "cors" | "crossdomain" | "reflected";
+export type G15Category = "redirect" | "cors" | "crossdomain" | "reflected" | "xss";
 
 export type G15DetailField = { label: string; value: string };
 
@@ -32,6 +32,7 @@ const CATEGORY_LABELS: Record<G15Category, string> = {
   cors: "CORS",
   crossdomain: "crossdomain.xml",
   reflected: "반사(Reflected) 확인",
+  xss: "반사형 XSS 확인",
 };
 
 type ReasonCopy = { label: string; summary: string; headline: string; detail: string };
@@ -103,6 +104,22 @@ const REFLECTED_DETECTION_COPY: Record<string, ReasonCopy> = {
     detail:
       "주입한 값이 응답 본문에 그대로 나타나지만, 실제 리다이렉트 실행(Location 헤더/meta refresh/JS location 대입) 증거는 없습니다. 타입 검증 실패 에러 메시지 등에서도 흔히 발생하는 패턴이라 1-5 확정 취약점은 아니며, 참고용 정보 노출 신호로만 취급해야 합니다.",
   },
+};
+
+const XSS_CONFIRMED_COPY: ReasonCopy = {
+  label: "반사형 XSS (확정)",
+  summary: "스크립트가 이스케이프 없이 HTML 응답에 반사됨",
+  headline: "스크립트/HTML 인젝션이 이스케이프 없이 그대로 반사됨 (확정)",
+  detail:
+    "주입한 스크립트/HTML 인젝션 페이로드가 응답 Content-Type이 text/html인 응답에 이스케이프 없이 그대로 반사되어, 브라우저가 그대로 파싱해 스크립트가 실행될 수 있습니다.",
+};
+
+const XSS_CANDIDATE_COPY: ReasonCopy = {
+  label: "반사형 XSS 후보 (참고)",
+  summary: "JSON 등 비-HTML 응답에 이스케이프 없이 반사됨",
+  headline: "입력값이 이스케이프 없이 응답에 그대로 반사됨 (프런트엔드 렌더링 확인 필요)",
+  detail:
+    "주입한 스크립트/HTML 인젝션 페이로드가 이스케이프 없이 응답에 그대로 반사되지만, 응답 Content-Type이 HTML이 아니라(JSON 등) 즉시 실행되지는 않습니다. 프런트엔드가 이 값을 innerHTML/dangerouslySetInnerHTML 등으로 안전하지 않게 렌더링하는 지점이 있는지 확인이 필요합니다.",
 };
 
 function pathFromUrl(url: string): string {
@@ -326,6 +343,53 @@ export function parseG15Row(f: G15Finding): G15Row | null {
     };
   }
 
+  if (ruleId === "1-5-reflected-xss-probe") {
+    const url = String(ev.url ?? "");
+    const param = ev.param_name != null ? String(ev.param_name) : null;
+    const path = pathFromUrl(url);
+    const confirmed = ev.confirmed_redirect === true;
+    const testStatus = ev.test_status;
+    const stored = ev.stored === true;
+    const copy = confirmed ? XSS_CONFIRMED_COPY : XSS_CANDIDATE_COPY;
+
+    addField(detailFields, "요청 URL", url);
+    addField(detailFields, "메서드 (페이로드 주입)", ev.method);
+    addField(detailFields, "파라미터", param);
+    addField(detailFields, "주입 payload", ev.payload_used);
+    addField(detailFields, "Content-Type", ev.content_type);
+    addField(detailFields, "HTTP (baseline)", ev.baseline_status);
+    addField(detailFields, "HTTP (test)", testStatus);
+    // stored=true면 이 스니펫은 쓰기(method) 요청 자체의 응답이 아니라, 그 직후 값이
+    // 실제로 저장됐는지 확인하려고 별도로 보낸 GET 재조회 응답이다 — 라벨로 구분해 주지
+    // 않으면 "PATCH를 했는데 왜 조회 성공 메시지가 나오냐"는 혼란을 준다.
+    addField(
+      detailFields,
+      stored ? "반사된 응답 스니펫 (재조회 GET — 쓰기 응답 아님)" : "반사된 응답 스니펫",
+      ev.evidence_snippet,
+    );
+    addField(detailFields, "조치 방안", ev.recommendation);
+    addField(detailFields, "요청 바디/쿼리", ev.request_body);
+
+    return {
+      rowKey: `${engine}|${url}|${param ?? ""}|xss|${ev.payload_used ?? ""}`,
+      category: "xss",
+      categoryLabel: CATEGORY_LABELS.xss,
+      checkLabel: param ? `${path} · ${param}` : path,
+      issueLabel: copy.label,
+      headline: copy.headline,
+      scaleSummary: confirmed
+        ? `HTTP ${testStatus ?? "—"} · text/html 응답에 확정 반사`
+        : `HTTP ${testStatus ?? "—"} · ${String(ev.content_type ?? "비-HTML")} 응답에 반사 (후보)`,
+      plainExplanation: ev.description != null ? String(ev.description) : copy.detail,
+      targetHint: null,
+      severity: f.severity,
+      severityLabel: sevLabel,
+      engine,
+      message: f.message,
+      detailFields,
+    };
+  }
+
   return null;
 }
 
@@ -340,7 +404,7 @@ export function parseG15Findings(findings: G15Finding[]): {
     if (row) rows.push(row);
     else if (f.message !== "1-5 scan statistics") other.push(f);
   }
-  const catOrder: Record<G15Category, number> = { redirect: 0, reflected: 1, cors: 2, crossdomain: 3 };
+  const catOrder: Record<G15Category, number> = { redirect: 0, reflected: 1, xss: 2, cors: 3, crossdomain: 4 };
   rows.sort((a, b) => {
     const sev = severityRank(b.severity) - severityRank(a.severity);
     if (sev !== 0) return sev;

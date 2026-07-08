@@ -60,11 +60,6 @@ SKIP_FUZZ_PARAM_NAMES = frozenset(
         "search",
         "id",
         "ids",
-        "returnDate",
-        "returnTime",
-        "departureDate",
-        "targetId",
-        "targetType",
     }
 )
 

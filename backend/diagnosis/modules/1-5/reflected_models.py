@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -21,6 +21,11 @@ class ReflectedParam:
     param_type: str = "query"   # "query" | "body" | "hidden"
     content_type: str = ""      # application/json, application/x-www-form-urlencoded 등
     raw_body: str = ""          # 이 파라미터가 속한 요청의 전체 baseline body (JSON/form)
+    extra_headers: dict[str, str] = field(default_factory=dict)
+    # scanner.py phase A/B job의 원본 헤더(Authorization/Cookie 등) — 인증이 필요한
+    # 엔드포인트는 이 헤더 없이 보내면 컨트롤러 로직에 도달하기 전에 401로 막혀 반사/
+    # 리다이렉트 여부를 원리적으로 판별할 수 없다. Content-Type은 기존 content_type
+    # 필드가 별도로 담당하므로 여기 중복 포함돼도 _send()에서 스킴에 맞게 재정리된다.
 
 
 @dataclass

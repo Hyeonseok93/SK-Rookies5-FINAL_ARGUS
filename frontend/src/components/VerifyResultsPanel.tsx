@@ -79,7 +79,7 @@ export function VerifyResultsPanel({
       title="Verify Results"
       action={
         available ? (
-          <div className="flex flex-wrap items-center justify-center gap-2">
+          <>
             <OutcomeTag
               active={outcome === "final"}
               label="Final"
@@ -101,7 +101,7 @@ export function VerifyResultsPanel({
               onClick={() => onOutcomeChange("rejected")}
               tone="rejected"
             />
-          </div>
+          </>
         ) : undefined
       }
       trailing={
