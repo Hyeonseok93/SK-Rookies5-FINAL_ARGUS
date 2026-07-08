@@ -9,8 +9,16 @@ if str(_MODULE_DIR) not in sys.path:
 from g45_auth import get_headers
 from g45_utils import extract_ids_from_response
 from g45_payloads import safe_body
+from inventory.net import probe_url
 
-def build_resource_inventory(headers: dict, endpoints: list[dict], base_url_global: str, logger=None) -> dict:
+def build_resource_inventory(
+    headers: dict,
+    endpoints: list[dict],
+    base_url_global: str,
+    logger=None,
+    *,
+    timeout: float = 3.0,
+) -> dict:
     inventory = {}
     
     for ep in endpoints:
@@ -23,7 +31,7 @@ def build_resource_inventory(headers: dict, endpoints: list[dict], base_url_glob
             
         url = ep.get("base_url", base_url_global) + path
         try:
-            res = requests.get(url, headers=headers, timeout=3, verify=False)
+            res = requests.get(probe_url(url), headers=headers, timeout=timeout, verify=False)
             if res.status_code == 200:
                 try:
                     data = res.json()
@@ -40,7 +48,15 @@ def build_resource_inventory(headers: dict, endpoints: list[dict], base_url_glob
         inventory[k] = list(set(inventory[k]))
     return inventory
 
-def active_discovery_inventory(headers: dict, endpoints: list[dict], base_url_global: str, created_resources: list, logger=None) -> dict:
+def active_discovery_inventory(
+    headers: dict,
+    endpoints: list[dict],
+    base_url_global: str,
+    created_resources: list,
+    logger=None,
+    *,
+    timeout: float = 3.0,
+) -> dict:
     inventory = {}
     
     for ep in endpoints:
@@ -53,7 +69,7 @@ def active_discovery_inventory(headers: dict, endpoints: list[dict], base_url_gl
         url = ep.get("base_url", base_url_global) + path
         body = safe_body(ep)
         try:
-            res = requests.post(url, headers=headers, json=body, timeout=3, verify=False)
+            res = requests.post(probe_url(url), headers=headers, json=body, timeout=timeout, verify=False)
             if res.status_code in {200, 201}:
                 try:
                     data = res.json()

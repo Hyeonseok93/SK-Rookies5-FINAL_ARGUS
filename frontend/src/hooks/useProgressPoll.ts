@@ -8,6 +8,7 @@ export function useProgressPoll<T>(
 ) {
   useEffect(() => {
     if (!enabled) return;
+    void fetchFn().then(onUpdate).catch(() => {});
     const poll = window.setInterval(() => {
       void fetchFn().then(onUpdate).catch(() => {});
     }, intervalMs);

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
+import re
 import uuid
 import json
-import logging
 import yaml
 from pathlib import Path
 
@@ -52,8 +52,6 @@ from inventory.upload_batch import ensure_batch_dir, write_batch_manifest
 from inventory.upload_retention import prune_upload_batches
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
-logger = logging.getLogger("uvicorn.error")
-logger.setLevel(logging.INFO)
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
@@ -120,7 +118,7 @@ def get_tree(
 
 @router.get("/endpoints", response_model=EndpointListResponse)
 def list_endpoints(
-    q: str | None = Query(None, description="Filter by path/method/base_url/request parameter"),
+    q: str | None = Query(None, description="Filter by path/method/base_url"),
     source: str | None = Query(None, description="Filter by source id (url_list, api_list, openapi)"),
     inventory: str = Query("ready", description="ready (built) or verified (after verify)"),
     limit: int = Query(50, ge=1, le=500),
@@ -139,7 +137,6 @@ def list_endpoints(
             if needle in e.path.lower()
             or needle in e.method.lower()
             or needle in e.base_url.lower()
-            or any(needle in p.name.lower() for p in e.request_params)
         ]
     if source:
         items = [
@@ -367,11 +364,13 @@ async def build_attack_surface(
     url_list_enabled: bool = Form(False),
     api_list_enabled: bool = Form(False),
     openapi_enabled: bool = Form(False),
+    gradle_deps_enabled: bool = Form(False),
     url_list_file: UploadFile | None = File(None),
     api_list_file: UploadFile | None = File(None),
     openapi_files: list[UploadFile] | None = File(None),
+    gradle_deps_files: list[UploadFile] | None = File(None),
 ) -> BuildInventoryResponse:
-    if not any([url_list_enabled, api_list_enabled, openapi_enabled]):
+    if not any([url_list_enabled, api_list_enabled, openapi_enabled, gradle_deps_enabled]):
         return BuildInventoryResponse(
             ok=False,
             stats=InventoryStats(),
@@ -383,9 +382,11 @@ async def build_attack_surface(
     url_list_path: Path | None = None
     api_list_path: Path | None = None
     openapi_paths: list[Path] = []
+    gradle_dep_paths: list[Path] = []
     url_list_name: str | None = None
     api_list_name: str | None = None
     openapi_names: list[str] = []
+    gradle_dep_names: list[str] = []
 
     if url_list_enabled:
         if not url_list_file or not url_list_file.filename:
@@ -425,13 +426,85 @@ async def build_attack_surface(
         if not openapi_paths:
             return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Swagger file required.")
 
+    if gradle_deps_enabled:
+        if not gradle_deps_files:
+            return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Gradle dependency file required.")
+        gradle_dep_warnings: list[str] = []
+        for index, upload in enumerate(gradle_deps_files):
+            if not upload.filename:
+                continue
+            if not _ext_ok(upload.filename, {".txt"}):
+                return BuildInventoryResponse(
+                    ok=False,
+                    stats=InventoryStats(),
+                    message=f"Gradle dependency file: use .txt ({upload.filename})",
+                )
+            stored_name = f"deps_{index}.txt"
+            stored_path = batch_dir / stored_name
+            raw_bytes = await upload.read()
+            stored_path.parent.mkdir(parents=True, exist_ok=True)
+            stored_path.write_bytes(raw_bytes)
+            gradle_dep_paths.append(stored_path)
+            gradle_dep_names.append(upload.filename)
+            # 가볍게 지원 형식 여부 확인 (경고만, 저장은 완료)
+            try:
+                preview = raw_bytes[:4096].decode("utf-8", errors="replace")
+                _gradle_markers = ("runtimeClasspath", "+---", "\\---")
+                _maven_markers = ("[INFO]", "maven-dependency-plugin")
+                _pip_markers = ("==",)
+                _npm_markers = ('"dependencies"', '"packages"', '"version"')
+                recognized = (
+                    any(m in preview for m in _gradle_markers)
+                    or any(m in preview for m in _maven_markers)
+                    or preview.strip().startswith("{")
+                    or sum(1 for l in preview.splitlines()[:20]
+                           if re.search(r"[A-Za-z0-9_.-]+==", l)) >= 2
+                )
+                if not recognized:
+                    gradle_dep_warnings.append(
+                        f"{upload.filename}: 지원 형식(Gradle/Maven/pip/npm)이 아닐 수 있음"
+                    )
+            except Exception:
+                pass
+        if not gradle_dep_paths:
+            return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Gradle dependency file required.")
+        # 컨테이너 내부 절대경로 목록을 JSON에 저장 → diagnosis_service._context()가 읽음
+        dep_abs_paths = [str(p.resolve()) for p in gradle_dep_paths]
+        gradle_dep_files_json = DATA_DIR / "gradle_dep_files.json"
+        gradle_dep_files_json.write_text(
+            json.dumps({"paths": dep_abs_paths, "batch_id": batch_id}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    elif (DATA_DIR / "gradle_dep_files.json").is_file() and not gradle_deps_enabled:
+        # 명시적으로 비활성화한 경우 기존 파일 유지 (다른 업로드만 수행 중)
+        pass
+
     write_batch_manifest(
         batch_dir,
         batch_id=batch_id,
         url_list=url_list_name,
         api_list=api_list_name,
         openapi=openapi_names,
+        gradle_deps=gradle_dep_names if gradle_dep_names else None,
     )
+
+    # ── Gradle/Maven/pip/npm 의존성 파일만 올린 경우 ──────────────────────
+    # 엔드포인트 인벤토리(url_list/api_list/openapi)는 손대지 않고,
+    # 기존에 빌드돼 있던 api-tree를 그대로 둔 채 성공 처리한다.
+    if gradle_dep_names and not (url_list_enabled or api_list_enabled or openapi_enabled):
+        prune_upload_batches(UPLOAD_DIR)
+        existing_tree = _load_cached_tree("ready")
+        existing_stats = (
+            InventoryStats(**compute_stats(existing_tree))
+            if existing_tree
+            else InventoryStats()
+        )
+        return BuildInventoryResponse(
+            ok=True,
+            stats=existing_stats,
+            artifacts={"upload_batch": f"uploads/{batch_id}"},
+            message=f"Saved {len(gradle_dep_names)} dependency file(s) for scanning ({', '.join(gradle_dep_names)}).",
+        )
 
     cfg = load_config()
     saved_bases = resolved_base_url_strings()
@@ -461,7 +534,7 @@ async def build_attack_surface(
         base_urls=build_bases or None,
     )
 
-    if not tree.endpoints:
+    if not tree.endpoints and not gradle_dep_names:
         return BuildInventoryResponse(
             ok=False,
             stats=InventoryStats(**compute_stats(tree)),
@@ -482,7 +555,6 @@ async def build_attack_surface(
         artifacts=artifacts,
         message=f"Built attack surface map with {stats.api_endpoints} API endpoints.",
     )
-
 
 def _config_path() -> Path:
     return CONFIG_PATH if CONFIG_PATH.is_file() else BACKEND_ROOT / "config.yaml"
@@ -531,8 +603,6 @@ def _build_verify_response(
                 f"Verified 0/{payload['total_checked']} endpoints.{hint} "
                 "Original inventory was kept (not wiped)."
             ),
-            warning=payload.get("warning"),
-            error=payload.get("error", "verify_empty_result"),
         )
 
     verified_tree: ApiTree = payload["verified_tree"]
@@ -601,19 +671,7 @@ async def verify_attack_surface(
                 spider_enabled=use_spider,
                 ajax_spider_enabled=use_ajax_spider,
             )
-            zap_tree = payload["verified_tree"]
-            if zap_tree.endpoints:
-                working_tree = zap_tree
-            else:
-                # A failed/empty ZAP pass must not prevent the independent
-                # httpx pass from probing the original inventory. Partial or
-                # complete httpx results can still be persisted safely.
-                logger.warning(
-                    "ZAP verify produced 0 endpoints; continuing httpx with the "
-                    "original inventory (%d endpoints)",
-                    len(tree.endpoints),
-                )
-                working_tree = tree
+            working_tree = payload["verified_tree"]
         except ZapNotAvailableError as exc:
             if not use_httpx:
                 return VerifyInventoryResponse(

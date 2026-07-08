@@ -140,11 +140,9 @@ def sample_value(inp: InputParam, path: str = "") -> Any:
 
 
 def frontend_gateway_path(base_url: str, path: str) -> str:
-    """일부 프런트엔드 dev 서버는 API를 별도 경로 프리픽스로 프록시한다 — 그 프리픽스
-    규칙(예: /user-api, /admin-api)은 타겟마다 다르므로 여기서 알 수 없다. 이 함수는
-    확장 지점으로만 남겨두고 기본은 경로를 그대로 반환한다.
-    """
-    return path
+    """Return the inventory path as-is (no per-app gateway rewriting)."""
+    _ = base_url
+    return path or "/"
 
 
 def _heuristic_query(path: str, method: str) -> dict[str, str]:

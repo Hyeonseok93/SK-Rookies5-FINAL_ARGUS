@@ -297,3 +297,45 @@ def test_run_g22_with_options(tmp_path, monkeypatch):
     assert g22["zap_enabled"] is False
     assert g22["httpx_enabled"] is False
     assert g22["max_candidates"] == 10
+
+
+def test_run_g45_with_options(tmp_path, monkeypatch):
+    import yaml
+    from diagnosis.context import DiagnosisContext
+    from diagnosis.registry import get_module
+
+    captured: list[DiagnosisContext] = []
+
+    def fake_run(ctx):
+        captured.append(ctx)
+        from diagnosis.result import SectionReport, utc_now_iso
+
+        return SectionReport(
+            section_id="4-5",
+            title="test",
+            chapter=4,
+            status="pass",
+            implemented=True,
+            checked_at=utc_now_iso(),
+        )
+
+    mod = get_module("4-5")
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        yaml.safe_dump({"diagnosis_4_5": {"probe_mode": "sample", "timeout": 5.0}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CONFIG_PATH", str(cfg))
+    monkeypatch.setattr(diagnosis_service, "BACKEND_ROOT", tmp_path)
+
+    diagnosis_service.run_section(
+        "4-5",
+        g45_options={"probe_mode": "full", "timeout": 10.0, "max_endpoints": 25},
+    )
+    assert captured
+    g45 = captured[0].raw_config["diagnosis_4_5"]
+    assert g45["probe_mode"] == "full"
+    assert g45["timeout"] == 10.0
+    assert g45["max_endpoints"] == 25

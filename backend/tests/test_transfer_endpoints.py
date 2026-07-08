@@ -44,7 +44,7 @@ def test_download_defaults_to_get(data_dir):
 def test_dashboard_transfer_entries_resolves_path(data_dir, monkeypatch):
     svc.save_transfer_endpoints("download", [{"id": "1", "url": "/api/v1/files/{id}"}])
     monkeypatch.setattr(
-        "diagnosis.replay.normalize.collect_probe_base_urls",
+        "app.services.transfer_endpoints_service.collect_probe_base_urls",
         lambda _raw: ["http://localhost:8080"],
     )
     rows = svc.dashboard_transfer_entries("download", {})
@@ -63,7 +63,7 @@ def test_merge_dashboard_download_candidates(data_dir, monkeypatch):
 
     svc.save_transfer_endpoints("download", [{"id": "1", "url": "/api/manual-download"}])
     monkeypatch.setattr(
-        "diagnosis.replay.normalize.collect_probe_base_urls",
+        "app.services.transfer_endpoints_service.collect_probe_base_urls",
         lambda _raw: ["http://localhost:8080"],
     )
     merged = candidates_mod.merge_dashboard_download_candidates([], {})
@@ -82,7 +82,7 @@ def test_select_dashboard_download_only(data_dir, monkeypatch):
 
     svc.save_transfer_endpoints("download", [{"id": "1", "url": "/api/export/report"}])
     monkeypatch.setattr(
-        "diagnosis.replay.normalize.collect_probe_base_urls",
+        "app.services.transfer_endpoints_service.collect_probe_base_urls",
         lambda _raw: ["http://localhost:8080"],
     )
     rows, mode = candidates_mod.select_dashboard_download_candidates_only({})
@@ -93,7 +93,7 @@ def test_select_dashboard_download_only(data_dir, monkeypatch):
 
 def test_download_inventory_parses_query_params(data_dir, monkeypatch):
     monkeypatch.setattr(
-        "diagnosis.replay.normalize.collect_probe_base_urls",
+        "app.services.transfer_endpoints_service.collect_probe_base_urls",
         lambda _raw: ["http://localhost:8080"],
     )
     svc.save_transfer_endpoints(
@@ -110,7 +110,7 @@ def test_download_inventory_parses_query_params(data_dir, monkeypatch):
 
 def test_download_inventory_parses_path_template(data_dir, monkeypatch):
     monkeypatch.setattr(
-        "diagnosis.replay.normalize.collect_probe_base_urls",
+        "app.services.transfer_endpoints_service.collect_probe_base_urls",
         lambda _raw: ["http://localhost:8080"],
     )
     svc.save_transfer_endpoints("download", [{"id": "1", "url": "/api/v1/files/{fileId}"}])
@@ -122,7 +122,48 @@ def test_download_inventory_parses_path_template(data_dir, monkeypatch):
 
 def test_download_inventory_post_without_url_has_no_hardcoded_params(data_dir, monkeypatch):
     monkeypatch.setattr(
-        "diagnosis.replay.normalize.collect_probe_base_urls",
+        "app.services.transfer_endpoints_service.collect_probe_base_urls",
+        lambda _raw: ["http://localhost:8080"],
+    )
+    svc.save_transfer_endpoints(
+        "download",
+        [{"id": "1", "url": "/api/v1/report/integrated", "method": "POST"}],
+    )
+    eps = svc.dashboard_endpoints_as_inventory("download", {})
+    assert len(eps) == 1
+    assert eps[0].path == "/api/v1/report/integrated"
+    assert eps[0].request_params == []
+
+
+def test_download_relative_path_expands_all_dashboard_bases(data_dir, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.transfer_endpoints_service.collect_probe_base_urls",
+        lambda _raw: [
+            "http://localhost:5173",
+            "http://localhost:8080",
+            "http://localhost:8081",
+        ],
+    )
+    svc.save_transfer_endpoints(
+        "download",
+        [{"id": "1", "url": "/api/v1/report/integrated", "method": "POST"}],
+    )
+    rows = svc.dashboard_transfer_entries("download", {})
+    assert len(rows) == 3
+    assert {row["base_url"] for row in rows} == {
+        "http://localhost:5173",
+        "http://localhost:8080",
+        "http://localhost:8081",
+    }
+    assert all(row["path"] == "/api/v1/report/integrated" for row in rows)
+    for row in rows:
+        assert row["url"].endswith("/api/v1/report/integrated")
+        assert "/user-api" not in row["url"]
+
+
+def test_download_registration_preserves_gateway_prefix(data_dir, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.transfer_endpoints_service.collect_probe_base_urls",
         lambda _raw: ["http://localhost:8080"],
     )
     svc.save_transfer_endpoints(
@@ -131,12 +172,12 @@ def test_download_inventory_post_without_url_has_no_hardcoded_params(data_dir, m
     )
     eps = svc.dashboard_endpoints_as_inventory("download", {})
     assert len(eps) == 1
-    assert eps[0].request_params == []
+    assert eps[0].path == "/user-api/api/v1/report/integrated"
 
 
 def test_download_inventory_infers_path_sample_from_resolved_url(data_dir, monkeypatch):
     monkeypatch.setattr(
-        "diagnosis.replay.normalize.collect_probe_base_urls",
+        "app.services.transfer_endpoints_service.collect_probe_base_urls",
         lambda _raw: ["http://localhost:8080"],
     )
     svc.save_transfer_endpoints("download", [{"id": "1", "url": "/api/v1/files/99"}])

@@ -10,9 +10,10 @@ import time
 from typing import Dict, List, Tuple
 from urllib.parse import urlparse
 
+import requests
 from zapv2 import ZAPv2
 
-from models import DetectionResult, InjectionType
+from g12_models import DetectionResult, InjectionType
 
 
 class ZapEngine:
@@ -69,6 +70,34 @@ class ZapEngine:
     def log(self, message: str) -> None:
         print(f"[ZAP] {message}")
 
+    def _openapi_import(self, swagger_url: str, target_url: str) -> None:
+        action = "importUrl" if swagger_url.startswith(("http://", "https://")) else "importFile"
+        spec_key = "url" if action == "importUrl" else "file"
+        spec_value = swagger_url if action == "importUrl" else os.path.abspath(swagger_url)
+        endpoint = f"http://{self.proxy_address}/JSON/openapi/action/{action}/"
+        params = {
+            "apikey": self.api_key,
+            spec_key: spec_value,
+            "target": target_url,
+        }
+        last_error: Exception | None = None
+        for attempt in range(1, 3):
+            try:
+                session = requests.Session()
+                session.trust_env = False
+                response = session.get(endpoint, params=params, timeout=60)
+                response.raise_for_status()
+                payload = response.json()
+                if payload.get("Result") == "OK":
+                    return
+                self.log(f"OpenAPI import response: {payload}")
+                return
+            except requests.RequestException as exc:
+                last_error = exc
+                self.log(f"OpenAPI import attempt {attempt}/2 failed: {exc}")
+                time.sleep(2)
+        raise RuntimeError(f"OpenAPI import failed: {last_error}")
+
     def configure_scan(
         self,
         target_url: str,
@@ -123,27 +152,42 @@ class ZapEngine:
 
         if swagger_url:
             self.log(f"Importing OpenAPI spec: {swagger_url}")
-            if swagger_url.startswith(("http://", "https://")):
-                self.zap.openapi.import_url(swagger_url, target_url)
-            else:
-                self.zap.openapi.import_file(os.path.abspath(swagger_url), target_url)
+            self._openapi_import(swagger_url, target_url)
             time.sleep(2)
 
-        self.log(f"Running Spider: {target_url}")
-        scan_id = self.zap.spider.scan(url=target_url, maxchildren=10)
-        while int(self.zap.spider.status(scan_id)) < 100:
-            time.sleep(1)
-        time.sleep(2)
+        self.log("Using imported OpenAPI spec as fixed ZAP scan targets.")
 
-    def run_active_scan(self, target_url: str, *, max_minutes: int = 30) -> List[DetectionResult]:
+    def run_active_scan(self, target_url: str, *, max_minutes: int = 30, progress_cb=None) -> List[DetectionResult]:
         self.log(f"Active Scan (Injection) start: {target_url}")
         scan_id = self.zap.ascan.scan(url=target_url, recurse=True, scanpolicyname=self.policy_name)
+        self.log(f"Active Scan id: {scan_id}")
         deadline = time.time() + max(1, max_minutes) * 60
-        while int(self.zap.ascan.status(scan_id)) < 100:
+        last_status = -1
+        unavailable_reads = 0
+        while True:
+            raw_status = self.zap.ascan.status(scan_id)
+            try:
+                status = int(raw_status)
+            except (TypeError, ValueError):
+                unavailable_reads += 1
+                self.log(f"Active scan status unavailable for id={scan_id}: {raw_status}")
+                if unavailable_reads >= 5:
+                    self.log("Active scan status stayed unavailable; continuing with collected alerts only.")
+                    break
+                time.sleep(2)
+                continue
+            unavailable_reads = 0
+            if status != last_status and progress_cb:
+                progress_cb(status, target_url)
+                last_status = status
+            if status >= 100:
+                break
             if time.time() >= deadline:
                 self.log(f"Active scan deadline ({max_minutes}m) reached.")
                 break
             time.sleep(2)
+        if progress_cb:
+            progress_cb(100, target_url)
         self.log("Active Scan complete. Collecting results.")
         return self._collect_results(target_url)
 

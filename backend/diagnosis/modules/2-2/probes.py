@@ -11,6 +11,7 @@ from typing import Any
 from app.services.zap_util import probe_url
 from diagnosis.replay.recorder import ReplaySession
 from diagnosis.result import DiagnosisFinding
+from inventory.net import probe_base_url
 from inventory.probe_build import build_probe_request
 from inventory.schema import Endpoint
 
@@ -400,7 +401,7 @@ def run_forced_browse(
                             "url": url,
                             "http_status": resp.status,
                             "path": rel_path,
-                            "base_url": base,
+                            "base_url": probe_base_url(base),
                             "trigger": trigger,
                             "trigger_label": tf.trigger_label(trigger),
                             **tf.evidence_snippet(resp.headers, body_text),

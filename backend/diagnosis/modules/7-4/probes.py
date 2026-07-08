@@ -130,11 +130,14 @@ def run_security_probes(
 def _remediation_hint(check_type: str) -> str:
     hints = {
         "missing_hsts": "Add Strict-Transport-Security (e.g. max-age=31536000; includeSubDomains)",
+        "no_transport_encryption": "Serve the application over HTTPS/TLS, then add Strict-Transport-Security (max-age=31536000; includeSubDomains)",
         "missing_csp": "Define Content-Security-Policy appropriate for the application",
         "missing_x_frame_options": "Set X-Frame-Options: DENY or SAMEORIGIN (or CSP frame-ancestors)",
         "weak_x_frame_options": "Replace ALLOWALL with DENY or SAMEORIGIN",
         "missing_nosniff": "Set X-Content-Type-Options: nosniff",
         "missing_referrer_policy": "Set Referrer-Policy (e.g. strict-origin-when-cross-origin)",
+        "xxss_protection_disabled": "Set X-XSS-Protection: 1; mode=block, or remove it and rely on Content-Security-Policy",
+        "missing_xxss_protection": "Add X-XSS-Protection: 1; mode=block (legacy) or enforce via Content-Security-Policy",
         "missing_permissions_policy": "Set Permissions-Policy to restrict browser features",
         "cookie_missing_secure": "Add Secure flag to Set-Cookie on HTTPS",
         "cookie_missing_httponly": "Add HttpOnly to session cookies",

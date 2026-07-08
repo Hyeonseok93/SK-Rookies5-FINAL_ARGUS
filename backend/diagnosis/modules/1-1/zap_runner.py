@@ -1242,23 +1242,24 @@ def run_zap_scan(target_url: str, auth_tokens: list):
 
     update_status(is_running=True, progress=0, message="ZAP 연결 및 포트 탐색 중...", result_file=None, total_alerts=0)
     
-    # 1. 포트 자동 탐색 (8889, 8090)
+    # 1. 포트 자동 탐색 (ZAP_PROXY 환경 변수 우선, 없으면 8889, 8090)
     zap = None
-    zap_port = 8889
-    for port in [8889, 8090]:
+    zap_proxy_env = os.environ.get("ZAP_PROXY")
+    proxy_urls = [zap_proxy_env] if zap_proxy_env else [f"http://127.0.0.1:{p}" for p in [8889, 8090]]
+    
+    for proxy_url in proxy_urls:
         try:
-            temp_zap = ZAPv2(proxies={'http': f'http://127.0.0.1:{port}', 'https': f'http://127.0.0.1:{port}'})
+            temp_zap = ZAPv2(proxies={'http': proxy_url, 'https': proxy_url})
             # 간단한 API 호출로 연결 테스트
             temp_zap.core.version
             zap = temp_zap
-            zap_port = port
-            print(f"[+] ZAP Connected successfully on port {port}")
+            print(f"[+] ZAP Connected successfully to {proxy_url}")
             break
         except Exception:
             continue
             
     if not zap:
-        update_status(is_running=False, message="에러 발생: ZAP 프록시 서버(포트 8090 또는 8889)에 연결할 수 없습니다. ZAP이 켜져 있는지 확인해 주세요.")
+        update_status(is_running=False, message="에러 발생: ZAP 프록시 서버(포트 8090 또는 도커 컨테이너)에 연결할 수 없습니다. ZAP이 켜져 있는지 확인해 주세요.")
         return
 
     try:

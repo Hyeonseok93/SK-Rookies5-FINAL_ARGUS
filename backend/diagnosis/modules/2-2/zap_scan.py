@@ -15,6 +15,7 @@ from app.services.zap_util import (
     reset_zap_workspace,
 )
 from diagnosis.result import DiagnosisFinding
+from inventory.net import probe_base_url
 
 _MODULE_DIR = Path(__file__).resolve().parent
 
@@ -141,7 +142,7 @@ def collect_zap_supplemental_findings(zap: Any, base_urls: list[str]) -> list[Di
                         "param": alert.get("param"),
                         "risk": alert.get("risk"),
                         "evidence": alert.get("evidence"),
-                        "base_url": base,
+                        "base_url": probe_base_url(base),
                         "trigger": f"zap_rule_{plugin_id}",
                         "trigger_label": PLUGIN_LABELS.get(plugin_id, f"ZAP Rule {plugin_id}"),
                     },

@@ -60,6 +60,19 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     if not config_path.is_file():
         return AppConfig()
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    
+    # 도커 환경일 경우 localhost -> host.docker.internal 자동 치환
+    if os.path.exists("/.dockerenv"):
+        def replace_localhost(obj):
+            if isinstance(obj, str):
+                return obj.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
+            elif isinstance(obj, list):
+                return [replace_localhost(item) for item in obj]
+            elif isinstance(obj, dict):
+                return {k: replace_localhost(v) for k, v in obj.items()}
+            return obj
+        raw = replace_localhost(raw)
+                    
     return AppConfig.model_validate(raw)
 
 
