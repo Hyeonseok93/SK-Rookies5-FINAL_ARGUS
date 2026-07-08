@@ -20,6 +20,34 @@ scan_status = {
     "total_alerts": 0
 }
 
+
+def _bounded_get(url, *, headers=None, params=None, timeout=4, max_bytes=524288):
+    """GET with a bounded response body so streaming/large endpoints cannot stall scans."""
+    res = requests.get(
+        url,
+        headers=headers,
+        params=params,
+        timeout=timeout,
+        stream=True,
+    )
+    chunks = []
+    total = 0
+    try:
+        for chunk in res.iter_content(chunk_size=16384):
+            if not chunk:
+                continue
+            remaining = max_bytes - total
+            if remaining <= 0:
+                break
+            chunks.append(chunk[:remaining])
+            total += len(chunks[-1])
+            if total >= max_bytes:
+                break
+    finally:
+        res.close()
+    res._content = b"".join(chunks)
+    return res
+
 result_dir_override = None
 
 def update_status(is_running=None, progress=None, message=None, result_file=None, log_file=None, total_alerts=None):
@@ -2982,6 +3010,28 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                     # POST 엔드포인트에서 4종의 페이로드 저장 시도 후, 모든 GET 엔드포인트에 대해 자원 ID를 대입하여 브로드캐스트 조회
                     if method.lower() in {"post", "put", "patch"}:
                         # 고도화 2: 1종이 아닌 상위 4종의 주요 XSS 변형군으로 저장 시도
+                        path_lower_for_stored = str(path or api_url).lower()
+                        stored_skip_markers = (
+                            "/auth/",
+                            "/login",
+                            "/logout",
+                            "/email/send",
+                            "/email/verify",
+                            "/check-email",
+                            "/check-nickname",
+                        )
+                        if baseline_status is None or baseline_status >= 400:
+                            print(
+                                f"[STORED XSS DEBUG] skip stored scan -> {method.upper()} {api_url}: "
+                                f"baseline status {baseline_status}"
+                            )
+                            continue
+                        if any(marker in path_lower_for_stored for marker in stored_skip_markers):
+                            print(
+                                f"[STORED XSS DEBUG] skip stored scan -> {method.upper()} {api_url}: "
+                                "auth/account utility endpoint"
+                            )
+                            continue
                         stored_targets = []
                         for q_param in base_test_params.keys():
                             stored_targets.append(("query", q_param, base_test_param_schemas.get(q_param, {"type": "string"})))
@@ -3029,7 +3079,28 @@ def run_zap_scan(target_url: str, auth_tokens: list):
 
                                 # [Stored XSS 오탐 방지] POST 저장 전에 미리 모든 GET 엔드포인트의 Baseline 상태를 백업
                                 get_baselines = {}
-                                for get_path, get_methods in account_endpoints.items():
+                                get_endpoint_items = [
+                                    (get_path, get_methods)
+                                    for get_path, get_methods in account_endpoints.items()
+                                    if "get" in get_methods
+                                ]
+                                print(
+                                    f"[STORED XSS DEBUG] preparing GET baselines for {method.upper()} {api_url} "
+                                    f"payload_param={target_param} get_endpoints={len(get_endpoint_items)}"
+                                )
+                                update_status(
+                                    progress=55,
+                                    message=(
+                                        "Stored XSS baseline collection: "
+                                        f"{method.upper()} {api_url} ({len(get_endpoint_items)} GET endpoints)"
+                                    ),
+                                )
+                                for idx_get, (get_path, get_methods) in enumerate(get_endpoint_items, start=1):
+                                    if idx_get == 1 or idx_get % 20 == 0 or idx_get == len(get_endpoint_items):
+                                        print(
+                                            f"[STORED XSS DEBUG] baseline progress {idx_get}/{len(get_endpoint_items)} "
+                                            f"for {method.upper()} {api_url}"
+                                        )
                                     if "get" not in get_methods:
                                         continue
                                     # 임시 1번 ID로 치환하여 Baseline 백업 시도
@@ -3038,7 +3109,12 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                     tmp_url = f"{best_base.rstrip('/')}/{tmp_path.lstrip('/')}"
                                     tmp_params = build_query_defaults_from_details(get_methods.get("get") or {}, swagger_components)
                                     try:
-                                        tmp_res = requests.get(tmp_url, headers=xss_headers, params=tmp_params or None, timeout=3)
+                                        tmp_res = _bounded_get(
+                                            tmp_url,
+                                            headers=xss_headers,
+                                            params=tmp_params or None,
+                                            timeout=3,
+                                        )
                                         if tmp_res.status_code == 200:
                                             get_baselines[get_path] = tmp_res.text
                                     except Exception:
@@ -3075,7 +3151,12 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                     )
     
                                     # 모든 GET 엔드포인트를 순회하며 치환 및 조회
-                                    for get_path, get_methods in account_endpoints.items():
+                                    for idx_get, (get_path, get_methods) in enumerate(get_endpoint_items, start=1):
+                                        if idx_get == 1 or idx_get % 20 == 0 or idx_get == len(get_endpoint_items):
+                                            print(
+                                                f"[STORED XSS DEBUG] broadcast verification progress "
+                                                f"{idx_get}/{len(get_endpoint_items)} for {method.upper()} {api_url}"
+                                            )
                                         if "get" not in get_methods:
                                             continue
                                         
@@ -3088,7 +3169,16 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                         get_url = f"{best_base.rstrip('/')}/{resolved_path.lstrip('/')}"
                                         get_params = build_query_defaults_from_details(get_methods.get("get") or {}, swagger_components)
                                         try:
-                                            get_res = requests.get(get_url, headers=xss_headers, params=get_params or None, timeout=4)
+                                            print(
+                                                f"[STORED XSS DEBUG] broadcast GET {idx_get}/{len(get_endpoint_items)} "
+                                                f"{get_url}"
+                                            )
+                                            get_res = _bounded_get(
+                                                get_url,
+                                                headers=xss_headers,
+                                                params=get_params or None,
+                                                timeout=4,
+                                            )
                                             # 해당 GET 엔드포인트 전용으로 백업해둔 Baseline 본문 가져오기
                                             specific_baseline = get_baselines.get(get_path)
                                             
