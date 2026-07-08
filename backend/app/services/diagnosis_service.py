@@ -56,6 +56,8 @@ def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
     if config_path.is_file():
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
 
+    raw = _inject_gradle_dep_files(raw)
+
     # Load test-accounts.json if raw doesn't have auth accounts explicitly
     from app.services.test_accounts_service import load_test_accounts
     test_accs = load_test_accounts().get("accounts")
@@ -582,5 +584,4 @@ def run_replay(section_id: str, *, finding_id: str | None = None, use_playwright
         raw_config=raw,
         use_playwright=use_playwright,
     )
-
 
