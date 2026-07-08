@@ -511,6 +511,13 @@ export interface DiagnosisG42RunOptionsPayload {
   probe_account_email?: string;
 }
 
+export interface DiagnosisG45RunOptionsPayload {
+  probe_mode?: "base_only" | "sample" | "full";
+  sample_size?: number;
+  timeout?: number;
+  max_endpoints?: number;
+}
+
 export interface DiagnosisG21RunOptionsPayload {
   seller_email?: string;
   seller_password?: string;
@@ -544,6 +551,7 @@ export interface DiagnosisRunSectionRequest {
   g35?: DiagnosisG35RunOptionsPayload;
   g36?: DiagnosisG36RunOptionsPayload;
   g42?: DiagnosisG42RunOptionsPayload;
+  g45?: DiagnosisG45RunOptionsPayload;
   g52?: DiagnosisG52RunOptionsPayload;
   g61?: DiagnosisG61RunOptionsPayload;
   g62?: DiagnosisG62RunOptionsPayload;

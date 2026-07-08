@@ -25,12 +25,49 @@ from g45_payloads import safe_body
 from g45_discovery import build_resource_inventory, active_discovery_inventory
 from inventory.net import probe_url
 
+VALID_PROBE_MODES = {"base_only", "sample", "full"}
+
+
+def _positive_int(value, default: int | None = None) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _float_in_range(value, default: float, *, low: float = 1.0, high: float = 60.0) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(parsed, high))
+
+
+def _select_endpoints(endpoints: list[dict], *, probe_mode: str, sample_size: int | None, max_endpoints: int | None) -> list[dict]:
+    if probe_mode == "sample" and sample_size:
+        endpoints = endpoints[:sample_size]
+    if max_endpoints:
+        endpoints = endpoints[:max_endpoints]
+    return endpoints
+
+
 def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     stats = {"scanned_endpoints": 0, "admin_endpoints": 0}
     findings = []
     
     # 1. Load accounts
     raw = ctx.raw_config or {}
+    options = raw.get("diagnosis_4_5") or {}
+    if not isinstance(options, dict):
+        options = {}
+    probe_mode = str(options.get("probe_mode") or "full").strip().lower()
+    if probe_mode not in VALID_PROBE_MODES:
+        probe_mode = "full"
+    sample_size = _positive_int(options.get("sample_size"), 50)
+    max_endpoints = _positive_int(options.get("max_endpoints"))
+    timeout = _float_in_range(options.get("timeout"), 5.0)
+
     auth_cfg = raw.get("auth") or {}
     accounts = auth_cfg.get("accounts") or []
     data_dir = Path(getattr(ctx, "data_dir", "data"))
@@ -65,11 +102,22 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         return ScanResult(status="skipped", message="4-5 scan skipped: needs at least 1 USER account.")
         
     api_tree = _read_api_tree(data_dir)
-    endpoints = api_tree.get("endpoints", []) if api_tree else []
+    all_endpoints = api_tree.get("endpoints", []) if api_tree else []
+    endpoints = _select_endpoints(
+        all_endpoints,
+        probe_mode=probe_mode,
+        sample_size=sample_size,
+        max_endpoints=max_endpoints,
+    )
     
     admin_endpoints = [ep for ep in endpoints if "/admin/" in ep.get("path", "").lower() or "/manage/" in ep.get("path", "").lower()]
     stats["admin_endpoints"] = len(admin_endpoints)
     stats["scanned_endpoints"] = len(endpoints)
+    stats["total_inventory_endpoints"] = len(all_endpoints)
+    stats["probe_mode"] = probe_mode
+    stats["sample_size"] = sample_size
+    stats["max_endpoints"] = max_endpoints
+    stats["timeout"] = timeout
     
     report_dir = data_dir / "report" / "4-5"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -88,7 +136,10 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             f.write(f"{formatted_msg}\n")
         print(formatted_msg)
         
-    _log("Starting Advanced 4-5 Access Control scan")
+    _log(
+        "Starting Advanced 4-5 Access Control scan "
+        f"(mode={probe_mode}, selected={len(endpoints)}/{len(all_endpoints)}, timeout={timeout}s)"
+    )
     
     user_a = user_logins[0]
     user_a_headers = auth_headers_for_session(user_a)
@@ -101,7 +152,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             url = ep.get("base_url", "") + ep.get("path", "")
             _log(f"    [Phase 0] Testing {method} {url} ...")
             try:
-                res = requests.request(method, probe_url(url), headers=user_a_headers, timeout=5, verify=False)
+                res = requests.request(method, probe_url(url), headers=user_a_headers, timeout=timeout, verify=False)
                 if res.status_code in {200, 201, 204}:
                     res_text_lower = res.text.lower()
                     error_keywords = ["권한", "denied", "unauthorized", "fail", "not allowed", "forbidden", "unauthenticated"]
@@ -129,6 +180,10 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             except Exception as e:
                 _log(f"    [Error] Phase 0 Vertical PrivEsc: {e}")
             
+    if probe_mode == "base_only":
+        _log("Skipping Phase 1~4: probe_mode=base_only only checks admin/manage endpoints.")
+        return ScanResult(findings=findings, stats=stats, status="fail" if findings else "pass")
+
     # Need User B for horizontal tests
     if len(user_logins) < 2:
         _log("Skipping Phase 1~3: Requires at least 2 USER accounts for IDOR testing.")
@@ -142,15 +197,34 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     
     # [Phase 0.5] Extract Dynamic User B ID
     _log("Phase 0.5: Dynamically Extracting User B's Identifier")
-    user_b_dynamic_id = get_dynamic_user_id(user_b, endpoints, base_url_global, user_b_headers, _log)
+    user_b_dynamic_id = get_dynamic_user_id(
+        user_b,
+        endpoints,
+        base_url_global,
+        user_b_headers,
+        _log,
+        timeout=timeout,
+    )
     
     # [Phase 1] Discovery
     _log("Phase 1: Discovery (Building B's Resource Inventory)")
-    b_inventory = build_resource_inventory(user_b_headers, endpoints, base_url_global, _log)
+    b_inventory = build_resource_inventory(
+        user_b_headers,
+        endpoints,
+        base_url_global,
+        _log,
+        timeout=timeout,
+    )
     created_resources = []
         
     _log("    Building A's Resource Inventory for noise filtering...")
-    a_inventory = build_resource_inventory(user_a_headers, endpoints, base_url_global, _log)
+    a_inventory = build_resource_inventory(
+        user_a_headers,
+        endpoints,
+        base_url_global,
+        _log,
+        timeout=timeout,
+    )
         
     filtered_b_inventory = {}
     for k, v_list in b_inventory.items():
@@ -163,10 +237,24 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     
     if not b_inventory:
         _log("    Passive discovery yielded no UNIQUE IDs. Starting Active Discovery (POST)...")
-        b_inventory = active_discovery_inventory(user_b_headers, endpoints, base_url_global, created_resources, _log)
+        b_inventory = active_discovery_inventory(
+            user_b_headers,
+            endpoints,
+            base_url_global,
+            created_resources,
+            _log,
+            timeout=timeout,
+        )
         if b_inventory:
             # Re-filter after active discovery just in case
-            a_inventory = active_discovery_inventory(user_a_headers, endpoints, base_url_global, created_resources, _log)
+            a_inventory = active_discovery_inventory(
+                user_a_headers,
+                endpoints,
+                base_url_global,
+                created_resources,
+                _log,
+                timeout=timeout,
+            )
             for k, v_list in b_inventory.items():
                 a_list = a_inventory.get(k, [])
                 unique_v = [v for v in v_list if v not in a_list]
@@ -210,7 +298,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                         if method == "GET":
                             _log(f"    [Phase 2 Case 1] Testing {method} {test_url} ...")
                             try:
-                                res = requests.get(probe_url(test_url), headers=user_a_headers, timeout=5, verify=False)
+                                res = requests.get(probe_url(test_url), headers=user_a_headers, timeout=timeout, verify=False)
                                 if res.status_code == 200:
                                     _log(f"    [Case 1 IDOR] {test_url} -> VULNERABLE")
                                     findings.append(DiagnosisFinding(
@@ -242,7 +330,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         # 1. 대상: 파라미터가 명시되지 않거나 Query 파라미터만 있는 GET API (경로 파라미터 제외)
         if method == "GET" and "{" not in path:
             try:
-                res_a_base = requests.get(probe_url(url_template), headers=user_a_headers, timeout=5, verify=False)
+                res_a_base = requests.get(probe_url(url_template), headers=user_a_headers, timeout=timeout, verify=False)
                 
                 if res_a_base.status_code == 200 and user_b_dynamic_id:
                     # 2단계: 쿼리 강제 주입 (Hidden Query Injection)
@@ -254,7 +342,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                             
                             _log(f"    [Phase 2 Case 2] Testing {method} {test_url} ...")
                             # User A 토큰으로 User B의 ID를 쿼리에 섞어서 요청
-                            res_injected = requests.get(probe_url(test_url), headers=user_a_headers, timeout=5, verify=False)
+                            res_injected = requests.get(probe_url(test_url), headers=user_a_headers, timeout=timeout, verify=False)
                             
                             if res_injected.status_code == 200:
                                 injected_len = len(res_injected.content)
@@ -353,7 +441,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                     
                 _log(f"    [Phase 4] Testing {method} {test_url} (Injecting {param_name}={payload}) ...")
                 try:
-                    res = requests.request(method, probe_url(test_url), headers=user_a_headers, json=body, timeout=5, verify=False)
+                    res = requests.request(method, probe_url(test_url), headers=user_a_headers, json=body, timeout=timeout, verify=False)
                     if res.status_code in {200, 201}:
                         found_payload = False
                         try:
@@ -426,7 +514,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             for v in v_list:
                 del_url = f"{url}/{v}"
                 try:
-                    requests.delete(probe_url(del_url), headers=user_b_headers, timeout=3, verify=False)
+                    requests.delete(probe_url(del_url), headers=user_b_headers, timeout=min(timeout, 10.0), verify=False)
                     _log(f"    [Cleanup] Deleted {del_url}")
                 except Exception as e:
                     print(f"    [Error] Exception during Cleanup: {e}")
