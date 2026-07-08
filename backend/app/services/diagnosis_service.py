@@ -118,6 +118,10 @@ def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
             base_g42 = dict(raw.get("diagnosis_4_2") or {})
             base_g42.update(raw_overrides["diagnosis_4_2"])
             raw = {**raw, "diagnosis_4_2": base_g42}
+        elif "diagnosis_4_5" in raw_overrides:
+            base_g45 = dict(raw.get("diagnosis_4_5") or {})
+            base_g45.update(raw_overrides["diagnosis_4_5"])
+            raw = {**raw, "diagnosis_4_5": base_g45}
         elif "diagnosis_1_5" in raw_overrides:
             base_g15 = dict(raw.get("diagnosis_1_5") or {})
             base_g15.update(raw_overrides["diagnosis_1_5"])

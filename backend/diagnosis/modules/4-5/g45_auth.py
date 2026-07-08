@@ -32,7 +32,15 @@ def auth_headers_for_session(session: dict[str, Any] | None) -> dict[str, str]:
         str(session.get("delivery") or "") or None,
     )
 
-def get_dynamic_user_id(account: dict, endpoints: list[dict], base_url_global: str, auth_headers: dict, logger=None) -> str | None:
+def get_dynamic_user_id(
+    account: dict,
+    endpoints: list[dict],
+    base_url_global: str,
+    auth_headers: dict,
+    logger=None,
+    *,
+    timeout: float = 5.0,
+) -> str | None:
     """3단계 전략으로 대상 유저의 식별자를 동적으로 추출합니다."""
     # 1. 수동 설정값 확인
     raw_id = account.get("account_raw", {}).get("id")
@@ -50,7 +58,7 @@ def get_dynamic_user_id(account: dict, endpoints: list[dict], base_url_global: s
         if ep.get("method", "GET").upper() != "GET": continue
         url = ep.get("base_url", base_url_global) + ep.get("path", "")
         try:
-            res = requests.get(probe_url(url), headers=auth_headers, timeout=5, verify=False)
+            res = requests.get(probe_url(url), headers=auth_headers, timeout=timeout, verify=False)
             if res.status_code == 200:
                 data = res.json()
                 # 우선순위: id -> userId -> memberId -> sub

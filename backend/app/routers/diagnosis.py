@@ -106,6 +106,7 @@ def run_module(
     g16_opts = None
     g41_opts = None
     g42_opts = None
+    g45_opts = None
     g21_opts = None
     if body and body.g12 is not None:
         g12_opts = body.g12.model_dump(exclude_none=True)
@@ -141,6 +142,8 @@ def run_module(
         g34_opts = body.g34.model_dump(exclude_none=True)
     if body and body.g42 is not None:
         g42_opts = body.g42.model_dump(exclude_none=True)
+    if body and body.g45 is not None:
+        g45_opts = body.g45.model_dump(exclude_none=True)
     if body and body.g21 is not None:
         g21_opts = body.g21.model_dump(exclude_none=True)
     run_kwargs = dict(
@@ -160,6 +163,7 @@ def run_module(
         g32_options=g32_opts,
         g34_options=g34_opts,
         g42_options=g42_opts,
+        g45_options=g45_opts,
         g16_options=g16_opts,
         g21_options=g21_opts,
     )

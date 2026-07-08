@@ -612,6 +612,15 @@ class DiagnosisG42RunOptions(BaseModel):
     probe_account_email: str | None = None
 
 
+class DiagnosisG45RunOptions(BaseModel):
+    """Per-run overrides for guideline 4-5 privilege escalation scan."""
+
+    probe_mode: Literal["base_only", "sample", "full"] | None = None
+    sample_size: int | None = Field(default=None, ge=1, le=500)
+    timeout: float | None = Field(default=None, ge=1.0, le=60.0)
+    max_endpoints: int | None = Field(default=None, ge=0, le=5000)
+
+
 class DiagnosisG21RunOptions(BaseModel):
     """Per-run credentials for guideline 2-1 malicious file upload scan."""
 
@@ -635,6 +644,7 @@ class DiagnosisRunSectionRequest(BaseModel):
     g35: DiagnosisG35RunOptions | None = None
     g36: DiagnosisG36RunOptions | None = None
     g42: DiagnosisG42RunOptions | None = None
+    g45: DiagnosisG45RunOptions | None = None
     g52: DiagnosisG52RunOptions | None = None
     g61: DiagnosisG61RunOptions | None = None
     g62: DiagnosisG62RunOptions | None = None
