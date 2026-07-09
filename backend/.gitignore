@@ -21,3 +21,6 @@ env/
 # Runtime logs
 *.log
 logs/
+
+# Generated dependency upload metadata
+data/gradle_dep_files.json
