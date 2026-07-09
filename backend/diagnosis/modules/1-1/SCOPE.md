@@ -5,9 +5,8 @@
 - Reflected XSS by isolated parameter fuzzing and response reflection analysis.
 - Stored XSS by mutation request followed by readable GET verification.
 - Cross-role Stored XSS by low-privileged write followed by admin-reader GET verification.
-- CSRF risk where cookie-only requests can perform authenticated state changes.
+- CSRF risk where Origin/Referer validation, Anti-CSRF token validation, and SameSite cookie protection are insufficient.
 - CORS origin reflection and unsafe cross-origin credential behavior.
-- Security header gaps: CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, HSTS.
 
 ## Safety Defaults
 

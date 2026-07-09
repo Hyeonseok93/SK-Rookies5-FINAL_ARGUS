@@ -15,7 +15,7 @@ def collect_zap_alerts(zap, base_url: str) -> list[dict]:
         raw_alerts = zap.core.alerts(baseurl=base_url) or []
     except Exception:
         return []
-    allowed_plugin_ids = {"40012", "40014", "40016", "40017", "90034"}
+    allowed_plugin_ids = {"40012", "40014", "40016", "40017"}
     filtered = []
     for alert in raw_alerts:
         plugin_id = str(alert.get("pluginId", ""))
