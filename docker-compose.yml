@@ -48,6 +48,8 @@ services:
       - ./backend/data:/app/data
       # 진단 패키지 전체 → 호스트와 동기화 (modules 외 auth_session_pool 등 포함)
       - ./backend/diagnosis:/app/diagnosis
+      # 스크린샷(증거 캡처) 패키지 → 호스트와 동기화
+      - ./backend/screenshot:/app/screenshot
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

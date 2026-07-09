@@ -9,11 +9,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Screenshot evidence capture (5-2 등) uses Playwright headless Chromium.
+RUN playwright install --with-deps chromium
+
 COPY app ./app
 COPY diagnosis ./diagnosis
 COPY inventory ./inventory
 COPY integrations ./integrations
 COPY parsers ./parsers
+COPY screenshot ./screenshot
 COPY config.yaml config.docker.yaml ./
 
 EXPOSE 8000
