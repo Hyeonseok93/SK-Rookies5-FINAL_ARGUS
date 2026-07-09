@@ -422,45 +422,54 @@ def main():
     logger.info(f"  summary:      {summary_path}")
 
     # -------------------------------------------------------------------------
-    # Step 7: Selenium screenshot capture (CAP-04 800x450 / CAP-05 PIL overlay)
+    # Step 7: Playwright screenshot capture (CAP-04 800x450 / CAP-05 PIL overlay)
+    # Runs independently of Step 3's Selenium session, so it still executes
+    # when --skip-selenium is set (e.g. the slim Docker image).
     # -------------------------------------------------------------------------
     screenshot_results = []
     sc_path = os.path.join(cfg.OUTPUT_DIR, "screenshots.json")
-    if session and hasattr(session, "driver") and session.driver:
-        logger.info("[MAIN] === Step 7: Screenshot capture (CAP-04/05) ===")
+    logger.info("[MAIN] === Step 7: Screenshot capture (CAP-04/05) ===")
+    sc = None
+    if not cfg.UI_TARGET_URL:
+        logger.info("[MAIN] Step 7: UI_TARGET_URL not resolved (no ui_target/frontend_base_url "
+                    "configured for this target); screenshot capture skipped")
+    else:
         try:
             screenshot_dir = os.path.join(cfg.OUTPUT_DIR, "screenshots")
             sc = ScreenshotCapture(
-                driver      = session.driver,
                 output_dir  = screenshot_dir,
                 page_wait   = 2.0,
                 max_per_type= 5,
             )
-            screenshot_results = sc.capture_all(merged, cfg.UI_TARGET_URL)
-            logger.info(f"[MAIN] screenshot capture completed for {len(screenshot_results)} findings")
+            if not sc.enabled:
+                logger.info("[MAIN] Step 7: Playwright unavailable; screenshot capture skipped")
+            else:
+                screenshot_results = sc.capture_all(merged, cfg.UI_TARGET_URL)
+                logger.info(f"[MAIN] screenshot capture completed for {len(screenshot_results)} findings")
 
-            # Attach screenshot reproduction metadata to matching findings.
-            sc_map = {r["finding_id"]: r for r in screenshot_results if r}
-            for finding in merged:
-                fid = finding.get("id")
-                if fid and fid in sc_map:
-                    finding["reproduction_flow"] = sc_map[fid]["steps"]
-                    finding["overlay_applied"] = sc_map[fid]["overlay_applied"]
-                    if len(sc_map[fid]["steps"]) >= 2:
-                        finding["screenshot_path"] = sc_map[fid]["steps"][1]["path"]
+                # Attach screenshot reproduction metadata to matching findings.
+                sc_map = {r["finding_id"]: r for r in screenshot_results if r}
+                for finding in merged:
+                    fid = finding.get("id")
+                    if fid and fid in sc_map:
+                        finding["reproduction_flow"] = sc_map[fid]["steps"]
+                        finding["overlay_applied"] = sc_map[fid]["overlay_applied"]
+                        if len(sc_map[fid]["steps"]) >= 2:
+                            finding["screenshot_path"] = sc_map[fid]["steps"][1]["path"]
 
-            with open(sc_path, "w", encoding="utf-8") as f:
-                json.dump(screenshot_results, f, ensure_ascii=False, indent=2)
-            logger.info(f"  screenshot metadata: {sc_path}")
+                with open(sc_path, "w", encoding="utf-8") as f:
+                    json.dump(screenshot_results, f, ensure_ascii=False, indent=2)
+                logger.info(f"  screenshot metadata: {sc_path}")
 
-            # Re-save raw findings after attaching screenshot metadata.
-            with open(raw_path, "w", encoding="utf-8") as f:
-                json.dump(merged, f, ensure_ascii=False, indent=2)
-            logger.info(f"  [Step 7 final] raw findings updated with screenshot metadata: {raw_path}")
+                # Re-save raw findings after attaching screenshot metadata.
+                with open(raw_path, "w", encoding="utf-8") as f:
+                    json.dump(merged, f, ensure_ascii=False, indent=2)
+                logger.info(f"  [Step 7 final] raw findings updated with screenshot metadata: {raw_path}")
         except Exception as e:
             logger.error(f"[MAIN] screenshot capture failed: {e}")
-    else:
-        logger.info("[MAIN] === Step 7: Selenium unavailable; screenshot capture skipped ===")
+        finally:
+            if sc is not None:
+                sc.close()
 
     if not os.path.exists(sc_path):
         with open(sc_path, "w", encoding="utf-8") as f:

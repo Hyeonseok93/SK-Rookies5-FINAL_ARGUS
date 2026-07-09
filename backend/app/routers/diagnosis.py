@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.schemas import (
     DiagnosisCatalogModule,
@@ -82,6 +82,14 @@ def get_module_report(section_id: str) -> DiagnosisSectionReportResponse:
     if report is None:
         raise HTTPException(status_code=404, detail=f"No report for module {section_id}")
     return _report_to_response(report)
+
+
+@router.get("/modules/{section_id}/evidence")
+def get_evidence_file(section_id: str, path: str) -> FileResponse:
+    resolved = diagnosis_service.resolve_evidence_file(section_id, path)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="Evidence file not found")
+    return FileResponse(resolved)
 
 
 @router.post("/modules/{section_id}/run", response_model=DiagnosisRunSectionResponse)
