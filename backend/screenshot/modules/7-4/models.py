@@ -44,3 +44,4 @@ class ScaCase:
     selection_reason: str = ""
     cve_ids: list[str] = field(default_factory=list)
     dependency_lines: list[str] = field(default_factory=list)
+    canvas_url: str = ""

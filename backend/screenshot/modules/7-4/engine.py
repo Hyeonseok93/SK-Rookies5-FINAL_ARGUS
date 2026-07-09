@@ -88,11 +88,7 @@ def capture_sca(case: ScaCase, output_dir: Path) -> list[dict[str, str]]:
             ("combined", "03_combined.png"),
         ):
             page = context.new_page()
-            target = (
-                "http://localhost:8001/api/diagnosis/modules/7-4/report"
-                if kind == "dependency"
-                else case.advisory_url
-            )
+            target = case.canvas_url if kind == "dependency" else case.advisory_url
             try:
                 page.goto(target, wait_until="domcontentloaded", timeout=25_000)
             except Exception:
