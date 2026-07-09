@@ -1,33 +1,48 @@
 # =============================================================================
 # core/screenshot.py
-# 취약점 재현 및 Selenium 자동 스크린샷 캡처 모듈
+# 취약점 재현 및 Playwright 자동 스크린샷 캡처 모듈
 #
-# CAP-04: 800×450 해상도 통일 (아르고스총집합문서 §CAP-04)
-# CAP-05: PIL 기반 빨간 박스 + 텍스트 오버레이 (아르고스총집합문서 §CAP-05)
+# - 해상도: 1280x720 (리사이즈 없이 브라우저 뷰포트 그대로 저장)
+# - 모든 캡처 상단에 가짜 브라우저 주소창을 합성하여 캡처 당시의 URL을 노출
+# - query/url 공격은 실제 페이지를 재방문해서 캡처하고,
+#   body/header/cookie 처럼 브라우저로 재현이 안 되는 공격은 요청/응답 값을
+#   보여주는 전용 "증거 사진" HTML을 렌더링해서 캡처
+# - PIL 빨간 박스 오버레이(CAP-05)는 나중 단계로 미루고 기본 비활성화
+#   (apply_overlay=True로 켤 수 있음)
 #
 # C팀 인터페이스 필드:
-#   image_url, capture_type (SCREENSHOT|REPRODUCTION), resolution (800x450),
+#   image_url, capture_type (SCREENSHOT|REPRODUCTION), resolution (1280x720),
 #   overlay_applied (bool)
+#
+# Playwright는 자체 Chromium 바이너리를 번들하므로 Selenium/시스템 Chrome이
+# 없는 슬림 Docker 이미지에서도 동작합니다 (Dockerfile에서
+# `playwright install chromium` 필요).
 #
 # ⚠ 반드시 허가된 테스트 환경(개발/스테이징 서버)에서만 실행하세요. 운영 서버 실행 금지.
 # =============================================================================
 
+import html
+import json as json_lib
 import os
 import re
 import time
 import logging
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 from urllib.parse import urlparse, urlencode, urlunparse, parse_qs, urljoin
 
 logger = logging.getLogger(__name__)
 
-# CAP-04 해상도 표준
-BROWSER_WIDTH  = 1280  # 실제 브라우저 렌더링 해상도 (PC 표준)
+# 브라우저 뷰포트 == 최종 출력 해상도 (리사이즈 없음)
+BROWSER_WIDTH  = 1280
 BROWSER_HEIGHT = 720
 
-OUTPUT_WIDTH   = 800   # 보고서 최종 출력 규격
-OUTPUT_HEIGHT  = 450
+OUTPUT_WIDTH   = BROWSER_WIDTH
+OUTPUT_HEIGHT  = BROWSER_HEIGHT
 RESOLUTION_TAG = f"{OUTPUT_WIDTH}x{OUTPUT_HEIGHT}"
+
+# 케이스(취약점 유형)당 대표 사진 세트 수
+DEFAULT_MAX_PER_TYPE = 3
 
 # GET 재현 가능한 취약점 유형 (kisa_code 또는 owasp_id 또는 cwe_id 기반)
 GET_REPRODUCIBLE_KISA = {
@@ -57,10 +72,20 @@ GET_REPRODUCIBLE_CWE = {
     "CWE-306", "CWE-862",  # 인증 우회
 }
 
+# 브라우저로 직접 재현 가능한 벡터 (나머지는 요청/응답 증거 사진으로 대체)
+NAVIGABLE_VECTORS = ("url", "query", "path")
+
 # 스크린샷 파일명에 금지된 문자
 _SAFE_RE = re.compile(r"[^a-zA-Z0-9가-힣_\-]")
 
-# PIL 오버레이 설정 (CAP-05)
+# 페이로드 흔적 탐지용 (URL/바디 안에서 공격 구문으로 보이는 부분을 찾아 하이라이트)
+_MARKER_RE = re.compile(
+    r"('[^']{0,40}'|\"[^\"]{0,40}\"|OR\s+['\"]?1['\"]?\s*=\s*['\"]?1['\"]?"
+    r"|\.\./+[^\s\"'<>]{0,60}|<script[\s\S]{0,80}?</script>|<[^>]{1,60}on\w+\s*=)",
+    re.IGNORECASE,
+)
+
+# PIL 오버레이 설정 (CAP-05, 기본 비활성)
 _OVERLAY_BOX_COLOR   = (220, 0, 0)   # 빨간색 (RGB)
 _OVERLAY_BOX_WIDTH   = 3             # 선 굵기 (px)
 _OVERLAY_TEXT_COLOR  = (255, 255, 255)
@@ -76,42 +101,132 @@ except ImportError:
     logger.warning("[Screenshot] Pillow 미설치 ─ PIL 오버레이 기능 비활성화. "
                    "설치: pip install Pillow")
 
+# Playwright 사용 가능 여부 체크 (지연 임포트: 브라우저 바이너리가 없는 환경에서도
+# 이 모듈 자체는 문제 없이 로드되어야 함)
+try:
+    from playwright.sync_api import sync_playwright
+    _PLAYWRIGHT_IMPORTABLE = True
+except ImportError:
+    sync_playwright = None
+    _PLAYWRIGHT_IMPORTABLE = False
+    logger.warning("[Screenshot] playwright 미설치 ─ 스크린샷 캡처 비활성화. "
+                   "설치: pip install playwright && playwright install chromium")
+
+
+# JS 텍스트 하이라이트 스크립트 (Playwright page.evaluate용 함수 표현식)
+_OUTLINE_JS_FN = """
+(targetText) => {
+    targetText = (targetText || '').trim();
+    if (!targetText) return false;
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+    var found = false;
+    while (walker.nextNode()) {
+        var node = walker.currentNode;
+        if (node.nodeValue.includes(targetText)) {
+            var parent = node.parentElement;
+            if (parent && parent.tagName !== 'SCRIPT' && parent.tagName !== 'STYLE') {
+                parent.style.outline = '3px solid red';
+                parent.style.outlineOffset = '2px';
+                found = true;
+            }
+        }
+    }
+    return found;
+}
+"""
+
+
+
+def _highlight_marker(text: str, marker: str) -> str:
+    """텍스트를 escape하고, marker 부분이 포함돼 있으면 <mark>로 강조."""
+    if not text:
+        return ""
+    escaped = html.escape(text)
+    marker = (marker or "").strip()
+    if marker:
+        escaped_marker = html.escape(marker)
+        if escaped_marker and escaped_marker in escaped:
+            escaped = escaped.replace(
+                escaped_marker,
+                f'<mark style="background:#ffe082;border:2px solid #d32f2f;'
+                f'padding:1px 3px;border-radius:2px;">{escaped_marker}</mark>',
+            )
+    return escaped
+
 
 class ScreenshotCapture:
     """
-    Selenium WebDriver를 이용한 취약점 재현 스크린샷 캡처.
+    Playwright(Chromium)를 이용한 취약점 재현 스크린샷 캡처.
 
-    CAP-04: 캡처 전 브라우저 창 크기를 800×450으로 고정합니다.
-    CAP-05: PIL로 취약점 영역에 빨간 박스와 설명 텍스트를 합성합니다.
+    - 1280x720 고정 해상도, 리사이즈 없음.
+    - 캡처 상단에 가짜 브라우저 주소창을 합성해 캡처 당시 URL을 노출.
+    - query/url 공격은 실제 페이지 재방문, body/header/cookie 공격은
+      요청/응답 값을 보여주는 전용 증거 사진(HTML 렌더 후 캡처)으로 대체.
+    - Selenium 기반 SessionManager(Step 3)와 독립적으로 자체 Chromium 세션을
+      띄우므로, Step 3(로그인/CDP 캡처)가 skip_selenium으로 꺼져 있어도 동작함.
 
     Parameters
     ----------
-    driver      : Selenium WebDriver (SessionManager.driver)
-    output_dir  : 스크린샷 저장 디렉터리 (기본: output/screenshots)
-    page_wait   : 페이지 로드 후 대기 시간 (초, 기본: 2.0)
-    max_per_type: 취약점 유형당 최대 스크린샷 수 (기본: 5)
+    output_dir    : 스크린샷 저장 디렉터리 (기본: output/screenshots)
+    page_wait     : 페이지 로드 후 대기 시간 (초, 기본: 2.0)
+    max_per_type  : 취약점 유형(케이스)당 대표 사진 세트 수 (기본: 3)
+    apply_overlay : PIL 빨간 박스 오버레이 적용 여부 (기본: False, 나중에 활성화 예정)
     """
 
-    def __init__(self, driver, output_dir: str = "output/screenshots",
-                 page_wait: float = 2.0, max_per_type: int = 5):
-        self.driver       = driver
-        self.output_dir   = output_dir
-        self.page_wait    = page_wait
-        self.max_per_type = max_per_type
+    def __init__(self, output_dir: str = "output/screenshots",
+                 page_wait: float = 2.0, max_per_type: int = DEFAULT_MAX_PER_TYPE,
+                 apply_overlay: bool = False):
+        self.output_dir    = output_dir
+        self.page_wait     = page_wait
+        self.max_per_type  = max_per_type
+        self.apply_overlay = apply_overlay and _PIL_AVAILABLE
         os.makedirs(output_dir, exist_ok=True)
 
-        # ── CAP-04: 1280x720 해상도 강제 (PC 스케일) ──────────────────────────────────────
+        self.enabled = False
+        self._pw = None
+        self._browser = None
+        self._context = None
+        self.page = None
+
+        if not _PLAYWRIGHT_IMPORTABLE:
+            return
+
         try:
-            self.driver.set_window_size(BROWSER_WIDTH, BROWSER_HEIGHT)
-            logger.info(f"[Screenshot] 창 크기 설정 완료: {BROWSER_WIDTH}x{BROWSER_HEIGHT}")
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(headless=True)
+            self._context = self._browser.new_context(
+                viewport={"width": BROWSER_WIDTH, "height": BROWSER_HEIGHT}
+            )
+            self.page = self._context.new_page()
+            self.enabled = True
+            logger.info(f"[Screenshot] Chromium 세션 시작 완료: {BROWSER_WIDTH}x{BROWSER_HEIGHT}")
         except Exception as e:
-            logger.warning(f"[Screenshot] 창 크기 설정 실패: {e}")
+            logger.warning(f"[Screenshot] Playwright Chromium 실행 실패 (브라우저 미설치 가능): {e}")
+            self._teardown()
 
         logger.info(f"[Screenshot] 저장 경로: {os.path.abspath(output_dir)}")
-        logger.info(f"[Screenshot] PIL 오버레이: {'활성' if _PIL_AVAILABLE else '비활성'} (CAP-05)")
+        logger.info(f"[Screenshot] PIL 오버레이: {'활성' if self.apply_overlay else '비활성(나중에 적용 예정)'}")
 
-    # ------------------------------------------------------------------
-    # 공개 API
+    def _teardown(self) -> None:
+        try:
+            if self._browser:
+                self._browser.close()
+        except Exception:
+            pass
+        try:
+            if self._pw:
+                self._pw.stop()
+        except Exception:
+            pass
+        self._browser = None
+        self._context = None
+        self.page = None
+        self.enabled = False
+
+    def close(self) -> None:
+        """브라우저 세션 종료. capture_all 호출 후 반드시 호출할 것."""
+        self._teardown()
+
     # ------------------------------------------------------------------
     # 공개 API
     # ------------------------------------------------------------------
@@ -119,10 +234,15 @@ class ScreenshotCapture:
         """
         merged_findings에서 재현 가능한 항목을 필터링하고
         각 취약점당 [step1: 전, step2: 후] 순차 캡처를 생성합니다.
+        케이스(취약점 유형)당 max_per_type 세트까지만 대표로 캡처합니다.
 
         Returns:
             Jinja2 보고서 연계용 reproduction_flow 리스트
         """
+        if not self.enabled:
+            logger.info("[Screenshot] Playwright 비활성 상태 ─ 캡처 스킵")
+            return []
+
         reproducible = self._filter_reproducible(findings)
         logger.info(f"[Screenshot] 재현 가능 항목: {len(reproducible)} / {len(findings)}")
 
@@ -136,12 +256,6 @@ class ScreenshotCapture:
                 continue
             type_counts[vuln_type] = count + 1
 
-            # CAP-04: 매 캡처 전 창 크기 재확인 (PC 해상도 강제)
-            try:
-                self.driver.set_window_size(BROWSER_WIDTH, BROWSER_HEIGHT)
-            except Exception:
-                pass
-
             # UI 맵핑 주소 생성 (Step 1용)
             ui_url = self._build_url(finding, base_url)
             # 원시 백엔드 API 주소 획득 (Step 2용)
@@ -151,11 +265,12 @@ class ScreenshotCapture:
             if result:
                 results.append(result)
 
-        logger.info(f"[Screenshot] 완료: {len(results)}건의 취약점 순차 캡처 완료")
+        logger.info(f"[Screenshot] 완료: {len(results)}건의 취약점 순차 캡처 완료 "
+                    f"(케이스당 최대 {self.max_per_type}세트)")
         return results
 
     # ------------------------------------------------------------------
-    # 내부 메서드
+    # 내부 메서드 - 필터링 / URL 구성
     # ------------------------------------------------------------------
     def _get_vuln_type(self, finding: dict) -> str:
         """
@@ -199,7 +314,6 @@ class ScreenshotCapture:
                 out.append(f)
         return out
 
-
     def _map_api_to_ui_url(self, api_url: str, base_url: str) -> str:
         """
         API URL(예: http://localhost:8080/api/v1/reservations/flights)을 분석하여
@@ -234,7 +348,7 @@ class ScreenshotCapture:
     def _build_url(self, finding: dict, base_url: str) -> str:
         """finding에서 재현용 실제 프론트엔드 UI URL 구성."""
         raw_url = finding.get("url") or ""
-        
+
         # 1. 뼈대가 되는 API 엔드포인트 URL 확인
         if not raw_url:
             endpoint = finding.get("endpoint", "")
@@ -257,54 +371,237 @@ class ScreenshotCapture:
         # 3. 최종적으로 API 주소를 실제 브라우저 UI 주소(base_url 포트 5173 기반)로 맵핑 변환
         return self._map_api_to_ui_url(raw_url, base_url)
 
+    # ------------------------------------------------------------------
+    # 내부 메서드 - 브라우저 조작
+    # ------------------------------------------------------------------
+    def _capture_page(
+        self,
+        nav_url: str,
+        dest_path: str,
+        outline_texts: Optional[list] = None,
+    ) -> bool:
+        """
+        nav_url(실제 페이지 또는 로컬 evidence HTML)을 1280x720 뷰포트 그대로
+        캡처해 dest_path에 저장한다. 가짜 주소창 합성 없이 순수 페이지 스크린샷만
+        남긴다 — URL은 evidence 메타데이터/증거 사진 텍스트로 이미 노출됨.
+
+        Returns: outline(빨간 테두리) 적용 여부
+        """
+        outline_applied = False
+        self.page.goto(nav_url, wait_until="load", timeout=30000)
+        time.sleep(self.page_wait)
+
+        for text in (outline_texts or []):
+            if text and len(str(text)) > 3:
+                if self._inject_red_outline_to_text(str(text)):
+                    outline_applied = True
+                    break
+
+        self.page.screenshot(path=dest_path)
+        return outline_applied
+
     def _inject_red_outline_to_text(self, text: str) -> bool:
         """
         DOM을 검색하여 해당 텍스트를 포함하는 요소에 3px solid red 테두리를 그립니다.
         """
         if not text:
             return False
-        js_script = """
-        var targetText = arguments[0].trim();
-        if (!targetText) return false;
-        
-        // TreeWalker로 텍스트 노드 순회 검색
-        var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-        var found = false;
-        while(walker.nextNode()) {
-            var node = walker.currentNode;
-            if(node.nodeValue.includes(targetText)) {
-                var parent = node.parentElement;
-                if (parent && parent.tagName !== 'SCRIPT' && parent.tagName !== 'STYLE') {
-                    parent.style.outline = '3px solid red';
-                    parent.style.outlineOffset = '2px';
-                    found = true;
-                }
-            }
-        }
-        return found;
-        """
         try:
-            return self.driver.execute_script(js_script, text)
+            return bool(self.page.evaluate(_OUTLINE_JS_FN, text))
         except Exception as e:
             logger.debug(f"[Screenshot] JS outline 주입 실패: {e}")
             return False
 
+    def _extract_marker(self, finding: dict) -> str:
+        """URL/바디 안에서 공격 구문으로 보이는 부분을 찾아 하이라이트 대상으로 반환."""
+        req = finding.get("request") or {}
+        candidates: list[str] = []
+        body = req.get("json")
+        if body is None:
+            body = req.get("body")
+        if isinstance(body, dict):
+            candidates.extend(str(v) for v in body.values() if isinstance(v, (str, int, float)))
+        elif body:
+            candidates.append(str(body))
+        candidates.append(str(req.get("url") or finding.get("url") or ""))
+
+        for c in candidates:
+            m = _MARKER_RE.search(c)
+            if m:
+                return m.group(0)
+        return str(finding.get("payload_name", ""))
+
+    def _build_evidence_panel_html(self, finding: dict) -> str:
+        """
+        Burp Repeater 스타일의 Request/Response 2단 패널(HTML 조각).
+        실제 raw finding에 담긴 request(method/url/headers/json)와
+        response_json/response_text_snippet/status_code를 그대로 사용.
+        """
+        req = finding.get("request") or {}
+        method = str(req.get("method") or finding.get("method") or "GET").upper()
+        url = str(req.get("url") or finding.get("url") or "")
+        headers: dict[str, Any] = req.get("headers") or {}
+        body = req.get("json")
+        if body is None:
+            body = req.get("body")
+
+        status_code = finding.get("status_code", "")
+        resp_json = finding.get("response_json")
+        resp_text = finding.get("response_text_snippet", "") or ""
+
+        marker = self._extract_marker(finding)
+
+        badges = []
+        if finding.get("kisa_code"):
+            badges.append(f"KISA {finding['kisa_code']}")
+        cwe = finding.get("cwe_id") or (finding.get("cwe", []) or [""])[0]
+        if cwe:
+            badges.append(str(cwe))
+        if finding.get("owasp_id") or finding.get("owasp"):
+            badges.append(str(finding.get("owasp_id") or finding.get("owasp")))
+        if finding.get("risk"):
+            badges.append(str(finding["risk"]).upper())
+        badge_html = "".join(f'<span class="badge">{html.escape(b)}</span>' for b in badges)
+
+        header_lines = "\n".join(f"{k}: {v}" for k, v in headers.items())
+        if isinstance(body, dict):
+            body_str = json_lib.dumps(body, ensure_ascii=False, indent=2)
+        else:
+            body_str = str(body) if body else ""
+
+        req_raw = f"{method} {url}"
+        if header_lines:
+            req_raw += f"\n{header_lines}"
+        if body_str:
+            req_raw += f"\n\n{body_str}"
+
+        if isinstance(resp_json, dict):
+            resp_raw = json_lib.dumps(resp_json, ensure_ascii=False, indent=2)
+        else:
+            resp_raw = str(resp_text)
+        resp_raw = f"HTTP {status_code or '-'}\n\n{resp_raw}"[:2500]
+
+        req_html = _highlight_marker(req_raw, marker)
+        resp_html = _highlight_marker(resp_raw, marker)
+
+        return f"""
+<div class="panel">
+  <div class="panel-head">ARGUS Evidence &middot; Request / Response</div>
+  <div class="badges">{badge_html}</div>
+  <div class="cols">
+    <div class="col">
+      <h3>Request</h3>
+      <pre>{req_html}</pre>
+    </div>
+    <div class="col">
+      <h3>Response</h3>
+      <pre>{resp_html}</pre>
+    </div>
+  </div>
+</div>"""
+
+    def _build_panel_wrapper_html(self, content_uri: str, panel_html: str) -> str:
+        """실제 페이지 스크린샷(위) + Request/Response 패널(아래)을 세로로 쌓는 래퍼."""
+        return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  * {{ box-sizing: border-box; }}
+  html, body {{ margin:0; padding:0; background:#0b0f14; }}
+  img.page-shot {{ display:block; width:{BROWSER_WIDTH}px; }}
+  .panel {{
+    width:{BROWSER_WIDTH}px; padding:20px 26px 26px;
+    background:#0f1319; color:#d7dde5;
+    font-family:"Malgun Gothic","Segoe UI",Arial,sans-serif;
+  }}
+  .panel-head {{
+    font-size:12.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+    color:#7dd3fc; margin-bottom:12px;
+  }}
+  .badges {{ margin-bottom:14px; }}
+  .badge {{
+    display:inline-block; background:#3a1414; color:#fca5a5; border:1px solid #6b2323;
+    border-radius:4px; padding:3px 9px; margin-right:6px; font-size:11.5px; font-weight:700;
+  }}
+  .cols {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }}
+  .col h3 {{
+    margin:0 0 6px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#8593a8;
+  }}
+  pre {{
+    margin:0; background:#04070a; border:1px solid #1f2a37; border-radius:6px;
+    padding:12px; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word;
+    font-family:Consolas,monospace; color:#d7dde5; max-height:460px; overflow:auto;
+  }}
+  mark {{ background:#f59e0b; color:#1a1200; padding:0 2px; border-radius:2px; }}
+</style></head>
+<body>
+  <img class="page-shot" src="{content_uri}">
+  {panel_html}
+</body></html>"""
+
+    def _capture_with_evidence_panel(
+        self,
+        nav_url: str,
+        dest_path: str,
+        finding: dict,
+        outline_texts: Optional[list] = None,
+    ) -> bool:
+        """
+        nav_url(실제 온데 페이지)을 1280x720으로 캡처한 뒤, 그 아래에
+        실제 Request/Response 값을 보여주는 증거 패널을 이어붙여 하나의
+        이미지로 저장한다 (전체 높이는 페이지+패널 크기에 맞춰 늘어남).
+
+        Returns: outline(빨간 테두리) 적용 여부
+        """
+        outline_applied = False
+        self.page.goto(nav_url, wait_until="load", timeout=30000)
+        time.sleep(self.page_wait)
+
+        for text in (outline_texts or []):
+            if text and len(str(text)) > 3:
+                if self._inject_red_outline_to_text(str(text)):
+                    outline_applied = True
+                    break
+
+        tmp_content_path = dest_path + ".content.png"
+        tmp_wrapper_path = dest_path + ".wrapper.html"
+        try:
+            self.page.screenshot(path=tmp_content_path)
+
+            panel_html = self._build_evidence_panel_html(finding)
+            wrapper_html = self._build_panel_wrapper_html(
+                Path(tmp_content_path).resolve().as_uri(), panel_html
+            )
+            with open(tmp_wrapper_path, "w", encoding="utf-8") as f:
+                f.write(wrapper_html)
+
+            self.page.goto(Path(tmp_wrapper_path).resolve().as_uri(), wait_until="load", timeout=15000)
+            self.page.screenshot(path=dest_path, full_page=True)
+        finally:
+            for tmp in (tmp_content_path, tmp_wrapper_path):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
+        return outline_applied
+
     def _capture_two_steps(self, finding: dict, ui_url: str, raw_backend_url: str, base_url: str) -> Optional[dict]:
         """
-        한 취약점당 [step1: 전(UI 화면), step2: 후(진짜 에러 화면)]의 순차적 캡처를 수행합니다.
+        한 취약점당 [step1: 전(UI 화면), step2: 후(진짜 에러 화면 또는 증거 사진)]의
+        순차적 캡처를 수행합니다.
         """
         fid = finding.get("id", "")
         vector = finding.get("attack_vector", "")
         payload_val = finding.get("payload_value", finding.get("payload_name", ""))
         snippet = finding.get("response_text_snippet", "")
+        navigable = vector in NAVIGABLE_VECTORS
 
         # 파일명 프리픽스 정의
         safe_url = _SAFE_RE.sub("_", raw_backend_url)[-40:]
         t = int(time.time() * 1000)
-        
+
         step1_fname = f"step1_before_{fid}_{safe_url}_{t}.png"
         step2_fname = f"step2_result_{fid}_{safe_url}_{t}.png"
-        
+
         step1_path = os.path.join(self.output_dir, step1_fname)
         step2_path = os.path.join(self.output_dir, step2_fname)
 
@@ -316,27 +613,17 @@ class ScreenshotCapture:
             # ──────────────────────────────────────────────────────────
             # 404 도배 방지를 위해, Step 1은 실제 Onde 메인 UI 화면(base_url)으로 접속하여 캡처
             logger.info(f"[Screenshot] Step1 진입 -> 정상 UI 접속: {base_url}")
-            self.driver.get(base_url)
-            time.sleep(self.page_wait)
-
-            highlight_msg_1 = "취약점 주입 전 정상 Onde 서비스 UI 화면"
 
             if vector in ("query", "url"):
-                # URL/Query 파라미터는 이미 주입되었으므로 본문 하이라이트 주입 전을 캡처
-                self.driver.save_screenshot(step1_path)
                 highlight_msg_1 = "URL/Query 파라미터에 공격 구문 인입 상태 (DOM 하이라이트 처리 전)"
-            
             elif vector == "body":
-                # POST body 폼 입력 흉내 또는 API 구조 설명 배너 씌우기
-                self.driver.save_screenshot(step1_path)
                 highlight_msg_1 = f"API Request Body 페이로드 대입 완료 (전송 전) ─ Payload: {payload_val}"
-            
-            else: # header/cookie
-                self.driver.save_screenshot(step1_path)
+            else:  # header/cookie
                 highlight_msg_1 = f"HTTP Header/Cookie 데이터 임의 조작 완료 ─ Header: {payload_val}"
 
-            # Step 1 오버레이 배너 적용
-            if _PIL_AVAILABLE and os.path.exists(step1_path):
+            self._capture_page(base_url, step1_path)
+
+            if self.apply_overlay and os.path.exists(step1_path):
                 label1 = f"[STEP 1: 전] {self._make_overlay_label(finding)} | {highlight_msg_1}"
                 step1_path = self._apply_pil_overlay(step1_path, label1)
 
@@ -349,32 +636,36 @@ class ScreenshotCapture:
 
             # ──────────────────────────────────────────────────────────
             # Step 2: 취약점 트리거 및 결과 확인 상태 ("후")
+            # 실제 온데 페이지(재현 가능하면 결과 페이지, 아니면 기준 화면) +
+            # 그 아래 실제 Request/Response 증거 패널을 항상 함께 캡처.
             # ──────────────────────────────────────────────────────────
-            logger.info(f"[Screenshot] Step2 진입 -> 공격 후 결과 페이지 접속: {raw_backend_url}")
-            self.driver.get(raw_backend_url)
-            time.sleep(self.page_wait)
-            
-            # XSS 경고창 팝업이 떴으면 해제
-            try:
-                alert = self.driver.switch_to.alert
-                alert.dismiss()
-            except Exception:
-                pass
+            # Playwright는 기본적으로 대화상자(alert/confirm)를 자동으로 닫으므로
+            # Selenium과 달리 별도의 해제 처리가 필요 없음.
 
-            # 공격 반영 부분(텍스트) 탐색 및 빨간색 테두리 CSS 주입
-            outline_applied = False
-            # 1순위: 응답 데이터 스니펫, 2순위: 페이로드 문자열 자체
-            for target_text in [snippet, payload_val]:
-                if target_text and len(target_text) > 3: # 너무 짧은 값은 오탐 방지
-                    if self._inject_red_outline_to_text(target_text):
-                        outline_applied = True
-                        break
+            if navigable:
+                logger.info(f"[Screenshot] Step2 진입 -> 공격 후 결과 페이지 접속: {raw_backend_url}")
+                nav_url_step2 = raw_backend_url
+                # 1순위: 응답 데이터 스니펫, 2순위: 페이로드 문자열 자체
+                outline_texts = [snippet, payload_val]
+            else:
+                logger.info(f"[Screenshot] Step2 진입 -> 기준 화면 + 증거 패널: {raw_backend_url}")
+                nav_url_step2 = base_url
+                outline_texts = None
 
-            self.driver.save_screenshot(step2_path)
-            highlight_msg_2 = "에러 메시지 및 반사 구문 하이라이트 처리 완료" if outline_applied else "취약점 반사/에러 페이지 응답 확인"
+            outline_applied = self._capture_with_evidence_panel(
+                nav_url_step2, step2_path, finding, outline_texts=outline_texts,
+            )
+
+            if navigable:
+                highlight_msg_2 = (
+                    "에러 메시지 및 반사 구문 하이라이트 처리 완료 + Request/Response 증거 패널"
+                    if outline_applied else "취약점 반사/에러 페이지 응답 확인 + Request/Response 증거 패널"
+                )
+            else:
+                highlight_msg_2 = "브라우저 직접 재현 불가 공격 — 기준 화면 + Request/Response 증거 패널"
 
             # Step 2 오버레이 배너 적용 (빨간 테두리 배너 합성)
-            if _PIL_AVAILABLE and os.path.exists(step2_path):
+            if self.apply_overlay and os.path.exists(step2_path):
                 label2 = f"[STEP 2: 후] {self._make_overlay_label(finding)} | {highlight_msg_2}"
                 step2_path = self._apply_pil_overlay(step2_path, label2)
 
@@ -392,15 +683,15 @@ class ScreenshotCapture:
                 "owasp_id":        finding.get("owasp_id", "") or finding.get("owasp", ""),
                 "url":             raw_backend_url,
                 "screenshot_path": step2_path,  # 기본 경로는 최종 결과(step2)로 매핑하여 하위 호환성 유지
-                "status":          "captured+overlay" if _PIL_AVAILABLE else "captured",
-                
+                "status":          "captured+overlay" if self.apply_overlay else "captured",
+
                 # C팀 인터페이스 필드 유지
-                "capture_type":    "SCREENSHOT",
+                "capture_type":    "SCREENSHOT" if navigable else "REPRODUCTION",
                 "resolution":      RESOLUTION_TAG,
-                "overlay_applied": _PIL_AVAILABLE,
+                "overlay_applied": self.apply_overlay,
                 "image_url":       "",  # 서버 업로드 연계용
-                
-                # 순차적 3단계 캡처 디테일 데이터 추가 유지
+
+                # 순차적 캡처 디테일 데이터 추가 유지
                 "steps":           steps_metadata
             }
 
@@ -414,7 +705,7 @@ class ScreenshotCapture:
                 "url":             raw_backend_url,
                 "screenshot_path": "",
                 "status":          f"error: {e}",
-                "capture_type":    "SCREENSHOT",
+                "capture_type":    "SCREENSHOT" if navigable else "REPRODUCTION",
                 "resolution":      RESOLUTION_TAG,
                 "overlay_applied": False,
                 "image_url":       "",
@@ -423,18 +714,18 @@ class ScreenshotCapture:
 
     def _apply_pil_overlay(self, img_path: str, label: str) -> str:
         """
-        CAP-05: PIL로 이미지에 빨간 박스와 설명 텍스트를 합성.
+        CAP-05: PIL로 이미지에 빨간 박스와 설명 텍스트를 합성. (나중 단계, 기본 비활성)
 
         - 이미지 하단부에 반투명 빨간 배너 + 텍스트 표시
         - 이미지 전체 테두리에 빨간 박스
-        - 저장: 원본 파일명에 _overlay 접미사
 
         Returns: 저장된 오버레이 이미지 경로 (실패 시 "")
         """
         try:
             img_raw = Image.open(img_path)
-            # 고품질 Lanczos 필터를 사용하여 800x450 (16:9) 비율로 리사이징
-            img = img_raw.resize((OUTPUT_WIDTH, OUTPUT_HEIGHT), Image.Resampling.LANCZOS).convert("RGBA")
+            img = img_raw.convert("RGBA")
+            if img.size != (OUTPUT_WIDTH, OUTPUT_HEIGHT):
+                img = img.resize((OUTPUT_WIDTH, OUTPUT_HEIGHT), Image.Resampling.LANCZOS)
             draw = ImageDraw.Draw(img)
 
             W, H = img.size
@@ -458,6 +749,7 @@ class ScreenshotCapture:
             font_paths = [
                 "C:/Windows/Fonts/malgun.ttf",  # 맑은 고딕 (Windows 기본)
                 "C:/Windows/Fonts/gulim.ttc",   # 굴림 (Windows 기본)
+                "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",  # 리눅스 한글 폰트 (설치 시)
                 "arial.ttf"
             ]
             for fp in font_paths:
@@ -466,7 +758,7 @@ class ScreenshotCapture:
                     break
                 except Exception:
                     continue
-            
+
             if not font:
                 try:
                     font = ImageFont.load_default()
@@ -506,16 +798,6 @@ class ScreenshotCapture:
         if name:
             parts.append(f"| {name[:40]}")
         return "  ".join(parts) if parts else "취약점 탐지됨"
-
-    @staticmethod
-    def _get_vuln_type(finding: dict) -> str:
-        """중복 제한을 위한 취약점 유형 키 반환."""
-        return (
-            finding.get("kisa_code")
-            or finding.get("cwe_id")
-            or finding.get("owasp_id")
-            or finding.get("vuln_type", "unknown")
-        )
 
     @staticmethod
     def _safe_filename(finding: dict, url: str) -> str:
