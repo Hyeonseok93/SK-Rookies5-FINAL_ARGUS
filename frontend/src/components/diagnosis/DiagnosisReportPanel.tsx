@@ -75,6 +75,11 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
   }
 
   add("Classification", "classification");
+  add("Assessment", "assessment");
+  add("Finding type", "finding_type");
+  add("Business role", "business_role");
+  add("Feature", "feature_label");
+  add("Feature key", "feature_key");
   add("Trigger", "trigger_label");
   add("Trigger code", "trigger");
   add("Rule", "rule_id");
@@ -110,6 +115,7 @@ function FindingEvidence({ evidence }: { evidence: Record<string, unknown> }) {
   add("Header", "header");
   add("Header value", "header_value");
   add("Affected count", "affected_count");
+  add("Affected methods", "affected_methods");
   add("ZAP plugin", "plugin_id");
 
   const patterns = evidence.matched_patterns;
@@ -250,6 +256,65 @@ function CollapsibleFindingsSection({
   );
 }
 
+const ROLE_LABELS: Record<string, string> = {
+  user: "일반사용자",
+  seller: "판매자",
+  admin: "관리자",
+};
+
+function GroupedG21FindingsPanel({
+  findings,
+}: {
+  findings: { severity: string; message: string; evidence?: Record<string, unknown> }[];
+}) {
+  if (findings.length === 0) {
+    return <p className="text-xs text-cyber-muted">finding 없음</p>;
+  }
+
+  const roles = ["user", "seller", "admin"];
+  const groups = new Map<string, typeof findings>();
+  findings.forEach((finding) => {
+    const ev = finding.evidence ?? {};
+    const role = String(ev.business_role ?? "user");
+    const feature = String(ev.feature_key ?? ev.endpoint_id ?? "file_upload");
+    const key = `${role}::${feature}`;
+    groups.set(key, [...(groups.get(key) ?? []), finding]);
+  });
+
+  return (
+    <>
+      {roles.map((role) => {
+        const roleFindings = Array.from(groups.entries())
+          .filter(([key]) => key.startsWith(`${role}::`))
+          .flatMap(([, items]) => items);
+        if (roleFindings.length === 0) return null;
+        return (
+          <CollapsibleFindingsSection
+            key={role}
+            title={ROLE_LABELS[role] ?? role}
+            subtitle="2-1 upload findings"
+            count={roleFindings.length}
+            defaultOpen
+            findings={roleFindings}
+          />
+        );
+      })}
+      {Array.from(groups.entries())
+        .filter(([key]) => !roles.some((role) => key.startsWith(`${role}::`)))
+        .map(([key, items]) => (
+          <CollapsibleFindingsSection
+            key={key}
+            title={String(items[0]?.evidence?.feature_label ?? key)}
+            subtitle="2-1 upload findings"
+            count={items.length}
+            defaultOpen={false}
+            findings={items}
+          />
+        ))}
+    </>
+  );
+}
+
 function GroupedFindingsPanel({
   findings,
   sectionId,
@@ -265,6 +330,10 @@ function GroupedFindingsPanel({
 
   if (findings.length === 0) {
     return <p className="text-xs text-cyber-muted">finding 없음</p>;
+  }
+
+  if (sectionId === "2-1") {
+    return <GroupedG21FindingsPanel findings={findings} />;
   }
 
   const httpxSubtitle =
