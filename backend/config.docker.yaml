@@ -37,6 +37,7 @@ discover:
 
 auth:
   # Login page URLs → Dashboard Base URLs. Field names for login POST body only.
+  login_url: "http://host.docker.internal:8080/api/v1/auth/login"
   id_field: email
   pw_field: password
   token_field: cookie.accessToken
