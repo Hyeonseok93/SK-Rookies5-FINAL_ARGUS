@@ -12,6 +12,9 @@ from diagnosis.context import DiagnosisContext
 from diagnosis.result import SectionReport, utc_now_iso
 
 _MODULE_DIR = Path(__file__).resolve().parent
+import sys
+if str(_MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(_MODULE_DIR))
 
 
 def _load_scanner():
@@ -31,7 +34,7 @@ class G21Module(DiagnosisModule):
     title = "악성코드파일 업로드"
     chapter = 2
     implemented = True
-    engine = "httpx"
+    engine = "httpx+zap"
 
     def __init__(self, module_dir: Path) -> None:
         self.module_dir = module_dir
@@ -45,7 +48,7 @@ class G21Module(DiagnosisModule):
 
     def run(self, ctx: DiagnosisContext) -> SectionReport:
         scanner = _load_scanner()
-        result = scanner.run_g21_scan(ctx, self.module_dir)
+        result = scanner.run_scan(ctx)
         report = SectionReport(
             section_id=self.section_id,
             title=self.title,

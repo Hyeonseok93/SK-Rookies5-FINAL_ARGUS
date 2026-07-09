@@ -12,7 +12,7 @@ export interface G21DiagnosisOptions {
 export const DEFAULT_G21_OPTIONS: G21DiagnosisOptions = {
   sellerEmail: "",
   sellerPassword: "",
-  sellerId: 0,
+  sellerId: 1,
   userEmail: "",
   userPassword: "",
   timeout: 10,
@@ -40,10 +40,6 @@ export function g21OptionsSummary(options: G21DiagnosisOptions): string {
   return parts.join(" · ");
 }
 
-export function g21OptionsValid(options: G21DiagnosisOptions): boolean {
-  return (
-    options.sellerEmail.trim().includes("@") &&
-    options.sellerPassword.trim().length > 0 &&
-    options.sellerId > 0
-  );
+export function g21OptionsValid(_options: G21DiagnosisOptions): boolean {
+  return true;
 }

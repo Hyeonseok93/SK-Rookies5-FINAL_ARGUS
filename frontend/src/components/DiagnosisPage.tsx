@@ -7,6 +7,7 @@ import { G35DiagnosisStartDialog } from "./G35DiagnosisStartDialog";
 import { G36DiagnosisStartDialog } from "./G36DiagnosisStartDialog";
 import { G42DiagnosisStartDialog } from "./G42DiagnosisStartDialog";
 import { G15DiagnosisStartDialog } from "./G15DiagnosisStartDialog";
+import { G21DiagnosisStartDialog } from "./G21DiagnosisStartDialog";
 import { G41DiagnosisStartDialog } from "./G41DiagnosisStartDialog";
 import { G52DiagnosisStartDialog } from "./G52DiagnosisStartDialog";
 import { G61DiagnosisStartDialog } from "./G61DiagnosisStartDialog";
@@ -31,6 +32,12 @@ import {
   g15OptionsToPayload,
   type G15DiagnosisOptions,
 } from "../lib/g15DiagnosisOptions";
+import {
+  DEFAULT_G21_OPTIONS,
+  g21OptionsSummary,
+  g21OptionsToPayload,
+  type G21DiagnosisOptions,
+} from "../lib/g21DiagnosisOptions";
 import {
   DEFAULT_G41_OPTIONS,
   g41OptionsSummary,
@@ -264,6 +271,8 @@ export function DiagnosisPage() {
   const [g12Options, setG12Options] = useState<G12DiagnosisOptions>(DEFAULT_G12_OPTIONS);
   const [g15DialogOpen, setG15DialogOpen] = useState(false);
   const [g15Options, setG15Options] = useState<G15DiagnosisOptions>(DEFAULT_G15_OPTIONS);
+  const [g21DialogOpen, setG21DialogOpen] = useState(false);
+  const [g21Options, setG21Options] = useState<G21DiagnosisOptions>(DEFAULT_G21_OPTIONS);
   const [g41DialogOpen, setG41DialogOpen] = useState(false);
   const [g41Options, setG41Options] = useState<G41DiagnosisOptions>(DEFAULT_G41_OPTIONS);
   const [g22DialogOpen, setG22DialogOpen] = useState(false);
@@ -353,7 +362,7 @@ export function DiagnosisPage() {
   const handleRun = useCallback(
     async (
       sectionId: string,
-      options?: G12DiagnosisOptions | G15DiagnosisOptions | G41DiagnosisOptions | G42DiagnosisOptions | G22DiagnosisOptions | G32DiagnosisOptions | G34DiagnosisOptions | G35DiagnosisOptions | G36DiagnosisOptions | G52DiagnosisOptions | G61DiagnosisOptions | G62DiagnosisOptions | G71DiagnosisOptions | G72DiagnosisOptions | G73DiagnosisOptions | G74DiagnosisOptions,
+      options?: G12DiagnosisOptions | G15DiagnosisOptions | G21DiagnosisOptions | G41DiagnosisOptions | G42DiagnosisOptions | G22DiagnosisOptions | G32DiagnosisOptions | G34DiagnosisOptions | G35DiagnosisOptions | G36DiagnosisOptions | G52DiagnosisOptions | G61DiagnosisOptions | G62DiagnosisOptions | G71DiagnosisOptions | G72DiagnosisOptions | G73DiagnosisOptions | G74DiagnosisOptions,
     ) => {
       const mod = catalogById[sectionId];
       if (!mod?.diagnosable || !mod?.implemented) return;
@@ -365,6 +374,8 @@ export function DiagnosisPage() {
         setRunningSummary(g12OptionsSummary(options as G12DiagnosisOptions));
       } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
         setRunningSummary(g15OptionsSummary(options as G15DiagnosisOptions));
+      } else if (sectionId === "2-1" && options && "sellerEmail" in options) {
+        setRunningSummary(g21OptionsSummary(options as G21DiagnosisOptions));
       } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
         setRunningSummary(g41OptionsSummary(options as G41DiagnosisOptions));
       } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
@@ -405,6 +416,8 @@ export function DiagnosisPage() {
           body = g12OptionsToPayload(options as G12DiagnosisOptions);
         } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
           body = g15OptionsToPayload(options as G15DiagnosisOptions);
+        } else if (sectionId === "2-1" && options && "sellerEmail" in options) {
+          body = g21OptionsToPayload(options as G21DiagnosisOptions);
         } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
           body = g41OptionsToPayload(options as G41DiagnosisOptions);
         } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
@@ -462,6 +475,10 @@ export function DiagnosisPage() {
       }
       if (sectionId === "1-5") {
         setG15DialogOpen(true);
+        return;
+      }
+      if (sectionId === "2-1") {
+        setG21DialogOpen(true);
         return;
       }
       if (sectionId === "4-1") {
@@ -539,6 +556,15 @@ export function DiagnosisPage() {
       setG15Options(options);
       setG15DialogOpen(false);
       void handleRun("1-5", options);
+    },
+    [handleRun],
+  );
+
+  const handleG21Start = useCallback(
+    (options: G21DiagnosisOptions) => {
+      setG21Options(options);
+      setG21DialogOpen(false);
+      void handleRun("2-1", options);
     },
     [handleRun],
   );
@@ -867,6 +893,12 @@ export function DiagnosisPage() {
         initialOptions={g15Options}
         onClose={() => setG15DialogOpen(false)}
         onStart={handleG15Start}
+      />
+      <G21DiagnosisStartDialog
+        open={g21DialogOpen && !runningId}
+        initialOptions={g21Options}
+        onClose={() => setG21DialogOpen(false)}
+        onStart={handleG21Start}
       />
       <G41DiagnosisStartDialog
         open={g41DialogOpen && !runningId}
