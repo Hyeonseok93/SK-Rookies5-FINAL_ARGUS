@@ -521,7 +521,6 @@ export interface DiagnosisG45RunOptionsPayload {
 export interface DiagnosisG21RunOptionsPayload {
   seller_email?: string;
   seller_password?: string;
-  seller_id?: number;
   user_email?: string;
   user_password?: string;
   timeout?: number;

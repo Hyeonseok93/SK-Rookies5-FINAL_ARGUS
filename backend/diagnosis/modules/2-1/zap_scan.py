@@ -43,6 +43,8 @@ def _api_probe_bases(bases: list[str]) -> list[str]:
         if key in seen:
             continue
         seen.add(key)
+        # Docker 환경 치환
+        url = url.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
         api_bases.append(url)
     return api_bases
 
@@ -51,11 +53,10 @@ def _make_httpx_proxy_client(proxy_url: str, auth_headers: dict[str, str] | None
     """ZAP 프록시를 통해 요청하는 httpx 클라이언트 반환."""
     import httpx
 
-    proxies = {"http://": proxy_url, "https://": proxy_url}
     headers = dict(auth_headers or {})
     return httpx.Client(
         headers=headers,
-        proxies=proxies,
+        proxy=proxy_url,
         timeout=timeout,
         verify=False,
     )
@@ -88,7 +89,6 @@ def _probe_upload_endpoints_via_zap(
     try:
         import httpx
 
-        proxies = {"http://": proxy_url, "https://": proxy_url}
         headers = dict(session_headers or {})
 
         for base in bases:
@@ -96,7 +96,7 @@ def _probe_upload_endpoints_via_zap(
             probed = probe_url(base)
             with httpx.Client(
                 headers=headers,
-                proxies=proxies,
+                proxy=proxy_url,
                 timeout=8.0,
                 verify=False,
             ) as client:

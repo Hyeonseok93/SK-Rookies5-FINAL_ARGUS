@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, List
 
 import httpx
-from security_rules import get_upload_payloads
+from security_rules import get_upload_payloads, ALLOWED_IMAGE_EXTENSIONS
 
 _MODULE_DIR = Path(__file__).resolve().parent
 
@@ -53,6 +53,7 @@ def _post_case(
             attack_desc=attack_desc,
             response=response,
             original_content=content,
+            allowed_extensions=ALLOWED_IMAGE_EXTENSIONS,
         )
     except httpx.HTTPError as exc:
         return judge.judge_upload_response(
@@ -64,6 +65,7 @@ def _post_case(
             response=None,
             error=str(exc),
             original_content=content,
+            allowed_extensions=ALLOWED_IMAGE_EXTENSIONS,
         )
 
 def _exif_polyglot(client: httpx.Client, base_url: str) -> list:
@@ -142,6 +144,7 @@ def _exif_polyglot(client: httpx.Client, base_url: str) -> list:
                 attack_desc="EXIF Comment PHP injection",
                 response=response,
                 original_content=content,
+                allowed_extensions=ALLOWED_IMAGE_EXTENSIONS,
             )
         ]
     except (subprocess.CalledProcessError, OSError, httpx.HTTPError) as exc:
@@ -155,6 +158,7 @@ def _exif_polyglot(client: httpx.Client, base_url: str) -> list:
                 response=None,
                 error=str(exc),
                 original_content=b"",
+                allowed_extensions=ALLOWED_IMAGE_EXTENSIONS,
             )
         ]
     finally:
@@ -248,6 +252,7 @@ def run_board_edit_probes(base_url: str, auth_headers: dict[str, str], timeout: 
                         attack_desc=desc,
                         response=response,
                         original_content=content,
+                        allowed_extensions=ALLOWED_IMAGE_EXTENSIONS,
                     )
             except httpx.HTTPError as exc:
                 return judge.judge_upload_response(
@@ -259,6 +264,7 @@ def run_board_edit_probes(base_url: str, auth_headers: dict[str, str], timeout: 
                     response=None,
                     error=str(exc),
                     original_content=content,
+                    allowed_extensions=ALLOWED_IMAGE_EXTENSIONS,
                 )
         
         with ThreadPoolExecutor(max_workers=5) as executor:

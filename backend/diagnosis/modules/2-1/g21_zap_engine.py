@@ -60,8 +60,8 @@ class ZapEngine:
 
     def _is_alive(self) -> bool:
         try:
-            self.zap.core.version()
-            return True
+            v = self.zap.core.version
+            return bool(v)
         except Exception:
             return False
 
@@ -301,8 +301,7 @@ class ZapEngine:
             # multipart 요청이 아닌 경우 파일 업로드와 무관 → 스킵
             content_type = raw_request_headers.get("Content-Type", "")
             if not passive_only and "multipart" not in content_type.lower():
-                # passive_only 모드에서는 필터 없이 수집
-                pass
+                continue
 
             dedupe_key = (plugin_id, method, url, param, attack)
             if dedupe_key in seen:

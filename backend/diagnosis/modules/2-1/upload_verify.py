@@ -173,6 +173,10 @@ def verify_stored_file(
         )
 
     # ── follow-up GET ──────────────────────────────────────────────────────
+    # Docker 환경에서 테스트 중인 경우 서버가 반환한 localhost를 host.docker.internal로 치환
+    if "localhost" in stored_url:
+        stored_url = stored_url.replace("localhost", "host.docker.internal")
+
     try:
         # 인증 헤더 없이 anonymous GET (저장 파일은 보통 public URL)
         with httpx.Client(

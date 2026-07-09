@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Literal
 
@@ -626,7 +626,6 @@ class DiagnosisG21RunOptions(BaseModel):
 
     seller_email: str = ""
     seller_password: str = ""
-    seller_id: int = Field(default=0, ge=0)
     user_email: str = ""
     user_password: str = ""
     timeout: float | None = Field(default=None, ge=3.0, le=60.0)

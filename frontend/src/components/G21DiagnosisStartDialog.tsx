@@ -112,19 +112,25 @@ export function G21DiagnosisStartDialog({
         if (accounts.length === 0) return;
         setOptions((prev) => ({
           ...prev,
-          userEmail: prev.userEmail || accounts[0]?.email || "",
-          userPassword: prev.userPassword || accounts[0]?.password || "",
+          userEmail: prev.userEmail || "",
+          userPassword: prev.userPassword || "",
           sellerEmail:
             prev.sellerEmail ||
-            accounts.find((a) => /seller|car|travel|onde/i.test(a.email))?.email ||
-            accounts[1]?.email ||
+            accounts.find((a) => /seller|air/i.test(a.email))?.email ||
             accounts[0]?.email ||
             "",
           sellerPassword:
             prev.sellerPassword ||
-            accounts.find((a) => /seller|car|travel|onde/i.test(a.email))?.password ||
-            accounts[1]?.password ||
+            accounts.find((a) => /seller|air/i.test(a.email))?.password ||
             accounts[0]?.password ||
+            "",
+          adminEmail:
+            prev.adminEmail ||
+            accounts.find((a) => /admin/i.test(a.email))?.email ||
+            "",
+          adminPassword:
+            prev.adminPassword ||
+            accounts.find((a) => /admin/i.test(a.email))?.password ||
             "",
         }));
       })
@@ -218,17 +224,6 @@ export function G21DiagnosisStartDialog({
                     value={options.sellerPassword}
                     onChange={(sellerPassword) => setOptions({ ...options, sellerPassword })}
                   />
-                  <Field
-                    label="Seller ID"
-                    required
-                    hint="POST /seller/accommodations · /seller/cars 의 sellerId 파라미터"
-                    type="number"
-                    value={options.sellerId || ""}
-                    onChange={(v) =>
-                      setOptions({ ...options, sellerId: Math.max(0, parseInt(v, 10) || 0) })
-                    }
-                    placeholder="예: 1"
-                  />
                 </div>
               </div>
 
@@ -251,6 +246,29 @@ export function G21DiagnosisStartDialog({
                     type="password"
                     value={options.userPassword}
                     onChange={(userPassword) => setOptions({ ...options, userPassword })}
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-purple-500/30 bg-purple-500/5 p-3">
+                <div className="mb-2 flex items-center gap-2 text-purple-300">
+                  <Settings2 className="h-4 w-4" />
+                  <span className="text-xs font-semibold">관리자 계정 (선택)</span>
+                </div>
+                <p className="mb-3 text-[10px] text-cyber-muted">
+                  대시보드 이미지 업로드 probe — 비우면 관리자 항목은 스킵됨
+                </p>
+                <div className="space-y-3">
+                  <Field
+                    label="관리자 이메일"
+                    value={options.adminEmail}
+                    onChange={(adminEmail) => setOptions({ ...options, adminEmail })}
+                  />
+                  <Field
+                    label="관리자 비밀번호"
+                    type="password"
+                    value={options.adminPassword}
+                    onChange={(adminPassword) => setOptions({ ...options, adminPassword })}
                   />
                 </div>
               </div>
@@ -285,7 +303,13 @@ export function G21DiagnosisStartDialog({
             <button
               type="button"
               disabled={!valid}
-              onClick={() => onStart(options)}
+              onClick={() => {
+                if (tab === "minimal") {
+                  onStart({ ...options, userEmail: "", userPassword: "", adminEmail: "", adminPassword: "" });
+                } else {
+                  onStart(options);
+                }
+              }}
               className="flex items-center gap-1.5 rounded-lg border border-cyan-400/50 bg-cyan-500/15 px-4 py-2 text-xs font-semibold text-cyan-300 transition hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Stethoscope className="h-3.5 w-3.5" />
