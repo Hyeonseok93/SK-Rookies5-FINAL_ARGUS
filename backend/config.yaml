@@ -2,20 +2,20 @@ app_name: onde-pilot
 
 targets:
   - name: user-api
-    base_url: "http://192.168.0.23:8080"
+    base_url: "http://localhost:8080"
   - name: admin-api
-    base_url: "http://192.168.0.23:8081"
+    base_url: "http://localhost:8081"
 
 inventory:
   markdown:
     enabled: true
     path: "../../2단계(정보 수집 및 자산 분석 - 엔드포인트 수집)_Onde_엔드포인트_구조_정의서_v2.md"
     include_frontend_routes: true
-    frontend_base_url: "http://192.168.0.23"
+    frontend_base_url: "http://localhost:5173"
   openapi:
     enabled: false
     path: ""
-    base_url: "http://192.168.0.23:8080"
+    base_url: "http://localhost:8080"
   url_list:
     enabled: false
     path: "data/inventory-urls.json"
