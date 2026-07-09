@@ -87,10 +87,20 @@ def _sca_text(case: ScaCase) -> str:
             f"Installed version: {case.version}",
             f"Severity: {case.severity.upper()}",
             f"Advisory: {case.advisory_id}",
+            f"CVE: {case.cve_id or '-'}",
+            f"CVSS: {case.cvss_version or '-'} / {case.cvss_score or '-'}",
+            f"EPSS: {case.epss * 100:.3f}%",
+            f"Remote / unauthenticated: {case.remote} / {case.unauthenticated}",
+            f"Public PoC: {case.public_poc}",
+            f"CVSS prerequisites: {case.cvss_prerequisites}",
+            f"Runtime applicability: {case.operating_conditions}",
+            f"Affected range: {case.vulnerable_range or '-'}",
+            f"Representative patched version: {case.representative_patched_version or '-'}",
+            f"Overall recommended version: {case.recommended_version or '-'}",
+            f"Remediation: {case.remediation}",
+            f"Selection: {case.selection_reason}",
             "",
             case.advisory_summary,
-            "",
-            f"Remediation: {case.remediation}",
         ]
     )
 

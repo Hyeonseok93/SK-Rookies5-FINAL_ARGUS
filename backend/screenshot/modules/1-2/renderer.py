@@ -109,7 +109,7 @@ pre {{ height: 346px; margin: 0; padding: 14px; overflow: hidden; white-space: p
 
 
 def render_evidence_overlay(case: EvidenceCase, kind: str) -> tuple[str, str]:
-    """Return isolated CSS/HTML overlaid on top of the real ONDE page."""
+    """Return isolated CSS/HTML overlaid on top of the discovered target page."""
     if kind == "baseline":
         left_title, right_title = "Request", "Response"
         left, right = _request(case.baseline), _response(case.baseline)
@@ -126,7 +126,7 @@ def render_evidence_overlay(case: EvidenceCase, kind: str) -> tuple[str, str]:
     else:
         raise ValueError(f"Unknown evidence kind: {kind}")
 
-    browser_url = str(case.metadata.get("ui_display_url") or "http://localhost:5173/")
+    browser_url = str(case.metadata.get("ui_display_url") or case.baseline.display_url or "/")
     css = """
 #argus-evidence-root, #argus-evidence-root * { box-sizing: border-box !important; }
 #argus-evidence-root { position: fixed !important; inset: 0 !important; z-index: 2147483647 !important;
@@ -167,7 +167,7 @@ def render_evidence_overlay(case: EvidenceCase, kind: str) -> tuple[str, str]:
 
 def render_url_overlay(case: EvidenceCase) -> tuple[str, str]:
     """Browser-like URL strip for a site-only evidence screenshot."""
-    browser_url = str(case.metadata.get("ui_display_url") or "http://localhost:5173/")
+    browser_url = str(case.metadata.get("ui_display_url") or case.baseline.display_url or "/")
     css = """
 #argus-evidence-root, #argus-evidence-root * { box-sizing: border-box !important; }
 #argus-evidence-root { position: fixed !important; inset: 0 !important; z-index: 2147483647 !important;

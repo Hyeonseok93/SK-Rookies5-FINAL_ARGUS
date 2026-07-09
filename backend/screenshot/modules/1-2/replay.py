@@ -8,7 +8,7 @@ from dataclasses import replace
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from credentials import ReplayCredential, credential_for_url
+from credentials import ReplayCredential
 from models import EvidenceCase, HttpExchange
 from redaction import redact_headers, redact_text
 
@@ -30,27 +30,10 @@ def display_url(url: str) -> str:
     return str(url or "").replace("host.docker.internal", "localhost")
 
 
-def ui_url_for_api(url: str) -> tuple[str, str]:
-    """Map an API finding to the real ONDE page that uses that API."""
-    path = urlsplit(str(url or "")).path.lower()
-    if "/api/v1/posts" in path:
-        route = "/feed"
-    elif "/api/v1/auth/signup" in path:
-        route = "/signup/email"
-    elif "/api/v1/admin/" in path:
-        route = "/admin"
-    elif "/api/v1/flights" in path:
-        route = "/flight"
-    elif "/api/v1/cars" in path:
-        route = "/car"
-    elif "/api/v1/insurances" in path:
-        route = "/insurance"
-    else:
-        route = "/"
-    return (
-        f"http://localhost:5173{route}",
-        f"http://localhost:5173{route}",
-    )
+def ui_url_for_api(frontend_base_url: str) -> tuple[str, str]:
+    """Return a project-configured/discovered frontend root."""
+    root = str(frontend_base_url or "").rstrip("/") + "/"
+    return root, display_url(root)
 
 
 def replay_allowed(method: str, url: str) -> tuple[bool, str]:
@@ -117,23 +100,25 @@ def attack_exchange(case: EvidenceCase, payload: str | None = None) -> HttpExcha
     )
 
 
-def _login_url(target_url: str, credential: ReplayCredential) -> str:
-    parts = urlsplit(target_url)
-    path = "/api/v1/auth/admin/login" if credential.role == "admin" else "/api/v1/auth/login"
-    port = 8080 if parts.port in {None, 8080, 8081} else parts.port
-    host = parts.hostname or "host.docker.internal"
-    netloc = f"{host}:{port}" if port else host
-    return urlunsplit((parts.scheme or "http", netloc, path, "", ""))
-
-
-def _login(request_context: Any, target_url: str, credential: ReplayCredential) -> dict[str, Any]:
-    url = _login_url(target_url, credential)
+def _login(
+    request_context: Any,
+    url: str,
+    credential: ReplayCredential,
+    id_field: str,
+    password_field: str,
+) -> dict[str, Any]:
     response = request_context.post(
         url,
-        data={"email": credential.email, "password": credential.password},
+        data={id_field: credential.identifier, password_field: credential.password},
         timeout=15_000,
     )
-    return {"role": credential.role, "email": credential.email, "status": response.status, "ok": response.ok}
+    return {
+        "account_id": credential.account_id,
+        "login_url": display_url(url),
+        "runtime_login_url": url,
+        "status": response.status,
+        "ok": response.ok,
+    }
 
 
 def _perform(request_context: Any, exchange: HttpExchange) -> HttpExchange:
@@ -166,7 +151,14 @@ def _perform(request_context: Any, exchange: HttpExchange) -> HttpExchange:
     )
 
 
-def replay_case(case: EvidenceCase) -> EvidenceCase:
+def replay_case(
+    case: EvidenceCase,
+    *,
+    credentials: list[ReplayCredential],
+    login_urls: list[str],
+    id_field: str,
+    password_field: str,
+) -> EvidenceCase:
     allowed, reason = replay_allowed(case.baseline.method, case.baseline.url)
     if not allowed:
         raise RuntimeError(reason)
@@ -176,11 +168,24 @@ def replay_case(case: EvidenceCase) -> EvidenceCase:
     except ImportError as exc:
         raise RuntimeError("Playwright is required for HTTP evidence replay.") from exc
 
-    credential = credential_for_url(case.baseline.url)
     metadata = dict(case.metadata)
     with sync_playwright() as playwright:
         request_context = playwright.request.new_context(ignore_https_errors=True)
-        login = _login(request_context, case.baseline.url, credential)
+        login: dict[str, Any] = {"ok": False, "reason": "No supplied account/login endpoint succeeded"}
+        for login_url in login_urls:
+            for credential in credentials:
+                attempt = _login(
+                    request_context,
+                    login_url,
+                    credential,
+                    id_field,
+                    password_field,
+                )
+                if attempt["ok"]:
+                    login = attempt
+                    break
+            if login["ok"]:
+                break
         baseline = _perform(request_context, case.baseline)
 
         methods = dict(metadata.get("verification_methods") or {})

@@ -35,6 +35,8 @@ services:
     build:
       context: ./backend
     container_name: argus-backend
+    env_file:
+      - ../onde/scraping/.env
     ports:
       - "8001:8000"
     environment:

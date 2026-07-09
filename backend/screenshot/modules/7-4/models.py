@@ -28,6 +28,19 @@ class ScaCase:
     advisory_url: str
     advisory_summary: str
     remediation: str
+    cve_id: str = ""
+    cvss_version: str = ""
+    cvss_score: float = 0.0
+    cvss_vector: str = ""
+    epss: float = 0.0
+    remote: bool = False
+    unauthenticated: bool = False
+    public_poc: bool = False
+    operating_conditions: str = "unconfirmed"
+    cvss_prerequisites: str = "not available"
+    vulnerable_range: str = ""
+    representative_patched_version: str = ""
+    recommended_version: str = ""
+    selection_reason: str = ""
     cve_ids: list[str] = field(default_factory=list)
     dependency_lines: list[str] = field(default_factory=list)
-
