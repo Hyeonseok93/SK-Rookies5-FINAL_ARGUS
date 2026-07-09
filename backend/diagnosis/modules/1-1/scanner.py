@@ -620,24 +620,6 @@ def _alert_from_xss(result: dict, method: str, url: str, param: str, payload: st
     }
 
 
-def _alert_from_header(url: str, method: str, item: dict, res, account_role: str) -> dict:
-    return {
-        "alert": item["message"],
-        "url": url,
-        "method": method.upper(),
-        "risk": "Medium",
-        "confidence": "High",
-        "param": item["rule_id"],
-        "attack": "",
-        "status_code": res.status_code,
-        "evidence": item["message"],
-        "custom_type": item["rule_id"],
-        "account_role": account_role,
-        "evidence_request": _format_request(res.request),
-        "evidence_response": _format_response(res),
-    }
-
-
 def _is_successful_response(status_code: int) -> bool:
     return 200 <= int(status_code or 0) < 400
 
@@ -678,15 +660,7 @@ def _normalized_group_url(url: str) -> str:
 
 def _group_alerts(alerts: list[dict]) -> list[dict]:
     grouped: dict[str, dict] = {}
-    global_types = {
-        "REFERRER_POLICY_CUSTOM",
-        "PERMISSIONS_POLICY_CUSTOM",
-        "X_FRAME_OPTIONS_CUSTOM",
-        "HSTS_CUSTOM",
-        "MIME_SNIFF_CUSTOM",
-        "CSP_CUSTOM",
-        "CORS_ORIGIN_REFLECTION",
-    }
+    global_types = {"CORS_ORIGIN_REFLECTION"}
     endpoint_grouped_types = {"40012", "40014", "40016", "40017", "DOM_XSS_SUSPECT", "CSRF_CUSTOM"}
     for alert in alerts:
         key_id = alert.get("custom_type") or alert.get("pluginId") or alert.get("alert", "")
@@ -735,12 +709,6 @@ def _map_alerts(alerts: list[dict]) -> list[dict]:
         "DOM_XSS_SUSPECT": ("1-1-XSS-DOM", "DOM XSS Suspect", "Low"),
         "CSRF_CUSTOM": ("1-1-CSRF", "CSRF", "High"),
         "CORS_ORIGIN_REFLECTION": ("1-1-CORS", "CORS Origin Reflection", "High"),
-        "CSP_CUSTOM": ("1-1-HEADER-CSP", "Missing Security Header", "Medium"),
-        "MIME_SNIFF_CUSTOM": ("1-1-HEADER-NOSNIFF", "Missing Security Header", "Medium"),
-        "X_FRAME_OPTIONS_CUSTOM": ("1-1-HEADER-XFO", "Missing Security Header", "Medium"),
-        "REFERRER_POLICY_CUSTOM": ("1-1-HEADER-REFERRER", "Missing Security Header", "Medium"),
-        "PERMISSIONS_POLICY_CUSTOM": ("1-1-HEADER-PERMISSIONS", "Missing Security Header", "Medium"),
-        "HSTS_CUSTOM": ("1-1-HEADER-HSTS", "Missing Security Header", "Medium"),
     }
     for alert in alerts:
         key_id = alert.get("custom_type") or alert.get("pluginId") or ""
@@ -894,9 +862,6 @@ def scan_target(target_url: str, auth_tokens: list[dict] | None = None, result_d
                         continue
                     _log(f"[G11] baseline {method} {url} -> {baseline.status_code}")
 
-                    for header_finding in rules.assess_security_headers(baseline, url.startswith("https://")):
-                        alerts.append(_alert_from_header(url, method, header_finding, baseline, role))
-
                     if baseline.status_code in {401, 403}:
                         _log(f"[G11] skip active XSS/CSRF {method} {url}: baseline auth status {baseline.status_code}")
                         continue
@@ -983,7 +948,7 @@ def scan_target(target_url: str, auth_tokens: list[dict] | None = None, result_d
                                 break
 
     if zap:
-        allowed = {"40012", "40014", "40016", "40017", "90034"}
+        allowed = {"40012", "40014", "40016", "40017"}
         for alert in zap_adapter.collect_zap_alerts(zap, target_url):
             if str(alert.get("pluginId", "")) in allowed:
                 alerts.append(alert)

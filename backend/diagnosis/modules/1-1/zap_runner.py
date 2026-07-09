@@ -10,6 +10,29 @@ import requests
 from datetime import date, datetime, timedelta, timezone
 from zapv2 import ZAPv2
 
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_sibling_module(name: str):
+    import importlib.util
+
+    path = os.path.join(_MODULE_DIR, f"{name}.py")
+    spec = importlib.util.spec_from_file_location(f"diag_g11_legacy_{name}", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Failed to load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+report_helpers = _load_sibling_module("report")
+classify_alert = report_helpers.classify_alert
+KOREAN_REMEDIATIONS = report_helpers.KOREAN_REMEDIATIONS
+csrf_scanner = _load_sibling_module("csrf_scanner")
+payload_catalog = _load_sibling_module("payloads")
+XSS_PAYLOADS = payload_catalog.XSS_PAYLOADS
+
+
 # 전역 스캔 상태 관리
 scan_status = {
     "is_running": False,
@@ -19,7 +42,6 @@ scan_status = {
     "log_file": None,
     "total_alerts": 0
 }
-
 
 def _bounded_get(url, *, headers=None, params=None, timeout=4, max_bytes=524288):
     """GET with a bounded response body so streaming/large endpoints cannot stall scans."""
@@ -306,312 +328,6 @@ def classify_xss_response(payload, response_body, content_type, method="GET", is
 
     return None
 
-
-def classify_alert(alert_name, param_name, attack_val, description, custom_type=None):
-    an = alert_name.lower()
-    desc = description.lower()
-    pn = param_name.lower()
-
-    # ── custom_type 완전 일치 우선 분기 (문자열 패턴 매칭보다 먼저 처리) ──────────────────
-    if custom_type == "40012":
-        return "1-1", "Reflected XSS", "중요", "입력값이 응답 본문에 그대로 반사되어 브라우저에서 실행될 수 있습니다."
-    if custom_type == "40014":
-        return "1-1", "Stored XSS", "중요", "저장된 입력값이 이후 응답 렌더링 단계에서 다시 실행 가능한 형태로 노출됩니다."
-    if custom_type == "DOM_XSS_CUSTOM":
-        return "1-1", "DOM XSS", "중요", "클라이언트 측 DOM 삽입 경로를 통해 사용자 입력이 실행 가능한 코드로 처리될 수 있습니다."
-    if custom_type == "DOM_XSS_SUSPECT":
-        return "1-1", "DOM XSS", "참고", "[정적 분석] DOM 삽입 지점 의심 패턴이 감지되었습니다. Playwright 동적 검증을 통한 실제 실행 여부 확인이 필요합니다."
-    if custom_type == "CSRF_CUSTOM":
-        return "1-1", "CSRF", "중요", "쿠키 기반 인증만으로 상태 변경 요청이 통과되어 외부 사이트에서의 위조 요청 공격이 가능합니다."
-    if custom_type == "CORS_ORIGIN_REFLECTION":
-        return "1-1", "CORS Origin Reflection", "중요", "서버가 임의 Origin을 ACAO 헤더에 그대로 반사하고 Credentials를 허용하여 공격 도메인에서 인증된 API 요청이 가능합니다."
-    if custom_type == "MIME_SNIFF_CUSTOM":
-        return "7-4", "취약한 보안설정", "일반", "X-Content-Type-Options: nosniff 헤더가 누락되어 브라우저가 응답을 HTML로 오인 파싱할 수 있습니다."
-    if custom_type == "REFERRER_POLICY_CUSTOM":
-        return "7-4", "취약한 보안설정", "일반", "Referrer-Policy 헤더가 누락되어 내부 API URL 및 토큰 정보가 외부 도메인으로 유출될 수 있습니다."
-    if custom_type == "PERMISSIONS_POLICY_CUSTOM":
-        return "7-4", "취약한 보안설정", "일반", "Permissions-Policy 헤더가 누락되어 브라우저 하드웨어 API(카메라, 마이크 등) 접근 권한이 제한되지 않습니다."
-    if custom_type == "X_FRAME_OPTIONS_CUSTOM":
-        return "7-4", "취약한 보안설정", "일반", "X-Frame-Options 헤더가 누락되어 Clickjacking 공격에 노출될 수 있습니다."
-    if custom_type == "HSTS_CUSTOM":
-        return "7-4", "취약한 보안설정", "일반", "Strict-Transport-Security 헤더가 누락되어 HTTP 다운그레이드 공격에 취약합니다."
-    if custom_type == "6-1_ERR_DISCLOSE":
-        return "6-1", "오류페이지를 통한 정보 노출 여부", "일반", "에러 응답에 Spring Boot 내부 패키지 구조 및 Java 예외 정보가 노출되어 공격자에게 서버 내부 구조를 알려줄 수 있습니다."
-
-    if any(k in an for k in ["cross-site", "cross site", "xss", "csrf", "크로스", "스크립팅"]):
-        return "1-1", "XSS / CSRF 공격 가능성", "중요", "사용자 입력값이 출력 혹은 다른 사이트의 권한 요청으로 그대로 전송되어 악성 스크립트 실행이나 세션 오용 우려가 존재합니다."
-    if any(k in an for k in ["sql injection", "xml", "xpath", "ldap", "인젝션", "삽입"]):
-        return "1-2", "삽입(Injection) 공격 가능성", "중요", "데이터베이스 질의문이나 XML 파서 등에 검증되지 않은 쿼리 예약어 조작 값이 입력되어 내부 데이터를 무단으로 탈출하거나 위조할 수 있습니다."
-    if any(k in an for k in ["fuzz", "parameter tampering", "tamper", "퍼저", "조작"]):
-        return "1-3", "파라미터 값 및 히든(Hidden) 필드 조작 가능성", "중요", "요청 파라미터나 비공개 헤더 정보의 경계값을 임의 변조하여 비정상 예외 또는 통제되지 않은 결과 처리를 유도할 수 있습니다."
-    if any(k in an for k in ["server-side request forgery", "ssrf", "file inclusion", "포함"]):
-        return "1-4", "SSRF / File Inclusion 공격 가능성", "중요", "서버가 외부의 임의 리소스에 대신 요청하게 하거나 로컬/원격 파일을 강제로 첨부 실행시키도록 공격 매개변수를 악용할 수 있습니다."
-    if any(k in an for k in ["redirect", "forward", "리다이렉트", "포워드"]):
-        return "1-5", "검증되지 않은 리다이렉트와 포워드", "일반", "검증되지 않은 피싱용 외부 사이트로 사용자 브라우저 화면이 자동 전환되는 위험성입니다."
-    if any(k in an or k in desc for k in ["buffer", "overflow", "format string", "버퍼", "오버플로우", "포맷 스트링"]):
-        return "1-6", "입력 값 크기 및 무결성 검증 오류", "중요", "서버 버퍼 메모리 크기를 초과하는 데이터 유입 시 메모리 오류나 비정상 크래시를 발생시키는 원인입니다."
-
-    if any(k in an or k in desc for k in ["upload", "업로드"]):
-        return "2-1", "악성코드파일 업로드", "중요", "파일 업로드 경로에 실행 가능한 웹쉘 등의 확장자 및 스크립트 검증 필터링이 부재합니다."
-    if any(k in an or k in desc for k in ["directory browsing", "download", "디렉터리", "디렉토리", "목록화", "다운로드"]):
-        return "2-2", "중요 정보 파일 다운로드 가능성", "중요", "상위 디렉토리 참조 기법 등을 활용해 시스템 비공개 파일이나 설정 파일을 무단 다운로드할 위험입니다."
-
-    if any(k in an for k in ["password", "credential", "패스워드", "비밀번호"]):
-        return "3-1", "패스워드 정책 유무 및 반영 여부", "일반", "비밀번호 안전 복잡도 검사나 무작위 대입 차단 수준이 미흡합니다."
-    if any(k in an for k in ["brute force", "lockout", "무작위", "대입"]):
-        return "3-2", "인증 실패 횟수 제한", "일반", "단시간 내에 수많은 비밀번호 대입 시도가 발생할 때 자동 잠금이나 캡차 보호 처리가 미흡합니다."
-    if any(k in an for k in ["username enumeration", "user enumeration", "열거"]):
-        return "3-3", "계정 정보 파악 가능성", "일반", "회원가입/로그인 시도 에러 메시지를 통해 특정 계정의 존재 여부를 해커가 한눈에 추론할 수 있게 유출되는 취약점입니다."
-    if any(k in desc or k in an for k in ["admin", "관리자"]):
-        return "3-4", "관리자 페이지 분리 여부", "일반", "외부 인터넷 망에 관리자 로그인 기능이나 전용 API 콘솔 주소가 그대로 노출되어 있습니다."
-    if any(k in pn or k in an or k in desc for k in ["user-agent", "user agent", "robotic", "유저 에이전트"]):
-        return "3-5", "검색엔진 정보 노출 가능성", "일반", "유저 에이전트(User-Agent) 변조 접속을 활용하여 일반 브라우저 외에 다양한 웹 검색 로봇(봇) 우회 및 데이터 크롤링을 허용하는 상태입니다."
-    if any(k in an for k in ["backup", "temp file", "백업", "임시"]):
-        return "3-6", "백업 파일 및 테스트 파일 존재 여부", "일반", "서버 루트 경로에 임시 저장된 .bak, .tmp, .zip 백업 소스코드 등이 방치되어 다운로드 가능한 위험성입니다."
-
-    if any(k in an for k in ["samesite", "cookie", "쿠키", "storage", "스토리지"]):
-        return "4-1", "쿠키(Cookie) 및 웹 스토리지(Web Storage) 조작 가능성", "일반", "쿠키 생성 시 SameSite, Secure, HttpOnly 속성이 누락되어 CSRF나 세션 갈취(XSS) 공격에 취약해집니다."
-    if any(k in an for k in ["session", "token", "jwt", "세션", "토큰"]):
-        return "4-2", "인증(세션 및 토큰) 값 안전성 설정 여부", "일반", "JWT 토큰 서명 키가 단순하거나 만료 시간 제한이 너무 길어 인증 무효화 처리가 미비합니다."
-    if any(k in an for k in ["bypass", "access control", "우회", "접근제어"]):
-        return "4-3", "접근제어 우회 가능성 확인", "일반", "특정 헤더 변조나 HTTP 메소드(GET->POST 우회 등)의 변경을 통해 접근 통제 처리를 우회할 수 있는 취약성입니다."
-    if any(k in an for k in ["unauthorized", "missing authorization", "인가", "인증 누락"]):
-        return "4-4", "비인증 상태로 중요 page접근 가능성", "일반", "토큰 없이도 회원 권한이나 예약 생성 등 주요 데이터 변경 API에 접근할 수 있는지 여부입니다."
-    if any(k in an for k in ["privilege", "escalation", "권한 상승"]):
-        return "4-5", "일반계정 권한 상승 가능성", "일반", "일반 유저 권한의 토큰으로 관리자(ADMIN) 권한의 자원을 조작하거나 다른 판매자의 재고 정보를 수정할 수 있는 수평적/수직적 권한 변조 우려입니다."
-
-    if any(k in an or k in desc for k in ["source code", "소스 코드"]):
-        return "5-1", "소스코드 내 주요정보 노출 여부", "일반", "클라이언트용 자바스크립트나 HTML 페이지 주석 내에 비밀번호, API 키, 주석 등이 고스란히 유출되고 있습니다."
-    if any(k in an or k in desc or k in pn for k in ["sensitive", "pii", "personal", "userId", "개인 정보", "민감"]):
-        return "5-2", "요청 및 응답 값 내 주요정보 포함여부 확인", "중요", "주민번호, 비밀번호, 결제 정보, 사용자 식별자(ID) 등이 암호화 없이 전송되거나 URL 주소창에 고스란히 남아 있는 구조입니다."
-
-    if any(k in an for k in ["error", "disclosure", "오류", "노출", "error disclosure"]):
-        return "6-1", "오류페이지를 통한 정보 노출 여부", "일반", "비정상 파라미터 입력 시 서버 시스템 에러 화면이나 프레임워크 스택 트레이스 정보가 사용자 응답에 노출되는 상태입니다."
-    if any(k in desc for k in ["generic error", "error page"]):
-        return "6-2", "일괄적인 오류 처리 페이지 존재 여부", "일반", "모든 예외 상황을 공통 에러 핸들러로 깔끔하게 정리하지 않고 시스템 기본 예외 응답을 노출하고 있습니다."
-
-    if any(k in an or k in desc for k in ["method", "http method"]):
-        return "7-1", "Client Request Method", "일반", "사용하지 않는 HTTP Method(OPTIONS, TRACE, PUT, DELETE)가 외부로 지나치게 허용되고 있습니다."
-    if any(k in an for k in ["indexing", "directory listing"]):
-        return "7-2", "파일 목록화 가능성", "일반", "서버 자원 주소 뒤에 슬래시(/)를 붙였을 때 폴더 내부 구조가 리스트업되어 노출될 위험입니다."
-    if any(k in an for k in ["header", "banner", "헤더", "배너"]):
-        return "7-3", "서버 헤더정보 노출", "일반", "HTTP 응답 헤더 내에 서버 운영체제 정보나 웹 서버 엔진 버전(Nginx, Apache 등)이 노출되고 있습니다."
-    if any(k in an for k in ["security header", "x-content"]):
-        return "7-4", "취약한 보안설정", "일반", "웹 브라우저 보안 헤더(X-Frame-Options, X-Content-Type-Options 등) 누락으로 인한 위험입니다."
-
-    return "8-1", "취약점 진단 항목에 정의되지 않은 취약점", "-", "기타 정의되지 않은 시스템 정보 수집 공격에 해당합니다."
-
-# 취약점 ID 및 유형별 한글 설명 및 실제 조치 코드 템플릿 매핑
-KOREAN_REMEDIATIONS = {
-    "40012": { # Reflected XSS
-        "summary": "입력값 검증 및 인코딩 미흡으로 인한 반사형 XSS 취약점입니다.",
-        "cause": "요청 파라미터(예: {param})에 악성 스크립트가 입력되었을 때, 서버가 이를 필터링하지 않고 응답 결과로 그대로 출력하여 브라우저에서 스크립트가 실행될 수 있습니다.",
-        "action_guide": (
-            "1. 입력값 필터링: Spring Boot 환경인 경우 XssEscapeServletFilter 같은 서블릿 필터를 적용하여 요청 파라미터의 HTML 특수문자(<, >, &, \")를 인코딩 처리하세요.\n"
-            "2. 응답 헤더 추가: 응답 헤더에 'X-Content-Type-Options: nosniff'를 추가하여 브라우저가 응답 데이터를 HTML로 오인하여 실행하지 않도록 설정하세요."
-        ),
-        "code_example": (
-            "// Spring Boot XSS 필터 적용 예시 (Lucy XSS Filter)\n"
-            "@Configuration\n"
-            "public class XssConfig implements WebMvcConfigurer {\n"
-            "    @Bean\n"
-            "    public FilterRegistrationBean<XssEscapeServletFilter> getFilterRegistrationBean() {\n"
-            "        FilterRegistrationBean<XssEscapeServletFilter> registrationBean = new FilterRegistrationBean<>();\n"
-            "        registrationBean.setFilter(new XssEscapeServletFilter());\n"
-            "        registrationBean.setOrder(1);\n"
-            "        registrationBean.addUrlPatterns(\"/*\");\n"
-            "        return registrationBean;\n"
-            "    }\n"
-            "}"
-        )
-    },
-    "40014": { # Persistent XSS
-        "summary": "데이터베이스 저장값 출력 과정에서 발생하는 지속성 XSS 취약점입니다.",
-        "cause": "데이터베이스에 저장된 악성 페이로드가 화면 렌더링 시 여과 없이 텍스트가 아닌 HTML 태그로 해석되어 실행되는 위협입니다.",
-        "action_guide": "데이터 저장 및 조회 시점에 HTML 엔티티 인코딩(HtmlUtils.htmlEscape)을 필수 적용하고, 부득이하게 Rich Text Editor를 쓰는 경우 Naver Lucy Sanitizer 등으로 위험 태그만 걸러내는 화이트리스트 필터를 거치도록 수정하세요.",
-        "code_example": "String safeContent = HtmlUtils.htmlEscape(userData.getContent());"
-    },
-    "DOM_XSS_CUSTOM": {
-        "summary": "클라이언트 측 DOM 삽입 지점을 이용한 DOM 기반 XSS 취약점입니다.",
-        "cause": "브라우저의 DOM API가 사용자 입력을 그대로 HTML/JavaScript로 해석하여 악성 스크립트를 실행시킬 수 있습니다.",
-        "action_guide": "document.write, innerHTML, outerHTML 같은 DOM 삽입 API 사용을 줄이고, 안전한 텍스트 노드 삽입이나 적절한 인코딩/화이트리스트 필터를 적용하세요.",
-        "code_example": "element.textContent = userInput;"
-    },
-    "40018": { # SQL Injection
-        "summary": "동적 SQL 쿼리 구성으로 인한 SQL 인젝션 취약점입니다.",
-        "cause": "사용자 입력값이 SQL 쿼리 문자열에 직접 결합되어(Statement 방식), 데이터베이스 구조 조작이나 인증 우회 공격에 노출됩니다.",
-        "action_guide": "MyBatis 사용 시 '$' 대신 '#' 기호를 사용하여 Prepared Statement 파라미터 바인딩을 적용하고, JPA 사용 시 동적 쿼리에 대해 JPQL 파라미터 바인딩을 필히 적용하세요.",
-        "code_example": (
-            "<!-- MyBatis 해결 예시 -->\n"
-            "<!-- 취약한 코드: SELECT * FROM users WHERE id = '${userId}' -->\n"
-            "<!-- 안전한 코드: -->\n"
-            "SELECT * FROM users WHERE id = #{userId}"
-        )
-    },
-    "CSRF_CUSTOM": {
-        "summary": "안전하지 않은 쿠키 세션 처리로 인한 CSRF(요청 위조) 취약점입니다.",
-        "cause": "Authorization 헤더가 없어도 브라우저에 저장된 accessToken 쿠키의 자동 전송을 허용하며, CORS 설정에서 외부 Origin의 신용정보(Credentials) 전송을 수락하고 있습니다.",
-        "action_guide": (
-            "1. 쿠키 발급 시 SameSite 속성을 'Lax' 또는 'Strict'로 지정하세요.\n"
-            "2. 중요 쓰기 작업 API는 쿠키 인증 대신 HTTP Authorization Header 방식의 Bearer 토큰 검증만 허용하도록 백엔드 시큐리티 설정을 변경하세요."
-        ),
-        "code_example": (
-            "// Spring Boot Cookie 발급 시 SameSite 설정 예시\n"
-            "ResponseCookie cookie = ResponseCookie.from(\"accessToken\", token)\n"
-            "        .httpOnly(true)\n"
-            "        .secure(true)\n"
-            "        .path(\"/\")\n"
-            "        .maxAge(3600)\n"
-            "        .sameSite(\"Lax\") // CSRF 방어 핵심\n"
-            "        .build();\n"
-            "response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());"
-        )
-    },
-    "90034": {
-        "summary": "HTML Form 내 Anti-CSRF 토큰 부재 취약점입니다.",
-        "cause": "서버가 브라우저 사용자로부터의 요청을 받을 때, 세션 상태를 검증하기 위한 무작위 일회성 CSRF 토큰 검증 절차가 누락되어 있습니다.",
-        "action_guide": (
-            "1. Spring Security 환경인 경우 CSRF 보호 필터를 기본 활성화(http.csrf(withDefaults())) 처리하세요.\n"
-            "2. 클라이언트와 서버가 완전 무상태 API(Stateless) 형태로 통신하는 경우, 요청 주체가 쿠키 인증을 사용하지 않고 헤더(Authorization) 기반 Bearer 토큰만 사용하도록 변경하는 것으로 조치 가능합니다."
-        ),
-        "code_example": (
-            "// Spring Security CSRF 보호 기본 설정 예시\n"
-            "@Bean\n"
-            "public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {\n"
-            "    http.csrf(csrf -> csrf.ignoringRequestMatchers(\"/api/v1/auth/login\")); // 필요한 비인가 엔드포인트만 예외 지정\n"
-            "    return http.build();\n"
-            "}"
-        )
-    },
-    "MIME_SNIFF_CUSTOM": {
-        "summary": "MIME 스니핑 방지 헤더 누락 취약점입니다.",
-        "cause": "API 응답에 'X-Content-Type-Options: nosniff' 헤더가 누락되어 있습니다. 브라우저가 JSON 형식을 HTML이나 스크립트로 임의로 속성 해석(Sniffing)하여 악의적인 스크립트를 렌더링시킬 수 있습니다.",
-        "action_guide": "웹 서버 설정(Nginx 등)이나 백엔드 Security Filter 단계에서 'X-Content-Type-Options: nosniff' 헤더를 항상 포함하여 응답하도록 보완하세요.",
-        "code_example": (
-            "// Spring Security 기본적으로 작동하나 수동 설정 시:\n"
-            "http.headers(headers -> headers.contentTypeOptions(configs -> configs.disable().and().defaultsDisabled())); // 혹은 기본 활성화 유지"
-        )
-    },
-    "REFERRER_POLICY_CUSTOM": {
-        "summary": "Referrer-Policy 보안 헤더 누락 취약점입니다.",
-        "cause": "응답 헤더에 'Referrer-Policy'가 설정되어 있지 않아, 다른 도메인으로 이동 시 내부 API 요청 URL 정보(민감 파라미터나 토큰 등)가 Referer 요청 헤더를 통해 유출될 수 있습니다.",
-        "action_guide": "Referer 헤더 전송 수준을 통제할 수 있도록 'Referrer-Policy: no-referrer' 또는 'strict-origin-when-cross-origin'을 응답에 설정하세요.",
-        "code_example": (
-            "// Nginx 설정 예시\n"
-            "add_header Referrer-Policy \"strict-origin-when-cross-origin\" always;"
-        )
-    },
-    "PERMISSIONS_POLICY_CUSTOM": {
-        "summary": "Permissions-Policy 보안 헤더 누락 취약점입니다.",
-        "cause": "Permissions-Policy 헤더가 부재하여, 브라우저가 지원하는 강력한 하드웨어 API(카메라, 마이크, 위치 정보 등)의 허용 권한 제어가 크로스 사이트 context에서 엄격하게 차단되지 않습니다.",
-        "action_guide": "사용하지 않는 브라우저 기능 권한을 기본적으로 거부(deny) 처리하는 Permissions-Policy 헤더를 구성하세요.",
-        "code_example": (
-            "// Nginx 설정 예시\n"
-            "add_header Permissions-Policy \"camera=(), microphone=(), geolocation=()\" always;"
-        )
-    },
-    "X_FRAME_OPTIONS_CUSTOM": {
-        "summary": "클릭재킹 방지용 X-Frame-Options 헤더 누락 취약점입니다.",
-        "cause": "X-Frame-Options 헤더가 설정되어 있지 않거나 미흡하여, 공격자가 악의적인 사이트 내부 iframe 태그에 본 서비스를 내장시켜 사용자 오클릭을 유도(Clickjacking)할 위험이 있습니다.",
-        "action_guide": "응답 헤더에 'X-Frame-Options: DENY' 또는 'SAMEORIGIN' 속성을 활성화하세요.",
-        "code_example": (
-            "// Spring Security 설정 예시\n"
-            "http.headers(headers -> headers.frameOptions(options -> options.deny()));"
-        )
-    },
-    "HSTS_CUSTOM": {
-        "summary": "HTTP Strict-Transport-Security (HSTS) 헤더 누락 취약점입니다.",
-        "cause": "HTTPS 환경임에도 HSTS 헤더가 활성화되어 있지 않아, 사용자가 최초 접속 혹은 특정 시점에 강제로 HTTP 경로로 강제 우회되어 중간자 공격(MitM)을 당할 여지가 있습니다.",
-        "action_guide": "브라우저에게 일정 기간 HTTPS 통신만 강제하도록 강제하는 'Strict-Transport-Security: max-age=31536000; includeSubDomains'를 추가하세요.",
-        "code_example": (
-            "// Nginx SSL 가이드 예시\n"
-            "add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;"
-        )
-    },
-    "CORS_ORIGIN_REFLECTION": {
-        "summary": "CORS Origin Reflection 취약점으로, 임의 도메인에서 인증된 API 요청이 가능합니다.",
-        "cause": "서버가 Access-Control-Allow-Origin 헤더를 고정값으로 설정하지 않고, 클라이언트가 전송한 Origin 헤더값을 그대로 반사합니다. 동시에 Access-Control-Allow-Credentials: true가 설정되어 있어 공격 도메인에서 희생자의 브라우저 세션 쿠키를 이용한 API 접근이 가능합니다.",
-        "action_guide": (
-            "1. allowedOrigins를 신뢰 도메인 화이트리스트로 고정하세요 (와일드카드 * 사용 금지).\n"
-            "2. Credentials를 허용해야 하는 경우, ALLOWED_ORIGINS 목록을 엄격히 관리하고 동적 반사를 제거하세요.\n"
-            "3. Spring Security에서 CorsConfiguration.setAllowedOrigins()에 명시적 도메인만 지정하세요."
-        ),
-        "code_example": (
-            "// Spring Boot CORS 화이트리스트 고정 예시\n"
-            "@Bean\n"
-            "public CorsFilter corsFilter() {\n"
-            "    CorsConfiguration config = new CorsConfiguration();\n"
-            "    config.setAllowedOrigins(List.of(\"https://trusted.example.com\")); // 반사 금지\n"
-            "    config.setAllowCredentials(true);\n"
-            "    config.setAllowedMethods(List.of(\"GET\", \"POST\", \"PUT\", \"DELETE\"));\n"
-            "    UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();\n"
-            "    source.registerCorsConfiguration(\"/**\", config);\n"
-            "    return new CorsFilter(source);\n"
-            "}"
-        )
-    },
-    "6-1_ERR_DISCLOSE": {
-        "summary": "에러 응답에 서버 내부 구조 정보가 노출되는 취약점입니다.",
-        "cause": "Spring Boot가 예외 처리 시 systemMessage 필드에 Java 패키지명, 클래스명, 예외 타입 등 내부 구조 정보를 그대로 출력하고 있습니다. 공격자가 이를 통해 서버 기술 스택과 데이터 모델 구조를 파악하여 보다 정교한 공격을 설계할 수 있습니다.",
-        "action_guide": (
-            "1. 운영 환경에서는 에러 응답의 systemMessage 필드를 제거하거나 고정 메시지로 대체하세요.\n"
-            "2. Spring Boot application.properties에서 'server.error.include-message=never' 설정을 적용하세요.\n"
-            "3. @ControllerAdvice + @ExceptionHandler로 전역 예외 처리를 구현하여 내부 정보가 포함되지 않은 표준 에러 응답만 반환하세요."
-        ),
-        "code_example": (
-            "// Spring Boot 전역 예외 처리 예시\n"
-            "@RestControllerAdvice\n"
-            "public class GlobalExceptionHandler {\n"
-            "    @ExceptionHandler(Exception.class)\n"
-            "    public ResponseEntity<ErrorResponse> handleException(Exception e) {\n"
-            "        // 내부 예외 정보는 서버 로그에만 기록\n"
-            "        log.error(\"Internal error\", e);\n"
-            "        // 클라이언트에는 고정 메시지만 반환\n"
-            "        return ResponseEntity.status(500)\n"
-            "            .body(new ErrorResponse(\"서버 내부 오류가 발생했습니다.\"));\n"
-            "    }\n"
-            "}"
-        )
-    }
-}
-
-# ── 다중 XSS 페이로드 목록 (WAF/필터 우회 변형 포함) ───────────────────────────────────
-XSS_PAYLOADS = [
-    "<script>alert(1)</script>",
-    "<scrIpt>alert(1);</scrIpt>",
-    "<img src=x onerror=alert(1)>",
-    "<img/src=x onerror=alert(1)>",                  # 슬래시 우회
-    "<svg onload=alert(1)>",
-    "<svg/onload=alert(1)>",
-    "\"><script>alert(1)</script>",
-    "<details open ontoggle=alert(1)>",               # HTML5 이벤트 핸들러
-    "<body onload=alert(1)>",
-    "<!--<img src=--><img src=x onerror=alert(1)//>",  # 주석 우회
-    "javascript:alert(1)",
-    "<iframe src=javascript:alert(1)>",
-]
-
-# ── 반사 지점(Context)별 2차 정밀 검증용 페이로드 사전 ────────────────────────────────────
-CONTEXT_PAYLOADS = {
-    "HTML body": [
-        "<script>alert(1)</script>",
-        "<img src=x onerror=alert(1)>"
-    ],
-    "HTML attribute": [
-        "\" onmouseover=alert(1) x=\"",
-        "' onmouseover=alert(1) x='",
-        "\" autofocus onfocus=alert(1) x=\""
-    ],
-    "JSON/String value": [
-        "</script><script>alert(1)</script>",
-        "\\\"+alert(1)+\\\"",
-        "<img src=x onerror=alert(1)>"
-    ],
-    "encoded/reflected": [
-        "<script>alert(1)</script>",
-        "%3Cscript%3Ealert(1)%3C/script%3E"
-    ],
-}
 def resolve_schema_ref(schema: dict, components: dict | None = None) -> dict:
     if not isinstance(schema, dict):
         return schema
@@ -1252,30 +968,6 @@ def has_unsafe_samesite_cookie(account: dict | None, response_set_cookie: str = 
         return False
     return True
 
-def assess_security_headers(response, is_https=False):
-    headers = response.headers
-    checks = [
-        ("X-Content-Type-Options", lambda v: "nosniff" in v.lower(), "X-Content-Type-Options header is missing or does not include nosniff."),
-        ("X-Frame-Options", lambda v: v.lower() in ["deny", "sameorigin"], "X-Frame-Options header is missing or is not DENY/SAMEORIGIN."),
-        ("Content-Security-Policy", lambda v: bool(v.strip()), "Content-Security-Policy header is missing."),
-        ("Referrer-Policy", lambda v: bool(v.strip()), "Referrer-Policy header is missing."),
-        ("Permissions-Policy", lambda v: bool(v.strip()), "Permissions-Policy header is missing."),
-    ]
-    if is_https:
-        checks.append(("Strict-Transport-Security", lambda v: "max-age=" in v.lower(), "Strict-Transport-Security header is missing or invalid."))
-
-    findings = []
-    for header, validator, message in checks:
-        actual = headers.get(header, "")
-        if not actual or not validator(actual):
-            findings.append({
-                "header": header,
-                "actual": actual,
-                "message": message,
-            })
-    return findings
-
-
 def detect_session_cookie(target_url: str, auth_token: str, validated_endpoints: dict = None) -> str:
     """Set-Cookie 헤더에서 세션 쿠키명(예: accessToken, JSESSIONID 등)을 자동으로 추출합니다.
     
@@ -1312,8 +1004,6 @@ def detect_session_cookie(target_url: str, auth_token: str, validated_endpoints:
             continue
 
     return "accessToken"
-
-
 
 def run_zap_scan(target_url: str, auth_tokens: list):
     """
@@ -1882,24 +1572,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             _identity_param_cache[cache_key] = None
             return None
 
-        # 2. 하이브리드 인증 세팅 (ZAP 프록시용 대표 토큰 주입)
-        if False and primary_token:
-            update_status(progress=3, message="인증 주입 설정 중 (Authorization Header & accessToken Cookie)...")
-            try:
-                zap.replacer.remove_rule(description="AutoLoginHeader")
-                zap.replacer.remove_rule(description="AutoLoginCookie")
-            except:
-                pass
-
-            bearer_token = primary_token if primary_token.startswith("Bearer ") else f"Bearer {primary_token}"
-            zap.replacer.add_rule(
-                description="AutoLoginHeader",
-                enabled=True,
-                matchtype="REQ_HEADER",
-                matchregex=False,
-                matchstring="Authorization",
-                replacement=bearer_token,
-            )
         update_status(progress=5, message="입력된 API/URL 리스트 분석 및 취합 중...")
         
         # --- 계정별 개별 API 명세 수집 함수 정의 ---
@@ -2715,7 +2387,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                     )
                 })
 
-
         print("[Auth] scan account order: " + ", ".join(f"{a.get('role', 'account')}@{a.get('base_url', target_url)}" for a in scan_accounts))
 
         for scan_account in scan_accounts:
@@ -2757,122 +2428,31 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 account_swagger_components,
                             )
                             
-                        # 기본 인증 헤더에서 쿠키만 분리하여 준비
-                        headers_cookie_only = {"Content-Type": "application/json"}
+                        # Use the account authentication headers as the real request baseline.
+                        # Do not exclude cookie or Authorization modes up front; judge the three CSRF defenses below.
+                        csrf_base_headers = build_auth_headers(best_token, scan_account)
+                        if csrf_json_body:
+                            csrf_base_headers["Content-Type"] = "application/json"
                         cookie_auth_header = build_cookie_header_from_account(scan_account)
-                        if cookie_auth_header:
-                            headers_cookie_only["Cookie"] = cookie_auth_header
-
-                        # 공격 시나리오별 헤더 준비 (모두 Authorization 등 커스텀 토큰 제외, 쿠키만 포함)
-                        # 1. Referer/Origin 변조 (해커 도메인)
-                        headers_tampered_ref = {**headers_cookie_only, "Origin": "http://evil-attacker.local", "Referer": "http://evil-attacker.local/exploit.html"}
-                        
-                        # 2. Referer/Origin 누락 (삭제)
-                        headers_no_ref = {**headers_cookie_only}
-                        
                         try:
-                            # 1. 자동 전송 수단(쿠키) 인증 통과 여부 테스트 (Authorization 헤더 전면 삭제)
-                            res_cookie_only = requests.request(method=method.upper(), url=api_url, json=csrf_json_body, headers=headers_cookie_only, timeout=4)
-                            status_cookie_only = res_cookie_only.status_code
-                            
-                            def is_passed(status):
-                                return status < 400 or status == 405
-                                
-                            # 1차 검증: 백엔드가 쿠키만으로는 인증을 안 받아준다면 (예: 401/403)
-                            # -> 헤더 토큰이 필수인 안전한 API이므로 CSRF 공격 불가능!
-                            if not is_passed(status_cookie_only):
-                                print(f"[CSRF DEBUG] {method.upper()} {api_url} -> CookieOnly: {status_cookie_only} (SAFE: Cookie auth rejected)")
-                            else:
-                                # --- 이 아래부터는 쿠키만으로 인증이 통과된(위험한) API에 대해서만 실행됨 ---
-                                
-                                # 2. Referer 변조 테스트 (변조된 Referer/Origin 포함)
-                                res_tampered_ref = requests.request(method=method.upper(), url=api_url, json=csrf_json_body, headers=headers_tampered_ref, timeout=4)
-                                status_tampered_ref = res_tampered_ref.status_code
-                                
-                                # 3. Referer 누락 테스트 (Origin, Referer 아예 없음)
-                                res_no_ref = requests.request(method=method.upper(), url=api_url, json=csrf_json_body, headers=headers_no_ref, timeout=4)
-                                status_no_ref = res_no_ref.status_code
-                                
-                                # 4. SameSite 속성 확인
-                                set_cookie = res_tampered_ref.headers.get("Set-Cookie", "").lower()
-                                has_unsafe_samesite = has_unsafe_samesite_cookie(scan_account, set_cookie)
-                                if not cookie_auth_header:
-                                    has_unsafe_samesite = True
-                                    
-                                # 판단 로직 (CSRF 토큰 누락은 이미 CookieOnly 테스트 통과로 뚫린 것으로 간주)
-                                # High: 출처 검증 뚫림(tampered_ref) AND SameSite 속성 뚫림
-                                is_high_risk = is_passed(status_tampered_ref) and has_unsafe_samesite
-                                
-                                # Medium: Referer 누락 시 에러 없이 통과됨
-                                is_medium_risk = False
-                                if not is_high_risk:
-                                    if is_passed(status_no_ref):
-                                        is_medium_risk = True
-
-                                print(f"[CSRF DEBUG] {method.upper()} {api_url} -> CookieOnly: {status_cookie_only}, TamperedRef: {status_tampered_ref}, NoRef: {status_no_ref}, UnsafeSameSite: {has_unsafe_samesite}")
-                                
-                                if is_high_risk:
-                                    csrf_req_parts = extract_request_parts(res_tampered_ref.request, body_json=csrf_json_body, query_params=None)
-                                    custom_alerts.append({
-                                        "alert": "Cross-Site Request Forgery (CSRF) Vulnerability - Confirmed",
-                                        "url": api_url,
-                                        "method": method.upper(),
-                                        "risk": "High",
-                                        "confidence": "High",
-                                        "param": "Referer/Token/SameSite",
-                                        "attack": "Tampered Referer & Missing Token & Unsafe SameSite",
-                                        "custom_type": "CSRF_CUSTOM",
-                                        "evidence_request": format_http_request(res_tampered_ref.request),
-                                        "evidence_response": format_http_response(res_tampered_ref),
-                                        "parsed_request_headers": csrf_req_parts["parsed_request_headers"],
-                                        "parsed_request_body": csrf_req_parts["parsed_request_body"],
-                                        "parsed_request_query": csrf_req_parts["parsed_request_query"],
-                                        "auth_token_used": csrf_req_parts["auth_token_used"],
-                                        "login_required": csrf_req_parts["login_required"],
-                                        "expected_status_code": status_tampered_ref,
-                                        "screenshot_on": "response_received",
-                                        "replay_script": csrf_req_parts["replay_script"],
-                                        "description": (
-                                            "이 API는 3대 CSRF 방어선이 모두 뚫려있는 고위험(High) 상태입니다.\n"
-                                            "1. 쿠키 의존성: Authorization 헤더 없이 브라우저의 자동 쿠키 전송만으로 API 인증을 허용함\n"
-                                            "2. 출처 검증: 변조된 Referer(해커 도메인)를 전송해도 예외 없이 정상 처리함\n"
-                                            "3. SameSite: 세션 쿠키에 SameSite 속성이 없거나 None으로 설정되어 브라우저가 자동 전송을 막지 못함\n"
-                                            "결과적으로 타 사이트에서 위조된 요청이 성공하여 데이터가 변조될 위험이 매우 큽니다."
-                                        ),
-                                        "solution": "1. 헤더 기반(Bearer) 인증만 허용하도록 쿠키 Fallback 로직 제거\n2. 불가피할 경우 쿠키 발급 시 SameSite=Lax 적용\n3. Anti-CSRF 토큰 검증 로직 추가"
-                                    })
-                                elif is_medium_risk:
-                                    csrf_req_parts = extract_request_parts(res_no_ref.request, body_json=csrf_json_body, query_params=None)
-                                    custom_alerts.append({
-                                        "alert": "Cross-Site Request Forgery (CSRF) Vulnerability - Potential/Bypass",
-                                        "url": api_url,
-                                        "method": method.upper(),
-                                        "risk": "Medium",
-                                        "confidence": "Medium",
-                                        "param": "Referer/Token",
-                                        "attack": "Omitted Referer or Token",
-                                        "custom_type": "CSRF_CUSTOM",
-                                        "evidence_request": format_http_request(res_no_ref.request),
-                                        "evidence_response": format_http_response(res_no_ref),
-                                        "parsed_request_headers": csrf_req_parts["parsed_request_headers"],
-                                        "parsed_request_body": csrf_req_parts["parsed_request_body"],
-                                        "parsed_request_query": csrf_req_parts["parsed_request_query"],
-                                        "auth_token_used": csrf_req_parts["auth_token_used"],
-                                        "login_required": csrf_req_parts["login_required"],
-                                        "expected_status_code": status_no_ref,
-                                        "screenshot_on": "response_received",
-                                        "replay_script": csrf_req_parts["replay_script"],
-                                        "description": (
-                                            "이 API는 브라우저의 자동 전송 수단(쿠키)만으로 인증을 통과시켜 주는 결함이 있으며, 추가로 일부 출처(Referer) 우회 조건이 성립하여 잠재적 위험(Medium)이 존재합니다.\n"
-                                            "해커 사이트 도메인(Tampered Referer)은 차단하고 있지만, 헤더를 아예 조작 삭제한 No Referer 상황에서는 방어 필터가 정상 작동하지 않고 200 OK 등을 반환합니다.\n\n"
-                                            "**[수동 확인 필요 사항]**\n"
-                                            "진단자는 Referer가 없을 때 서버 컨트롤러 내에서 403 예외 처리가 올바르게 되고 있는지 검증 로직을 수동으로 확인해야 합니다."
-                                        ),
-                                        "solution": "1. 헤더 기반(Bearer) 인증만 허용하도록 쿠키 Fallback 로직 제거\n2. 쿠키 발급 시 SameSite=Lax 또는 Strict 설정\n3. Referer 헤더 누락 시 엄격한 차단(403) 정책 적용"
-                                    })
-
+                            custom_alerts.extend(
+                                csrf_scanner.scan_csrf_endpoint(
+                                    method=method,
+                                    api_url=api_url,
+                                    body_json=csrf_json_body,
+                                    base_headers=csrf_base_headers,
+                                    scan_account=scan_account,
+                                    cookie_auth_header=cookie_auth_header,
+                                    check_csrf_token_absence=check_csrf_token_absence,
+                                    has_unsafe_samesite_cookie=has_unsafe_samesite_cookie,
+                                    extract_request_parts=extract_request_parts,
+                                    format_http_request=format_http_request,
+                                    format_http_response=format_http_response,
+                                )
+                            )
                         except Exception as ce:
                             print(f"CSRF Custom scan skip for {api_url}: {ce}")
+
 
                     # (2) [SK 쉴더스 1-1] XSS 공격 가능성 정밀 진단
                     # 다중 페이로드를 순회하여 WAF/필터 우회 변형 포함 탐지. 첫 검출 즉시 중단.
@@ -3221,31 +2801,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
 #                         custom_alerts.append({
 #                             "alert": xss_first_result["alert"],
 #                             "url": api_url,
-#                             "method": method.upper(),
-#                             "risk": xss_first_result["risk"],
-#                             "confidence": xss_first_result["confidence"],
-#                             "param": target_vulnerable_param,
-#                             "attack": successful_payloads[0],
-#                             "status_code": xss_first_res.status_code,
-#                             "evidence": xss_first_result["evidence"],
-#                             "custom_type": xss_first_result["custom_type"],
-#                             "evidence_request": format_http_request(xss_first_res.request),
-#                             "evidence_response": format_http_response(xss_first_res),
-#                             "parsed_request_headers": xss_first_req_parts["parsed_request_headers"],
-#                             "parsed_request_body": xss_first_req_parts["parsed_request_body"],
-#                             "parsed_request_query": xss_first_req_parts["parsed_request_query"],
-#                             "auth_token_used": xss_first_req_parts["auth_token_used"],
-#                             "login_required": xss_first_req_parts["login_required"],
-#                             "expected_status_code": xss_first_res.status_code,
-#                             "expected_evidence_in_response": successful_payloads[0],
-#                             "screenshot_on": "response_received",
-#                             "replay_script": replay_with_payload,
-#                             "successful_attack_payloads": successful_payloads,
-#                             "description": (
-#                                 f"{xss_first_result['description']} "
-#                                 f"(응답 마임타입: {xss_first_content_type}, 보안헤더 nosniff 누락 상태: {'Y' if 'nosniff' not in xss_first_x_content_type else 'N'})"
-#                             )
-#                         })
 #     
                     # ── XSS 고도화 3단계: HTTP 헤더 인젝션 XSS (Header Injection) ──
                     # User-Agent, Referer, X-Forwarded-For 등 클라이언트 전송 헤더가 응답 페이지나 에러 출력에 그대로 반사되는 취약점을 진단합니다.
@@ -3319,8 +2874,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 break # 하나의 헤더에서 발생이 증명되면 중단
                         except Exception:
                             continue
-    
-    
     
                     # ── Stored XSS 2단계 검증 (POST→GET 재조회) ───────────────────────────────
                     # POST 엔드포인트에서 4종의 페이로드 저장 시도 후, 모든 GET 엔드포인트에 대해 자원 ID를 대입하여 브로드캐스트 조회
@@ -3589,174 +3142,10 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                             
                             except Exception as se:
                                 print(f"Stored XSS 2-step scan payload trial fail for {api_url}: {se}")
-                            
-                    # (3) [SK 쉴더스 7-4] 보안 헤더 및 XSS 방어 설정 진단 (기본 GET/POST 전체 대상)
-                    try:
-                        headers = build_auth_headers(best_token, scan_account)
-                        res = requests.request(method=method.upper(), url=api_url, headers=headers, timeout=4)
-                        
-                        x_content_type = res.headers.get("X-Content-Type-Options", "").lower()
-                        content_type = res.headers.get("Content-Type", "").lower()
-                        csp = res.headers.get("Content-Security-Policy", "")
-                        security_header_findings = assess_security_headers(
-                            res,
-                            is_https=api_url.lower().startswith("https://"),
-                        )
-                        
-                        # application/json이더라도 nosniff 헤더가 없고 응답 값이 브라우저에 의해 HTML로 마임 스니핑(MIME Sniffing)될 여지가 있는 경우 XSS 연계 위험
-                        if "nosniff" not in x_content_type and "json" in content_type:
-                            custom_alerts.append({
-                                "alert": "Absence of Anti-MIME-Sniffing Header (X-Content-Type-Options: nosniff)",
-                                "url": api_url,
-                                "method": method.upper(),
-                                "risk": "Low",
-                                "confidence": "Medium",
-                                "param": "X-Content-Type-Options",
-                                "attack": "",
-                                "status_code": res.status_code,
-                                "evidence": f"응답 Content-Type이 '{content_type}'임에도 브라우저 차단용 X-Content-Type-Options: nosniff 헤더가 감지되지 않음",
-                                "custom_type": "MIME_SNIFF_CUSTOM",
-                                "evidence_request": format_http_request(res.request),
-                                "evidence_response": format_http_response(res),
-                                "description": (
-                                    "API 응답에 'X-Content-Type-Options: nosniff' 헤더가 존재하지 않습니다. "
-                                    "구형 브라우저 혹은 특정 상황에서 JSON 데이터를 HTML 문서인 것처럼 오해하여 자바스크립트를 임의 실행하는 XSS(크로스 사이트 스크립팅) 공격에 악용될 수 있습니다."
-                                ),
-                                "solution": "서버의 HTTP 응답 헤더에 'X-Content-Type-Options: nosniff'를 강제 적용하여 브라우저의 임의 형식 해석을 차단하세요."
-                            })
-                            
-                        # Content-Security-Policy 부재 및 실효성 우회 진단
-                        if not csp:
-                            custom_alerts.append({
-                                "alert": "Content Security Policy (CSP) Not Configured",
-                                "url": api_url,
-                                "method": method.upper(),
-                                "risk": "Informational",
-                                "confidence": "High",
-                                "param": "Content-Security-Policy",
-                                "attack": "",
-                                "status_code": res.status_code,
-                                "evidence": "응답 헤더에 콘텐츠 리소스 화이트리스트 통제 정책인 Content-Security-Policy 헤더가 정의되지 않음",
-                                "custom_type": "90034", # CSP 부재에 매핑
-                                "evidence_request": format_http_request(res.request),
-                                "evidence_response": format_http_response(res),
-                                "description": (
-                                    "콘텐츠 보안 정책(CSP) 헤더가 설정되어 있지 않습니다. "
-                                    "XSS 공격 등으로 악성 스크립트 유입 시 이를 차단할 방어선이 없는 상태입니다."
-                                ),
-                                "solution": "화면에 필요한 리소스 출처만 명시적으로 허용하는 Content-Security-Policy 헤더를 응답에 포함하세요."
-                            })
-                        else:
-                            csp_lower = csp.lower()
-                            # 고도화 5: 무용지물 CSP (Bypassable) 검사
-                            bypass_indicators = []
-                            if "unsafe-inline" in csp_lower:
-                                bypass_indicators.append("unsafe-inline")
-                            if "unsafe-eval" in csp_lower:
-                                bypass_indicators.append("unsafe-eval")
-                            if "* " in csp_lower or " *" in csp_lower or "http:" in csp_lower:
-                                bypass_indicators.append("wildcard/insecure directive")
-                                
-                            if bypass_indicators:
-                                custom_alerts.append({
-                                    "alert": "Content Security Policy (CSP) Bypass Weakness",
-                                    "url": api_url,
-                                    "method": method.upper(),
-                                    "risk": "Low",
-                                    "confidence": "High",
-                                    "param": "Content-Security-Policy",
-                                    "attack": f"CSP Directive: {csp[:80]}...",
-                                    "status_code": res.status_code,
-                                    "evidence": f"CSP에 보안 우회 가능한 정책 선언 확인: {', '.join(bypass_indicators)}",
-                                    "custom_type": "90034",
-                                    "evidence_request": format_http_request(res.request),
-                                    "evidence_response": format_http_response(res),
-                                    "description": f"Content-Security-Policy 헤더가 응답에 존재하지만, 보안 우회를 허용하는 지시문({', '.join(bypass_indicators)})이 활성화되어 있어 스크립트 인젝션 차단 실효성이 결여되어 있습니다.",
-                                    "solution": "CSP 정책에서 'unsafe-inline' 및 'unsafe-eval' 사용을 배제하고, 소스 출처 도메인을 명확하게 정의하여 와일드카드 사용을 금지하세요."
-                                })
-    
-                        # 고도화 4: 쿠키 HttpOnly 및 Secure 옵션 분석 추가
-                        set_cookie_headers = res.headers.get("Set-Cookie", res.headers.get("set-cookie", ""))
-                        if set_cookie_headers:
-                            # 콤마로 복수 쿠키 발급 시 쪼개서 분석
-                            cookies = set_cookie_headers.split(",")
-                            for cookie in cookies:
-                                cookie_lower = cookie.lower()
-                                if "httponly" not in cookie_lower:
-                                    custom_alerts.append({
-                                        "alert": "Cookie Missing HttpOnly Flag",
-                                        "url": api_url,
-                                        "method": method.upper(),
-                                        "risk": "Low",
-                                        "confidence": "High",
-                                        "param": "Set-Cookie",
-                                        "attack": "",
-                                        "status_code": res.status_code,
-                                        "evidence": f"Set-Cookie 헤더 내 쿠키: {cookie[:60].strip()}...",
-                                        "custom_type": "COOKIE_HTTPONLY_CUSTOM",
-                                        "evidence_request": format_http_request(res.request),
-                                        "evidence_response": format_http_response(res),
-                                        "description": "쿠키에 HttpOnly 플래그가 설정되어 있지 않아 악성 스크립트 실행(XSS) 시 브라우저 내 자바스크립트(`document.cookie`)에 의해 중요 토큰/세션 식별 정보가 손쉽게 유출될 수 있습니다.",
-                                        "solution": "쿠키 발급 시 HttpOnly 플래그를 필수로 주입하여 클라이언트 스크립트 기반 쿠키 읽기 권한을 차단하십시오."
-                                    })
-                                if "secure" not in cookie_lower and api_url.lower().startswith("https://"):
-                                    custom_alerts.append({
-                                        "alert": "Cookie Missing Secure Flag over HTTPS",
-                                        "url": api_url,
-                                        "method": method.upper(),
-                                        "risk": "Low",
-                                        "confidence": "High",
-                                        "param": "Set-Cookie",
-                                        "attack": "",
-                                        "status_code": res.status_code,
-                                        "evidence": f"Set-Cookie 헤더 내 쿠키: {cookie[:60].strip()}...",
-                                        "custom_type": "COOKIE_SECURE_CUSTOM",
-                                        "evidence_request": format_http_request(res.request),
-                                        "evidence_response": format_http_response(res),
-                                        "description": "HTTPS 암호화 통신 환경에서 발급된 쿠키에 Secure 플래그가 누락되었습니다. 공격자가 암호화되지 않은 HTTP 경로로 강제 전환하거나 네트워크 스니핑을 유도할 때 자격 증명이 네트워크 상에 평문으로 유출될 우려가 있습니다.",
-                                        "solution": "쿠키를 생성할 때 Secure 속성을 동반 선언하여 평문 HTTP 구간에서의 전송을 제한하세요."
-                                    })
-                        for header_finding in security_header_findings:
-                            header_name = header_finding["header"]
-                            if header_name in ["X-Content-Type-Options", "Content-Security-Policy"]:
-                                continue
-                            
-                            # 각 헤더명에 대응되는 정밀 커스텀 키 매핑
-                            if header_name == "Referrer-Policy":
-                                c_type = "REFERRER_POLICY_CUSTOM"
-                            elif header_name == "Permissions-Policy":
-                                c_type = "PERMISSIONS_POLICY_CUSTOM"
-                            elif header_name == "X-Frame-Options":
-                                c_type = "X_FRAME_OPTIONS_CUSTOM"
-                            elif header_name == "Strict-Transport-Security":
-                                c_type = "HSTS_CUSTOM"
-                            else:
-                                c_type = "MIME_SNIFF_CUSTOM"
-    
-                            rem_info = KOREAN_REMEDIATIONS.get(c_type, {})
-                            custom_alerts.append({
-                                "alert": f"Security Header Weakness: {header_name}",
-                                "url": api_url,
-                                "method": method.upper(),
-                                "risk": "Low",
-                                "confidence": "High",
-                                "param": header_name,
-                                "attack": "",
-                                "status_code": res.status_code,
-                                "evidence": header_finding["message"],
-                                "custom_type": c_type,
-                                "evidence_request": format_http_request(res.request),
-                                "evidence_response": format_http_response(res),
-                                "description": rem_info.get("cause", header_finding["message"]),
-                                "solution": rem_info.get("action_guide", f"Configure a safe {header_name} response header value.")
-                            })
-                    except Exception as xe:
-                        print(f"Security header scan skip for {api_url}: {xe}")
-    
-                    # 이 엔드포인트에서 새로 추가된 모든 alert에 account_role 일괄 태깅
+
                     for _i in range(_alerts_snapshot, len(custom_alerts)):
                         custom_alerts[_i].setdefault("account_role", best_role)
-    
+
         update_status(progress=90, message="결과 수집 및 리포트 생성 중...")
         
         # ZAP API 원본 Alert 수집
@@ -3764,7 +3153,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
         
         # ZAP 원본 Alert 중 XSS 및 CSRF 관련 항목만 필터링 (기타 패시브 스캔 노이즈 제거)
         # 고도화 1-1: 단순 confidence가 "Low"라고 다 자르는 게 아니라, application/json + nosniff 조합인 경우(XSS 차단 성립)만 확정 오탐으로 간주하여 필터링함.
-        allowed_plugin_ids = ["40012", "40014", "40016", "40017", "90034"]
+        allowed_plugin_ids = ["40012", "40014", "40016", "40017"]
         filtered_raw_alerts = []
         for a in raw_alerts:
             p_id = a.get("pluginId")
@@ -3787,7 +3176,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                         continue
                 filtered_raw_alerts.append(a)
         
-        # 수동 검증한 커스텀 취약점 항목(CSRF, XSS 보안헤더 누락 등) 병합
+        # Merge manually verified 1-1 custom findings.
         all_raw_alerts = filtered_raw_alerts + custom_alerts
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3795,24 +3184,9 @@ def run_zap_scan(target_url: str, auth_tokens: list):
         # - 일반 취약점: URL + Method + 취약점 종류(PluginId/CustomType)가 같으면 하나로 병합
         # - 보안 헤더 누락: 헤더 종류별로 1건만 대표 리포팅, 중복 URL 목록은 affected_urls에 누적
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # ?? ?? ? ???: 1-1(XSS/CSRF) ??? URL + Method + ?? + ???? ???? ??
         grouped_alerts = {}
-        # 헤더 누락 계열: 전역 1건 (서버 전체 설정 버그)
-        header_custom_types = {
-            "REFERRER_POLICY_CUSTOM",
-            "PERMISSIONS_POLICY_CUSTOM",
-            "X_FRAME_OPTIONS_CUSTOM",
-            "HSTS_CUSTOM",
-            "MIME_SNIFF_CUSTOM",   # X-Content-Type-Options 누락
-        }
         cors_reflection_types = {"CORS_ORIGIN_REFLECTION"}
-        # 기타 전역 1건 타입 (동일 설정/구현 버그가 전체에 영향)
-        global_single_types = {
-            "6-1_ERR_DISCLOSE",           # 에러 정보 노출
-            "90034",                       # CSP 부재 / CSP Bypass
-            "COOKIE_HTTPONLY_CUSTOM",      # HttpOnly 누락
-            "COOKIE_SECURE_CUSTOM",        # Secure 누락
-            "COOKIE_SAMESITE_CUSTOM",      # SameSite=None
-        }
 
         for a in all_raw_alerts:
             url = a.get("url", "")
@@ -3827,36 +3201,15 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 continue
 
             # 고도화 2-1: 전역 1건 묶기 규칙
-            if key_id in header_custom_types:
-                unique_key = f"GLOBAL_HEADER_{key_id}"
-            elif key_id in cors_reflection_types:
+            if key_id in cors_reflection_types:
                 unique_key = "GLOBAL_CORS_ORIGIN_REFLECTION"
-            elif key_id in global_single_types:
-                unique_key = f"GLOBAL_{key_id}"
+            elif custom_type == "40014" and a.get("cross_account_reader_role"):
+                reader_role = a.get("cross_account_reader_role", "")
+                param_name = a.get("param", "")
+                unique_key = f"{account_role}_{reader_role}_{method}_{url}_{key_id}_{param_name}"
             else:
-                # ZAP 네이티브 alert 중 alert 이름 기준으로 전역 묶기
-                alert_name = a.get("alert", "")
-                if "Content Security Policy" in alert_name:
-                    unique_key = "GLOBAL_ZAP_CSP"
-                elif "X-Content-Type-Options" in alert_name or "Anti-MIME" in alert_name:
-                    unique_key = "GLOBAL_ZAP_MIME_SNIFF"
-                elif "Referrer-Policy" in alert_name or "Referrer Policy" in alert_name:
-                    unique_key = "GLOBAL_ZAP_REFERRER"
-                elif "Permissions-Policy" in alert_name or "Permissions Policy" in alert_name:
-                    unique_key = "GLOBAL_ZAP_PERMISSIONS"
-                elif "X-Frame-Options" in alert_name:
-                    unique_key = "GLOBAL_ZAP_XFRAME"
-                elif "Strict-Transport-Security" in alert_name or "HSTS" in alert_name:
-                    unique_key = "GLOBAL_ZAP_HSTS"
-                elif "Cookie" in alert_name and ("HttpOnly" in alert_name or "Secure" in alert_name or "SameSite" in alert_name):
-                    unique_key = f"GLOBAL_ZAP_{alert_name.replace(' ', '_')[:40]}"
-                elif custom_type == "40014" and a.get("cross_account_reader_role"):
-                    reader_role = a.get("cross_account_reader_role", "")
-                    param_name = a.get("param", "")
-                    unique_key = f"{account_role}_{reader_role}_{method}_{url}_{key_id}_{param_name}"
-                else:
-                    param_name = a.get("param", "")
-                    unique_key = f"{account_role}_{method}_{url}_{key_id}_{param_name}"
+                param_name = a.get("param", "")
+                unique_key = f"{account_role}_{method}_{url}_{key_id}_{param_name}"
                 
             param_name = a.get("param", "")
             
@@ -3907,7 +3260,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 except Exception:
                     grouped_alerts[unique_key]["successful_attack_payloads"] = combined
 
-                    
         # 병합된 Alert 리스트 추출
         print(f"[DEBUG] custom_alerts: {len(custom_alerts)}건")
         print(f"[DEBUG] filtered_raw_alerts: {len(filtered_raw_alerts)}건")
@@ -3934,6 +3286,18 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             plugin_id = alert.get("pluginId", "")
             custom_type = alert.get("custom_type", "")
             key_id = custom_type if custom_type else plugin_id
+
+            allowed_1_1_custom_types = {
+                "40012",
+                "40014",
+                "STORED_XSS_CUSTOM",
+                "DOM_XSS_CUSTOM",
+                "DOM_XSS_SUSPECT",
+                "CSRF_CUSTOM",
+                "CORS_ORIGIN_REFLECTION",
+            }
+            if custom_type and custom_type not in allowed_1_1_custom_types:
+                continue
             
             # ZAP 기본 Alert이고 messageId가 존재하는 경우, 실제 HTTP 패킷 조회
             evidence_req = alert.get("evidence_request", "")
@@ -4022,9 +3386,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             elif k_type == "DOM_XSS_SUSPECT":
                 val_status = "Suspected"
                 val_reason = "정적 텍스트 분석 상 브라우저 입력 소스(Source) 및 취약 함수(Sink)의 동시 노출 확인. 동적 발화 검증 필요 (의심)"
-            elif k_type in ["REFERRER_POLICY_CUSTOM", "PERMISSIONS_POLICY_CUSTOM", "MIME_SNIFF_CUSTOM", "GLOBAL_ZAP_CSP", "GLOBAL_ZAP_MIME_SNIFF", "GLOBAL_ZAP_REFERRER", "GLOBAL_ZAP_PERMISSIONS", "GLOBAL_ZAP_XFRAME", "90034"]:
-                val_status = "True Positive"
-                val_reason = "HTTP 응답 헤더 내 보안 설정 검증 결과 누락 또는 취약하게 바인딩되어 있음 (정탐)"
 
             re_mapped_alerts.append({
                 "vuln_id": vuln_id,
@@ -4148,10 +3509,4 @@ def run_zap_scan(target_url: str, auth_tokens: list):
         import traceback
         traceback.print_exc()
         update_status(is_running=False, message=f"스캔 오류 발생: {str(e)}")
-
-
-
-
-
-
 
