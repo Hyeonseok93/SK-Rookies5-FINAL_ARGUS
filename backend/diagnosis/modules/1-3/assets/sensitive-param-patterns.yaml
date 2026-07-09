@@ -1,0 +1,33 @@
+# 1-3 민감 파라미터 이름 패턴 (SCOPE.md §1, §2 "민감 파라미터 이름" 목록 기반)
+#
+# category별 정규식 목록. param_classify.py가 순서대로 매칭해 첫 매치를 사용한다.
+# case_sensitive: true 인 패턴은 re.IGNORECASE 없이 매칭 (camelCase 신호 보존용).
+# (ARGUS_Backend/scanners/param_manipulation/classifier.py 의 _FALLBACK_RULES 확장판)
+
+PRICE:
+  - pattern: "price|amount|cost|fee|total|discount|point|pay|money|qty|quantity|charge|balance"
+    case_sensitive: false
+  - pattern: "premium|mileage|coupon|commissionRate"
+    case_sensitive: false
+
+PRIVILEGE:
+  - pattern: "role|admin|perm|level|grade|authority|access|privilege|membershipGrade"
+    case_sensitive: false
+  - pattern: "^is[A-Z]"
+    case_sensitive: true
+  - pattern: "[a-z0-9]Flag$"
+    case_sensitive: true
+
+IDOR:
+  - pattern: "(^|_)(id|uid|no)$|userid|memberid|accountid|ownerid|customerid|orderid|boardid|seq|mdn|phone"
+    case_sensitive: false
+  - pattern: "[a-z0-9](Id|Uid|No)$"
+    case_sensitive: true
+
+STATUS:
+  - pattern: "status|state|paymentstatus|orderstatus|bookingstatus"
+    case_sensitive: false
+
+ENUM:
+  - pattern: "productid|planid|coveragelevel|template|tier|option"
+    case_sensitive: false

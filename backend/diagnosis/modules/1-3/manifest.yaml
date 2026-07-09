@@ -1,7 +1,6 @@
 id: "1-3"
 title: "파라미터 값 및 히든(Hidden) 필드 조작 가능성"
 chapter: 1
-implemented: false
-diagnosable: false
-status_label: "수동 진단"
-engine: pending
+implemented: true
+engine: httpx
+mvp_version: 1

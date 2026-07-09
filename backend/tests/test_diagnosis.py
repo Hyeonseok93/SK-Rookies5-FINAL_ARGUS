@@ -31,10 +31,22 @@ def test_catalog_matches_modules():
 
 
 def test_run_module_stub():
-    import pytest
+    from diagnosis.context import DiagnosisContext
+    from diagnosis.paths import diagnosis_report_path
+    from diagnosis.registry import get_module
 
-    with pytest.raises(ValueError, match="not diagnosable"):
-        diagnosis_service.run_section("1-3")
+    # 3-3 is still a StubDiagnosisModule (review_later + diagnosable: false) — 1-3 was
+    # the last diagnosable review_later stub before it got a real v1 implementation.
+    # diagnosis_service.run_section() gates non-diagnosable sections (see
+    # test_not_diagnosable_sections), so exercise the module directly here.
+    data_dir = Path(__file__).resolve().parents[1] / "data"
+    mod = get_module("3-3")
+    assert mod is not None
+    report = mod.run(DiagnosisContext(data_dir=data_dir))
+    assert report.section_id == "3-3"
+    assert report.status == "not_diagnosable"
+    assert report.implemented is False
+    assert diagnosis_report_path(data_dir, "3-3").is_file()
 
 
 def test_not_diagnosable_sections():
@@ -47,8 +59,9 @@ def test_not_diagnosable_sections():
 
 def test_no_review_later_sections():
     catalog = diagnosis_service.catalog()
-    for row in catalog:
-        assert row["review_later"] is False
+    for section_id in ("3-3", "4-3", "4-4", "4-5", "5-1", "8-1"):
+        row = next(r for r in catalog if r["id"] == section_id)
+        assert row["review_later"] is True
 
 
 def test_manual_diagnosis_sections():
@@ -284,3 +297,45 @@ def test_run_g22_with_options(tmp_path, monkeypatch):
     assert g22["zap_enabled"] is False
     assert g22["httpx_enabled"] is False
     assert g22["max_candidates"] == 10
+
+
+def test_run_g45_with_options(tmp_path, monkeypatch):
+    import yaml
+    from diagnosis.context import DiagnosisContext
+    from diagnosis.registry import get_module
+
+    captured: list[DiagnosisContext] = []
+
+    def fake_run(ctx):
+        captured.append(ctx)
+        from diagnosis.result import SectionReport, utc_now_iso
+
+        return SectionReport(
+            section_id="4-5",
+            title="test",
+            chapter=4,
+            status="pass",
+            implemented=True,
+            checked_at=utc_now_iso(),
+        )
+
+    mod = get_module("4-5")
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        yaml.safe_dump({"diagnosis_4_5": {"probe_mode": "sample", "timeout": 5.0}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CONFIG_PATH", str(cfg))
+    monkeypatch.setattr(diagnosis_service, "BACKEND_ROOT", tmp_path)
+
+    diagnosis_service.run_section(
+        "4-5",
+        g45_options={"probe_mode": "full", "timeout": 10.0, "max_endpoints": 25},
+    )
+    assert captured
+    g45 = captured[0].raw_config["diagnosis_4_5"]
+    assert g45["probe_mode"] == "full"
+    assert g45["timeout"] == 10.0
+    assert g45["max_endpoints"] == 25

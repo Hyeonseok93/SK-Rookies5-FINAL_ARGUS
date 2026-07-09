@@ -72,16 +72,14 @@ export function Panel({
 }) {
   return (
     <section className="rounded-xl border border-cyber-border bg-cyber-panel/60 backdrop-blur-sm">
-      <div className="relative flex min-h-11 items-center border-b border-cyber-border px-5 py-3">
-        <h2 className="font-display text-sm font-semibold tracking-wide text-cyber-accent">
+      <div className="flex flex-wrap items-center gap-3 border-b border-cyber-border px-5 py-3">
+        <h2 className="shrink-0 font-display text-sm font-semibold tracking-wide text-cyber-accent">
           {title}
         </h2>
-        {action ? (
-          <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-            <div className="pointer-events-auto">{action}</div>
-          </div>
-        ) : null}
-        {trailing ? <div className="ml-auto flex shrink-0">{trailing}</div> : null}
+        <div className="flex flex-1 flex-wrap items-center justify-center gap-2">
+          {action}
+        </div>
+        <div className="flex shrink-0 justify-end">{trailing}</div>
       </div>
       <div className="p-5">{children}</div>
     </section>
