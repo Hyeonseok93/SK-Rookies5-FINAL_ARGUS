@@ -36,6 +36,14 @@ TIMEOUT = 10  # 초
 
 _MODULE_DIR = Path(__file__).resolve().parent
 
+
+def _raise_if_cancelled() -> None:
+    from app.services import diagnosis_progress as dp
+    from diagnosis.exceptions import DiagnosisCancelled
+
+    if dp.is_cancel_requested():
+        raise DiagnosisCancelled("User cancelled diagnosis")
+
 # job마다 매번 requests.request()로 새 TCP/TLS 연결을 맺으면(연결 재사용 없음) job 수가
 # 많을 때(최대 1200개 × 최대 14회 요청) 핸드셰이크 오버헤드만으로도 스캔이 매우 느려진다.
 # reflected_bridge.run_on_jobs가 스레드풀로 이 모듈을 병렬 호출하므로, requests.Session은
@@ -111,6 +119,10 @@ def probe_candidate(
 
     findings: list[RedirectFinding] = []
     for payload_val, payload_desc in payloads:
+        # 페이로드마다 최대 TIMEOUT(10초)짜리 블로킹 요청이 나가므로, job 하나(최대 13개
+        # 페이로드)의 다음 요청을 쏘기 전에 취소 여부를 확인해 사용자가 취소한 뒤에도
+        # 죽은/느린 타겟에 계속 요청을 쏘는 걸 막는다.
+        _raise_if_cancelled()
         test = _send(c, payload_val, custom_header)
         finding = _judge(c, payload_val, payload_desc, baseline, test, payload_host)
         if finding:

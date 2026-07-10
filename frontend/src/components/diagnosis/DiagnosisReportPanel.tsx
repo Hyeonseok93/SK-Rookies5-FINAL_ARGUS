@@ -211,17 +211,55 @@ function FindingEvidence({
     rows.push({ label: "Sensitive markers", value: sensitive.map(String).join("; ") });
   }
 
-  if (rows.length === 0 && blocks.length === 0) return null;
+  const reproductionFlow = Array.isArray(evidence.reproduction_flow)
+    ? (evidence.reproduction_flow as { step?: number; label?: string; highlight?: string; rel_path?: string }[])
+    : [];
+  const shotSteps = reproductionFlow.filter((s) => s.rel_path);
+  const fallbackShot =
+    shotSteps.length === 0 && typeof evidence.screenshot_rel_path === "string"
+      ? (evidence.screenshot_rel_path as string)
+      : null;
+
+  if (rows.length === 0 && blocks.length === 0 && shotSteps.length === 0 && !fallbackShot) return null;
 
   return (
-    <dl className="mt-2 space-y-1 border-t border-cyber-border/20 pt-2 text-[10px]">
-      {rows.map(({ label, value }) => (
-        <div key={label} className="grid grid-cols-[7rem_1fr] gap-2">
-          <dt className="text-cyber-muted">{label}</dt>
-          <dd className="break-all font-mono text-cyan-300/80">{value}</dd>
+    <div className="mt-2 space-y-2 border-t border-cyber-border/20 pt-2">
+      <dl className="space-y-1 text-[10px]">
+        {rows.map(({ label, value }) => (
+          <div key={label} className="grid grid-cols-[7rem_1fr] gap-2">
+            <dt className="text-cyber-muted">{label}</dt>
+            <dd className="break-all font-mono text-cyan-300/80">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {shotSteps.length > 0 ? (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {shotSteps.map((s, i) => (
+            <figure key={`${s.step}-${i}`} className="overflow-hidden rounded border border-cyber-border/30">
+              <img
+                src={`/api/diagnosis/modules/${sectionId}/evidence?path=${encodeURIComponent(s.rel_path!)}`}
+                alt={s.highlight || s.label || "취약점 재현 스크린샷"}
+                className="w-full"
+                loading="lazy"
+              />
+              <figcaption className="bg-cyber-bg/60 px-2 py-1 text-[9px] text-cyber-muted">
+                {s.label ?? `Step ${s.step}`}
+                {s.highlight ? ` · ${s.highlight}` : ""}
+              </figcaption>
+            </figure>
+          ))}
         </div>
-      ))}
-    </dl>
+      ) : fallbackShot ? (
+        <figure className="overflow-hidden rounded border border-cyber-border/30 sm:max-w-sm">
+          <img
+            src={`/api/diagnosis/modules/${sectionId}/evidence?path=${encodeURIComponent(fallbackShot)}`}
+            alt="취약점 재현 스크린샷"
+            className="w-full"
+            loading="lazy"
+          />
+        </figure>
+      ) : null}
+    </div>
   );
 }
 
