@@ -66,20 +66,33 @@ diagnosis_1_5:
 
 diagnosis_1_6:
   # Mirrors native config.yaml: 1-6 runs the requests-based fuzzer against the
-  # api-tree spec — no ZAP, spider, or Selenium/Chrome (none are in the slim
-  # image). Under Docker the engine rewrites localhost->host.docker.internal via
-  # ARGUS_PROBE_HOST, so these host-facing URLs are already correct.
-  ui_target: "http://host.docker.internal:5174"
+  # api-tree spec — no ZAP, spider, or Selenium/Chrome login+CDP capture (Step 3).
+  # Screenshot capture (Step 7) no longer depends on Selenium/Step 3 — it runs
+  # its own Playwright/Chromium session regardless of skip_selenium, so evidence
+  # screenshots are still produced here (Dockerfile runs `playwright install
+  # chromium`). Under Docker the engine rewrites localhost->host.docker.internal
+  # via ARGUS_PROBE_HOST, so these host-facing URLs are already correct.
+  #
+  # ui_target left unset on purpose: scanner.py falls back to
+  # inventory.markdown.frontend_base_url (above) when it's absent, so this
+  # follows whatever target is currently configured instead of a second
+  # hardcoded copy. Verified equal to the old explicit value
+  # (http://host.docker.internal:5173) before removing it.
+  # ui_target: "http://host.docker.internal:5173"
   zap_host: "zap"
   skip_zap: true
   skip_spider: true
   skip_selenium: true
   timeout_sec: 36000
   max_report_findings: 50
-  role_login_targets:
-    admin: "http://host.docker.internal:8080"
-  role_login_paths:
-    admin: "/api/v1/auth/admin/login"
+  # role_login_targets/role_login_paths left unset on purpose: scanner.py
+  # auto-discovers login endpoints per role from the uploaded api-tree
+  # (g16_auth.auto_role_login_targets) when these are absent. Verified to
+  # produce the exact same values as below before removing them:
+  # role_login_targets:
+  #   admin: "http://host.docker.internal:8080"
+  # role_login_paths:
+  #   admin: "/api/v1/auth/admin/login"
 
 diagnosis_4_1:
   probe_mode: sample

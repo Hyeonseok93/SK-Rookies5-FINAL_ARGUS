@@ -41,6 +41,24 @@ def finding_message(raw: dict[str, Any]) -> str:
     return f"1-6 {vuln_type}: {exception_type} at {url}"
 
 
+def _clean_reproduction_flow(steps: Any) -> list[dict[str, Any]]:
+    if not isinstance(steps, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for s in steps:
+        if not isinstance(s, dict):
+            continue
+        out.append(
+            {
+                "step": s.get("step"),
+                "label": s.get("label"),
+                "highlight": s.get("highlight"),
+                "rel_path": s.get("rel_path"),
+            }
+        )
+    return out
+
+
 def convert_findings(raw_findings: list[dict[str, Any]], limit: int) -> list[DiagnosisFinding]:
     out: list[DiagnosisFinding] = []
     for raw in raw_findings:
@@ -69,6 +87,9 @@ def convert_findings(raw_findings: list[dict[str, Any]], limit: int) -> list[Dia
                     "response_analysis": raw.get("response_analysis"),
                     "evidence_reason": raw.get("evidence_reason"),
                     "response_text_snippet": raw.get("response_text_snippet"),
+                    "screenshot_rel_path": raw.get("screenshot_rel_path"),
+                    "overlay_applied": raw.get("overlay_applied"),
+                    "reproduction_flow": _clean_reproduction_flow(raw.get("reproduction_flow")),
                 },
             )
         )
