@@ -155,24 +155,6 @@ def check_csrf_token_absence(response) -> bool:
     return not ("csrf" in body or "xsrf" in body or "x-csrf-token" in headers or "x-xsrf-token" in headers)
 
 
-def assess_security_headers(response, is_https: bool = False) -> list[dict]:
-    headers = {k.lower(): v for k, v in getattr(response, "headers", {}).items()}
-    findings = []
-    required = [
-        ("x-content-type-options", "MIME_SNIFF_CUSTOM", "X-Content-Type-Options is missing"),
-        ("x-frame-options", "X_FRAME_OPTIONS_CUSTOM", "X-Frame-Options is missing"),
-        ("content-security-policy", "CSP_CUSTOM", "Content-Security-Policy is missing"),
-        ("referrer-policy", "REFERRER_POLICY_CUSTOM", "Referrer-Policy is missing"),
-        ("permissions-policy", "PERMISSIONS_POLICY_CUSTOM", "Permissions-Policy is missing"),
-    ]
-    for header, rule_id, message in required:
-        if header not in headers:
-            findings.append({"rule_id": rule_id, "message": message, "severity": "medium"})
-    if is_https and "strict-transport-security" not in headers:
-        findings.append({"rule_id": "HSTS_CUSTOM", "message": "Strict-Transport-Security is missing", "severity": "medium"})
-    return findings
-
-
 def find_json_keypaths_containing(value, payload: str, prefix: str = "") -> list[str]:
     matches = []
     if isinstance(value, dict):

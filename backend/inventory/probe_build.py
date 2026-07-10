@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from inventory.auth_util import auth_headers, is_auth_header
@@ -88,9 +89,12 @@ def _name_based_sample(inp: InputParam, path: str = "") -> Any | None:
     if "birth" in compact:
         return "1995-05-25"
     if compact.endswith("date") or compact == "date" or compact == "month":
-        return "2026-07-01"
+        # 예약/체크인류 필드는 "미래 날짜"만 유효로 검증하는 경우가 흔하다 — 고정
+        # 리터럴은 시간이 지나면 과거가 되어 baseline 요청부터 400으로 막히므로
+        # 항상 호출 시점 기준 미래 날짜로 계산한다.
+        return (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
     if compact.endswith("time"):
-        return "2026-07-01T09:00:00"
+        return (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%dT09:00:00")
 
     if compact in {"title", "name", "nickname"}:
         return "argus-probe"
@@ -226,11 +230,17 @@ def build_probe_request(
         elif inp.in_ == "header" and inp.role in ("input", "auth"):
             if is_auth_header(inp.name):
                 continue
-            if inp.name.lower() != "content-type" and _valid_probe_header_name(inp.name):
+            if inp.name.lower() in ("content-type", "content-length", "transfer-encoding"):
+                continue
+            if _valid_probe_header_name(inp.name):
                 headers[inp.name] = str(inp.sample or "1")
 
     for hdr in ep.request_headers:
-        if hdr.name.lower() == "content-type":
+        if hdr.name.lower() in ("content-type", "content-length", "transfer-encoding"):
+            # Content-Length/Transfer-Encoding은 실제 전송 바디에 맞춰 HTTP 클라이언트가
+            # 계산해야 하는 값이다 — 과거에 캡처된 값을 그대로 넣으면 이번 프로브의
+            # body_str 길이와 어긋나 h11이 "Too much data for declared Content-Length"로
+            # 요청 자체를 거부한다(probes.py의 동일 문제와 같은 이유).
             continue
         if is_auth_header(hdr.name):
             continue

@@ -42,6 +42,14 @@ _LOGIN_CONTEXT_RE = re.compile(r"login|signin|sign-in|auth", re.IGNORECASE)
 _GUIDE_REFERENCE = "SK Shieldus Web/API 개발보안 Guideline v3.0.0 항목 1-5 대응방안 참조"
 
 
+def _raise_if_cancelled() -> None:
+    from app.services import diagnosis_progress as dp
+    from diagnosis.exceptions import DiagnosisCancelled
+
+    if dp.is_cancel_requested():
+        raise DiagnosisCancelled("User cancelled diagnosis")
+
+
 def _load_local(name: str):
     """1-5 폴더는 이름에 하이픈이 있어 정식 패키지가 아니다 — scanner.py와 동일하게
     importlib로 동적 로딩해 sibling 모듈을 참조한다."""
@@ -160,7 +168,7 @@ def verify_client_redirect(
     )
 
 
-_BROWSER_WORKERS = 8
+_BROWSER_WORKERS = 2
 
 
 def _run_chunk(
@@ -184,6 +192,9 @@ def _run_chunk(
             browser = pw.chromium.launch(headless=True)
             try:
                 for candidate in chunk:
+                    # 후보 하나당 페이지 로드에 최대 8초(timeout_ms)가 걸린다 — 취소
+                    # 요청 후에도 자기 몫의 나머지 후보를 계속 브라우저로 여는 걸 막는다.
+                    _raise_if_cancelled()
                     finding = verify_client_redirect(candidate, payload_host, browser=browser, cookies=cookies)
                     if finding:
                         findings.append(finding)
@@ -264,4 +275,9 @@ def run_login_redirect_browser_check(
         logger.warning(f"[1-5][browser-verify] 브라우저 실행 실패 — 클라이언트 리다이렉트 검증 건너뜀: {exc}")
         stats["browser_error"] = str(exc)[:200]
 
+    # _run_chunk는 취소로 인한 DiagnosisCancelled도 다른 브라우저 오류와 동일하게 삼켜서
+    # error 문자열로만 남긴다(위 launch 실패 방어와 같은 이유) — 그래서 그 취소 신호가
+    # 이 함수 리턴값만 봐서는 사라져버린다. 여기서 다시 한번 확인해, 취소된 상태라면
+    # 뒤에 이어지는 CORS/crossdomain 단계로 넘어가지 않도록 명시적으로 다시 던진다.
+    _raise_if_cancelled()
     return findings, stats

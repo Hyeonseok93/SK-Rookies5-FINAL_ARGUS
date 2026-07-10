@@ -35,28 +35,6 @@ REDIRECT_PARAM_NAMES: tuple[str, ...] = (
     "continueTo",
 )
 
-SKIP_FUZZ_PARAM_NAMES = frozenset(
-    {
-        "page",
-        "size",
-        "limit",
-        "offset",
-        "sort",
-        "order",
-        "direction",
-        "q",
-        "keyword",
-        "search",
-        "id",
-        "ids",
-        "returnDate",
-        "returnTime",
-        "departureDate",
-        "targetId",
-        "targetType",
-    }
-)
-
 REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 
 CROSSDOMAIN_PERMISSIVE_RE = re.compile(
@@ -109,14 +87,6 @@ def is_external_open_redirect(
     if baseline_location and location_points_to_sink(baseline_location, sink_base):
         return False
     if baseline_location and baseline_location.strip() == (location or "").strip():
-        return False
-    return True
-
-
-def should_fuzz_param(name: str, *, param_in: str) -> bool:
-    if param_in not in ("query", "body", "form"):
-        return False
-    if name.lower() in SKIP_FUZZ_PARAM_NAMES:
         return False
     return True
 

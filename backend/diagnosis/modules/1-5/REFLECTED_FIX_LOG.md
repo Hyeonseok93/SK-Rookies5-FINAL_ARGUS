@@ -2,6 +2,44 @@
 
 세션 진행 내용 요약. 날짜: 2026-07-07.
 
+## 추가 세션 — 취소(cancel) 로직 부재 (2026-07-09)
+
+**배경**: 타겟(`192.168.0.23`)이 네트워크상에서 완전히 응답 없는 상태가 되면서 1-5
+스캔이 대부분의 job에서 10초 connect timeout만 반복하며 nginx 1시간 타임아웃(504)을
+넘겨버림. 프런트엔드에서 "취소" 요청(`POST /api/diagnosis/cancel` →
+`dp.request_cancel()`)을 보내도 실제로는 멈추지 않고 계속 실행됨 — 원인은 1-5
+모듈(`probes.py`/`reflected_bridge.py`/`reflected_detector.py`/`xss_detector.py`/
+`reflected_browser_verify.py`) 어디에도 `dp.is_cancel_requested()`를 확인하는 코드가
+없었기 때문(6-1 모듈은 이미 `_raise_if_cancelled()` 패턴으로 지원 중이었음).
+
+**조치**: 6-1(`diagnosis/modules/6-1/probes.py`)과 동일한
+`_raise_if_cancelled()` 관례를 1-5의 요청 루프에 추가:
+- `reflected_detector.py`/`xss_detector.py`: 페이로드 루프(job당 최대 13~14회 요청)
+  안에서 다음 요청 전에 확인 — 가장 안쪽 hot loop.
+- `probes.py`(`run_redirect_jobs`): 스레드풀 job 제출 시점(`_run_one`)과
+  `as_completed` 결과 수집 루프에서 확인, 취소 시 남은 future `cancel()` 후 재-raise.
+  `run_cors_probes`/`run_crossdomain_probes`의 순차 루프에도 추가.
+- `reflected_bridge.py`(`run_on_jobs`/`run_xss_on_jobs`): endpoint 그룹 내부 순차
+  루프(`_probe_group`)와 `as_completed` 루프 둘 다에서 확인. 기존에 있던
+  `except Exception: continue`(그룹 실패를 조용히 넘기는 방어 로직)가
+  `DiagnosisCancelled`까지 같이 삼켜버리는 문제가 있어, `DiagnosisCancelled`는 먼저
+  잡아서 재-raise하도록 분리. 함수 최상위 방어 `except Exception`도 동일하게 처리.
+- `reflected_browser_verify.py`(`run_login_redirect_browser_check`): 브라우저 후보
+  순회 루프에도 확인 추가. 단, 워커 내부(`_run_chunk`)가 모든 예외(브라우저 실행 실패
+  포함)를 삼켜 에러 문자열로 변환하는 구조라 `DiagnosisCancelled`도 거기서 흡수됨 —
+  그래서 함수 끝에서 한 번 더 `is_cancel_requested()`를 확인해 취소 상태면 다시
+  raise하도록 보강(안 그러면 취소돼도 CORS/crossdomain 단계로 그냥 넘어감).
+
+`scanner.py`/`module.py`는 원래부터 이 호출들을 try/except로 감싸지 않으므로
+(의도적 설계) `DiagnosisCancelled`가 별도 처리 없이 `diagnosis_service._run_module`의
+기존 `except DiagnosisCancelled` 핸들러까지 그대로 전파됨 — 6-1과 동일한 흐름.
+
+**검증**: 컨테이너 안에서 취소 플래그를 미리 설정한 뒤 `probes.run_redirect_jobs`/
+`reflected_bridge.run_on_jobs`/`run_xss_on_jobs`/`reflected_detector.probe_candidate`/
+`xss_detector.probe_candidate_xss`를 직접 호출 — 전부 `DiagnosisCancelled`를 정상적으로
+던지는 것 확인. 취소 플래그 없이 정상 호출했을 때도 기존과 동일하게 동작하는 것 확인
+(회귀 없음).
+
 ## 배경 / 최초 문제
 
 `1-5 검증되지 않은 리다이렉트와 포워드` 진단 중 "리플렉티드" 부분(META_REFRESH/JS_REDIRECT/
