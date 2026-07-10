@@ -99,7 +99,7 @@ def _probe_web(group: dict[str, Any]) -> WebConfigCase:
                 "remediation": evidence.get("remediation"),
             }
         )
-    case_id = stable_id("web", str(group["base_url"]))
+    case_id = stable_id("web", f"{group['base_url']}|{group.get('check_type') or ''}")
     return WebConfigCase(
         case_id=case_id,
         target_url=target_url,
@@ -109,6 +109,7 @@ def _probe_web(group: dict[str, Any]) -> WebConfigCase:
         response_headers=headers,
         response_body=body,
         issues=issues,
+        affected_hosts=[_display_url(h) for h in group.get("affected_hosts") or []],
     )
 
 
@@ -274,7 +275,9 @@ def _sca_case(
     )
 
 
-def capture_latest(report_path: Path, output_root: Path, web_limit: int = 3, sca_limit: int = 3):
+def capture_latest(
+    report_path: Path, output_root: Path, web_limit: int | None = None, sca_limit: int | None = None
+):
     backend_root = _MODULE_DIR.parents[2]
     report = yaml.safe_load(report_path.read_text(encoding="utf-8")) or {}
     findings = list(report.get("findings") or [])
@@ -364,8 +367,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Capture 7-4 evidence screenshots")
     parser.add_argument("--report", type=Path, default=backend_root / "data/report/7-4/latest.yaml")
     parser.add_argument("--output", type=Path, default=backend_root / "data/report/7-4/evidence")
-    parser.add_argument("--web-limit", type=int, default=3)
-    parser.add_argument("--sca-limit", type=int, default=3)
+    parser.add_argument("--web-limit", type=int, default=None,
+                        help="Cap web cases (default: all distinct cases)")
+    parser.add_argument("--sca-limit", type=int, default=None,
+                        help="Cap SCA cases (default: all distinct cases)")
     args = parser.parse_args()
     results = capture_latest(args.report, args.output, args.web_limit, args.sca_limit)
     print(json.dumps(results, ensure_ascii=False, indent=2))

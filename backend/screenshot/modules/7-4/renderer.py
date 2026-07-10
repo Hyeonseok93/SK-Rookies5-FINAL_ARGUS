@@ -66,10 +66,12 @@ def web_overlay(case: WebConfigCase, *, full: bool) -> tuple[str, str]:
 #g74-columns {{ height: calc({height} - 68px) !important; }}
 .g74-pre {{ height: calc({height} - 100px) !important; }}
 """
+    hosts = case.affected_hosts or [case.display_url]
+    hosts_line = f" &nbsp;|&nbsp; Detected on {len(hosts)} host(s): {_esc(', '.join(hosts))}"
     markup = f"""
 <div id="g74-panel">
   <div id="g74-tabs"><b>Burp Suite Professional</b> Target &nbsp; Proxy &nbsp; Repeater</div>
-  <div id="g74-target">Target: {_esc(case.display_url)}</div>
+  <div id="g74-target">Target: {_esc(case.display_url)}{hosts_line}</div>
   <div id="g74-columns">
     <div class="g74-col"><div class="g74-head">Actual Response Headers</div>
       <pre class="g74-pre">{_esc(_header_text(case))}</pre></div>

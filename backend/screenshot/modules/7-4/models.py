@@ -16,6 +16,7 @@ class WebConfigCase:
     response_headers: dict[str, str]
     response_body: str
     issues: list[dict[str, Any]] = field(default_factory=list)
+    affected_hosts: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
