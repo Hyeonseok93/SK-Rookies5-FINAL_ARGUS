@@ -82,6 +82,13 @@ def test_run_not_diagnosable_raises():
             diagnosis_service.run_section(section_id)
 
 
+def test_g21_module_implemented():
+    mod = diagnosis_service.catalog()
+    row = next(r for r in mod if r["id"] == "2-1")
+    assert row["implemented"] is True
+    assert row["engine"] == "httpx+zap"
+
+
 def test_g22_module_implemented():
     mod = diagnosis_service.catalog()
     row = next(r for r in mod if r["id"] == "2-2")
@@ -251,6 +258,48 @@ def test_run_g41_not_diagnosable():
             "4-1",
             g41_options={"probe_mode": "full", "tamper_enabled": False, "max_endpoints": 100},
         )
+
+
+def test_run_g21_with_options(tmp_path, monkeypatch):
+    import yaml
+    from diagnosis.context import DiagnosisContext
+    from diagnosis.registry import get_module
+
+    captured: list[DiagnosisContext] = []
+
+    def fake_run(ctx):
+        captured.append(ctx)
+        from diagnosis.result import SectionReport, utc_now_iso
+
+        return SectionReport(
+            section_id="2-1",
+            title="test",
+            chapter=2,
+            status="pass",
+            implemented=True,
+            checked_at=utc_now_iso(),
+        )
+
+    mod = get_module("2-1")
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        yaml.safe_dump({"diagnosis_2_1": {"max_targets": 99, "zap_enabled": False}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CONFIG_PATH", str(cfg))
+    monkeypatch.setattr(diagnosis_service, "BACKEND_ROOT", tmp_path)
+
+    diagnosis_service.run_section(
+        "2-1",
+        g21_options={"zap_enabled": True, "httpx_enabled": False, "max_targets": 10},
+    )
+    assert captured
+    g21 = captured[0].raw_config["diagnosis_2_1"]
+    assert g21["zap_enabled"] is True
+    assert g21["httpx_enabled"] is False
+    assert g21["max_targets"] == 10
 
 
 def test_run_g22_with_options(tmp_path, monkeypatch):

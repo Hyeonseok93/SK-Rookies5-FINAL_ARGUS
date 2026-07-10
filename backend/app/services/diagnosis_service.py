@@ -68,7 +68,11 @@ def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
             raw["auth"]["accounts"] = test_accs
 
     if raw_overrides:
-        if "diagnosis_2_2" in raw_overrides:
+        if "diagnosis_2_1" in raw_overrides:
+            base_g21 = dict(raw.get("diagnosis_2_1") or {})
+            base_g21.update(raw_overrides["diagnosis_2_1"])
+            raw = {**raw, "diagnosis_2_1": base_g21}
+        elif "diagnosis_2_2" in raw_overrides:
             base_g22 = dict(raw.get("diagnosis_2_2") or {})
             base_g22.update(raw_overrides["diagnosis_2_2"])
             raw = {**raw, "diagnosis_2_2": base_g22}
@@ -521,6 +525,7 @@ def start_section_run_background(
 def run_section(
     section_id: str,
     *,
+    g21_options: dict | None = None,
     g22_options: dict | None = None,
     g71_options: dict | None = None,
     g73_options: dict | None = None,

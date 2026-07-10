@@ -19,6 +19,7 @@ export function isManualDiagnosisSection(sectionId: string): boolean {
 export const DIAGNOSIS_SECTIONS_WITH_DIALOG = new Set([
   "1-2",
   "1-5",
+  "2-1",
   "2-2",
   "3-2",
   "3-5",

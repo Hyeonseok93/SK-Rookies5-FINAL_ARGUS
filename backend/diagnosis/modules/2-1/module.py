@@ -1,4 +1,4 @@
-"""Diagnosis module 2-1: malicious file upload."""
+"""Diagnosis module 2-1: 악성코드파일 업로드."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import yaml
 
 from diagnosis.base import DiagnosisModule
 from diagnosis.context import DiagnosisContext
-from diagnosis.result import SectionReport, utc_now_iso
+from diagnosis.result import DiagnosisFinding, SectionReport, utc_now_iso
 
 _MODULE_DIR = Path(__file__).resolve().parent
 
@@ -31,7 +31,7 @@ class G21Module(DiagnosisModule):
     title = "악성코드파일 업로드"
     chapter = 2
     implemented = True
-    engine = "httpx"
+    engine = "httpx+zap"
 
     def __init__(self, module_dir: Path) -> None:
         self.module_dir = module_dir
@@ -46,6 +46,7 @@ class G21Module(DiagnosisModule):
     def run(self, ctx: DiagnosisContext) -> SectionReport:
         scanner = _load_scanner()
         result = scanner.run_g21_scan(ctx, self.module_dir)
+
         report = SectionReport(
             section_id=self.section_id,
             title=self.title,
@@ -56,6 +57,15 @@ class G21Module(DiagnosisModule):
             message=result.message,
             checked_at=utc_now_iso(),
         )
+        if result.stats:
+            report.findings.insert(
+                0,
+                DiagnosisFinding(
+                    severity="info",
+                    message="2-1 scan statistics",
+                    evidence={"stats": result.stats},
+                ),
+            )
         self.save_report(ctx, report)
         return report
 
