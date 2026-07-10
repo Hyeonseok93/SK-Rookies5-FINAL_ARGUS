@@ -1,35 +1,31 @@
 app_name: onde-pilot
-
 targets:
-  - name: user-api
-    base_url: "http://localhost:8080"
-  - name: admin-api
-    base_url: "http://localhost:8081"
-
+- name: api
+  base_url: http://localhost:8080
+- name: admin-api
+  base_url: http://localhost:8081
 inventory:
   markdown:
     enabled: true
-    path: "../../2단계(정보 수집 및 자산 분석 - 엔드포인트 수집)_Onde_엔드포인트_구조_정의서_v2.md"
+    path: ../../2단계(정보 수집 및 자산 분석 - 엔드포인트 수집)_Onde_엔드포인트_구조_정의서_v2.md
     include_frontend_routes: true
-    frontend_base_url: "http://localhost:5173"
+    frontend_base_url: http://localhost:5173
   openapi:
     enabled: false
-    path: ""
-    base_url: "http://localhost:8080"
+    path: ''
+    base_url: http://localhost:8080
   url_list:
     enabled: false
-    path: "data/inventory-urls.json"
+    path: data/inventory-urls.json
   base_urls:
-    - http://localhost:8080
-    - http://localhost:8081
-    - http://localhost:5173
-
+  - http://localhost:8080
+  - http://localhost:8081
+  - http://localhost:5173
 zap:
-  proxy: "http://127.0.0.1:8090"
-  api_key: ""
+  proxy: http://127.0.0.1:8090
+  api_key: ''
   auto_wait: true
   wait_seconds: 60
-
 discover:
   openapi_import: true
   seed_requestor: true
@@ -38,56 +34,36 @@ discover:
   spider_max_seconds: 120
   ajax_spider_enabled: true
   ajax_spider_max_seconds: 120
-
 auth:
-  # Login endpoints → auto-discovered from inventory (api-tree). Field names for POST body only.
-  # login_url in config is ignored.
   id_field: email
   pw_field: password
   token_field: cookie.accessToken
   delivery: cookie
   cookie_name: accessToken
-
 diagnosis_1_3:
   min_score: 2
   max_candidates: 80
   max_mutations_per_param: 5
   httpx_enabled: true
   scan_all_inventory: false
-  # Phase 4 (llm_interpret.py) — RawFinding 해석에만 사용, 탐지 자체는 LLM 비의존.
-  # Claude를 쓰려면 ANTHROPIC_API_KEY 환경변수를 설정 (여기에 키를 직접 쓰지 않음).
   llm_interpret_enabled: true
-  ollama_base_url: "http://localhost:11434"
-  ollama_model: "qwen2.5:7b"
-
+  ollama_base_url: http://localhost:11434
+  ollama_model: qwen2.5:7b
 diagnosis_1_5:
-  redirect_sink_base: "http://127.0.0.1:8001/argus-redirect-sink"
+  redirect_sink_base: http://127.0.0.1:8001/argus-redirect-sink
   probe_mode: full
   sample_size: 60
   max_phase_a_jobs: 5000
   max_phase_b_jobs: 10000
   zap_enabled: false
-
 diagnosis_1_6:
-  # ui_target left unset on purpose: scanner.py falls back to
-  # inventory.markdown.frontend_base_url (above) when it's absent. Verified
-  # equal to the old explicit value (http://localhost:5173) before removing it.
-  # ui_target: "http://localhost:5173"
-  zap_host: "127.0.0.1"
+  ui_target: http://localhost:5174
+  zap_host: 127.0.0.1
   skip_zap: true
   skip_spider: true
   skip_selenium: true
   timeout_sec: 36000
   max_report_findings: 50
-  # role_login_targets/role_login_paths left unset on purpose: scanner.py
-  # auto-discovers login endpoints per role from the uploaded api-tree
-  # (g16_auth.auto_role_login_targets) when these are absent. Verified to
-  # produce the exact same values as below before removing them:
-  # role_login_targets:
-  #   admin: "http://localhost:8080"
-  # role_login_paths:
-  #   admin: "/api/v1/auth/admin/login"
-
 diagnosis_4_1:
   probe_mode: sample
   sample_size: 40
@@ -103,12 +79,11 @@ diagnosis_4_1:
   partial_cross_tamper: true
   max_tamper_variants_per_session: 24
   auth_profiles:
-    - bearer
-    - cookie_access
-    - cookie_refresh
-    - dual
-    - browser_full
-
+  - bearer
+  - cookie_access
+  - cookie_refresh
+  - dual
+  - browser_full
 diagnosis_5_2:
   probe_mode: sample
   sample_size: 40
@@ -120,7 +95,6 @@ diagnosis_5_2:
   check_response_body: true
   check_http_plain: true
   enable_auth_modes: true
-
 diagnosis_6_1:
   probe_mode: sample
   sample_size: 40
@@ -128,7 +102,10 @@ diagnosis_6_1:
   max_requests: 8000
   timeout: 10.0
   interval_sec: 0.02
-  long_lengths: [256, 1000, 5000]
+  long_lengths:
+  - 256
+  - 1000
+  - 5000
   enable_param_fuzz: true
   enable_body_fuzz: true
   enable_path_fuzz: true
@@ -136,19 +113,18 @@ diagnosis_6_1:
   enable_header_fuzz: true
   enable_auth_modes: true
   httpx_enabled: true
-
 diagnosis_4_2:
   timeout: 10.0
   max_token_lifetime_minutes: 30
   min_token_length: 32
   min_entropy: 3.5
-  probe_path: "/api/v1/members/me"
+  probe_path: /api/v1/members/me
   relogin_enabled: true
   duplicate_login_enabled: true
   duplicate_login_ip_enabled: true
   probe_client_ips:
-    - "203.0.113.10"
-    - "198.51.100.20"
+  - 203.0.113.10
+  - 198.51.100.20
   logout_enabled: true
   logout_urls: []
   client_logout_enabled: true
