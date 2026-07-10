@@ -15,6 +15,7 @@ COPY diagnosis ./diagnosis
 COPY inventory ./inventory
 COPY integrations ./integrations
 COPY parsers ./parsers
+COPY screenshot ./screenshot
 COPY config.yaml config.docker.yaml ./
 
 EXPOSE 8000
