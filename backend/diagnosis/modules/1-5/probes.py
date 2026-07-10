@@ -7,6 +7,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+# pyrefly: ignore [missing-import]
 import httpx
 
 from diagnosis.exceptions import DiagnosisCancelled
