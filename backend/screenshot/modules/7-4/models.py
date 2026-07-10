@@ -16,6 +16,7 @@ class WebConfigCase:
     response_headers: dict[str, str]
     response_body: str
     issues: list[dict[str, Any]] = field(default_factory=list)
+    affected_hosts: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -44,3 +45,4 @@ class ScaCase:
     selection_reason: str = ""
     cve_ids: list[str] = field(default_factory=list)
     dependency_lines: list[str] = field(default_factory=list)
+    canvas_url: str = ""

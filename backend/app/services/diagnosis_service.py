@@ -186,6 +186,26 @@ def get_report(section_id: str) -> SectionReport | None:
     return mod.load_report(ctx)
 
 
+def resolve_evidence_file(section_id: str, rel_path: str) -> Path | None:
+    """Resolve a client-supplied relative path to a file under a section's
+    evidence dir, rejecting anything that would escape that dir."""
+    from diagnosis.paths import section_evidence_dir
+
+    if section_id not in SECTION_BY_ID or not rel_path:
+        return None
+
+    ctx = _context()
+    evidence_root = section_evidence_dir(ctx.data_dir, section_id).resolve()
+    candidate = (evidence_root / rel_path).resolve()
+    try:
+        candidate.relative_to(evidence_root)
+    except ValueError:
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate
+
+
 def get_g61_report_summary() -> dict[str, Any] | None:
     """Compact 6-1 report for UI (aggregated groups, no raw 70k findings)."""
     import importlib.util

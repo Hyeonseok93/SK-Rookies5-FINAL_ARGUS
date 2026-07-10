@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import asyncio
 import importlib.util
+import logging
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,11 +16,13 @@ from diagnosis.context import DiagnosisContext
 from diagnosis.paths import section_evidence_dir
 from diagnosis.result import DiagnosisFinding
 
+logger = logging.getLogger(__name__)
+
 _MODULE_DIR = Path(__file__).resolve().parent
 if str(_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(_MODULE_DIR))
 
-from g16_auth import roles_from_config  # noqa: E402
+from g16_auth import auto_role_login_targets, roles_from_config  # noqa: E402
 from g16_classification import convert_findings, report_status  # noqa: E402
 from g16_payloads import payload_sources  # noqa: E402
 from g16_probes import latest_w16_run, run_engine  # noqa: E402
@@ -43,13 +47,60 @@ class ScanResult:
 
 
 def _cfg(ctx: DiagnosisContext) -> dict[str, Any]:
-    return dict(ctx.raw_config.get("diagnosis_1_6") or ctx.raw_config.get("scan_1_6") or {})
+    cfg = dict(ctx.raw_config.get("diagnosis_1_6") or ctx.raw_config.get("scan_1_6") or {})
+    if not cfg.get("ui_target"):
+        markdown_cfg = ((ctx.raw_config.get("inventory") or {}).get("markdown") or {})
+        fallback_ui = markdown_cfg.get("frontend_base_url") if isinstance(markdown_cfg, dict) else None
+        if fallback_ui:
+            cfg["ui_target"] = fallback_ui
+            logger.info(f"[1-6] ui_target not set explicitly; falling back to {fallback_ui}")
+    return cfg
 
 
 def _load_json(path: Path, default: Any) -> Any:
     if not path.is_file():
         return default
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _prune_old_runs(output_dir: Path, keep_dir: Path) -> None:
+    """Delete sibling W16_* run directories once a new run has completed
+    successfully, so evidence/w16/ only ever holds the latest report instead
+    of accumulating one folder per scan forever. Runs after success so a
+    crashed/incomplete run never wipes the last good report."""
+    keep_resolved = keep_dir.resolve()
+    for candidate in output_dir.glob("W16_*"):
+        if not candidate.is_dir() or candidate.resolve() == keep_resolved:
+            continue
+        try:
+            shutil.rmtree(candidate)
+        except OSError as exc:
+            logger.warning(f"[1-6] failed to prune old run dir {candidate}: {exc}")
+
+
+def _relativize_screenshots(raw_findings: list[Any], evidence_dir: Path) -> None:
+    """Rewrite absolute screenshot paths into paths relative to the section's
+    evidence dir so they can be served through the evidence file endpoint
+    without leaking local filesystem layout to the frontend."""
+    evidence_root = evidence_dir.resolve()
+
+    def _rel(p: Any) -> str | None:
+        if not p:
+            return None
+        try:
+            return Path(str(p)).resolve().relative_to(evidence_root).as_posix()
+        except (ValueError, OSError):
+            return None
+
+    for raw in raw_findings:
+        if not isinstance(raw, dict):
+            continue
+        raw["screenshot_rel_path"] = _rel(raw.get("screenshot_path"))
+        steps = raw.get("reproduction_flow")
+        if isinstance(steps, list):
+            for step in steps:
+                if isinstance(step, dict):
+                    step["rel_path"] = _rel(step.get("path"))
 
 
 def _run_screenshot_capture(ctx: DiagnosisContext, cfg: dict[str, Any], run_dir: Path) -> dict[str, Any]:
@@ -136,6 +187,14 @@ def run_g16_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             stats={"reason": "roles_missing"},
         )
 
+    if not cfg.get("role_login_targets"):
+        role_emails = [r.split(":", 1)[0] for r in roles if ":" in r]
+        auto_targets, auto_paths = auto_role_login_targets(role_emails, ctx.raw_config, ctx.data_dir)
+        if auto_targets:
+            cfg["role_login_targets"] = auto_targets
+            cfg.setdefault("role_login_paths", auto_paths)
+            logger.info(f"[1-6] role_login_targets not set explicitly; auto-discovered {auto_targets}")
+
     evidence_dir = section_evidence_dir(ctx.data_dir, "1-6")
     output_dir = evidence_dir / "w16"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -185,6 +244,7 @@ def run_g16_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     raw_findings = _load_json(run_dir / "raw_findings.json", [])
     if not isinstance(raw_findings, list):
         raw_findings = []
+    _relativize_screenshots(raw_findings, evidence_dir)
 
     stats.update(
         {
@@ -202,6 +262,10 @@ def run_g16_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     )
     screenshot_stats = _run_screenshot_capture(ctx, cfg, run_dir)
     stats["screenshots"] = screenshot_stats
+    refreshed_findings = _load_json(run_dir / "raw_findings.json", raw_findings)
+    if isinstance(refreshed_findings, list):
+        raw_findings = refreshed_findings
+        _relativize_screenshots(raw_findings, evidence_dir)
 
     limit = max(0, int(cfg.get("max_report_findings", 50)))
     findings = convert_findings(raw_findings, limit)
@@ -210,4 +274,7 @@ def run_g16_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         f"1-6 W16 scan completed: {len(raw_findings)} raw finding(s), "
         f"{len(findings)} reported finding(s)"
     )
+
+    _prune_old_runs(output_dir, run_dir)
+
     return ScanResult(findings=findings, stats=stats, status=status, message=message)

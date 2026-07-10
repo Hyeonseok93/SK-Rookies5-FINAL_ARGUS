@@ -55,9 +55,6 @@ SKIP_FUZZ_PARAM_NAMES = frozenset(
         "sort",
         "order",
         "direction",
-        "q",
-        "keyword",
-        "search",
         "id",
         "ids",
     }

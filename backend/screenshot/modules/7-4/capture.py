@@ -29,6 +29,37 @@ def _display_url(url: str) -> str:
     return str(url).replace("host.docker.internal", "localhost")
 
 
+def _resolve_canvas_url(backend_root: Path) -> str:
+    """Source the SCA canvas URL from config/inventory, mirroring module 1-2."""
+    config_path = Path(os.environ.get("CONFIG_PATH") or backend_root / "config.yaml")
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {}
+    config = config or {}
+    inventory = dict(config.get("inventory") or {})
+    markdown = dict(inventory.get("markdown") or {})
+    frontend_base_url = str(
+        markdown.get("frontend_base_url")
+        or inventory.get("frontend_base_url")
+        or config.get("frontend_base_url")
+        or ""
+    )
+    if not frontend_base_url:
+        try:
+            tree = json.loads((backend_root / "data" / "api-tree.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            tree = {}
+        for row in tree.get("endpoints") or []:
+            if str(row.get("kind") or "") == "frontend":
+                frontend_base_url = str(row.get("base_url") or "")
+                if frontend_base_url:
+                    break
+    if not frontend_base_url:
+        raise RuntimeError(
+            "Frontend URL is unavailable. Set inventory.markdown.frontend_base_url "
+            "or provide frontend endpoints in data/api-tree.json."
+        )
+    return _display_url(frontend_base_url.rstrip("/"))
+
+
 def _probe_web(group: dict[str, Any]) -> WebConfigCase:
     findings = group["findings"]
     first = dict(findings[0].get("evidence") or {})
@@ -68,7 +99,7 @@ def _probe_web(group: dict[str, Any]) -> WebConfigCase:
                 "remediation": evidence.get("remediation"),
             }
         )
-    case_id = stable_id("web", str(group["base_url"]))
+    case_id = stable_id("web", f"{group['base_url']}|{group.get('check_type') or ''}")
     return WebConfigCase(
         case_id=case_id,
         target_url=target_url,
@@ -78,6 +109,7 @@ def _probe_web(group: dict[str, Any]) -> WebConfigCase:
         response_headers=headers,
         response_body=body,
         issues=issues,
+        affected_hosts=[_display_url(h) for h in group.get("affected_hosts") or []],
     )
 
 
@@ -174,6 +206,7 @@ def _sca_case(
     finding: dict[str, Any],
     backend_root: Path,
     advisory_cache: dict[str, dict[str, Any]],
+    canvas_url: str,
 ) -> ScaCase:
     evidence = dict(finding.get("evidence") or {})
     component = str(evidence.get("component") or "unknown")
@@ -238,10 +271,13 @@ def _sca_case(
         selection_reason=selection_reason,
         cve_ids=advisory_ids,
         dependency_lines=_dependency_lines(backend_root, component, version),
+        canvas_url=canvas_url,
     )
 
 
-def capture_latest(report_path: Path, output_root: Path, web_limit: int = 3, sca_limit: int = 3):
+def capture_latest(
+    report_path: Path, output_root: Path, web_limit: int | None = None, sca_limit: int | None = None
+):
     backend_root = _MODULE_DIR.parents[2]
     report = yaml.safe_load(report_path.read_text(encoding="utf-8")) or {}
     findings = list(report.get("findings") or [])
@@ -251,11 +287,13 @@ def capture_latest(report_path: Path, output_root: Path, web_limit: int = 3, sca
     except (OSError, ValueError):
         advisory_cache = {}
     web_cases = [_probe_web(row) for row in select_web_groups(findings, web_limit)]
+    sca_rows = select_sca(findings, sca_limit)
+    canvas_url = _resolve_canvas_url(backend_root) if sca_rows else ""
     sca_cases = []
     sca_error: Exception | None = None
-    for row in select_sca(findings, sca_limit):
+    for row in sca_rows:
         try:
-            sca_cases.append(_sca_case(row, backend_root, advisory_cache))
+            sca_cases.append(_sca_case(row, backend_root, advisory_cache, canvas_url))
         except Exception as exc:
             sca_error = exc
             break
@@ -329,8 +367,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Capture 7-4 evidence screenshots")
     parser.add_argument("--report", type=Path, default=backend_root / "data/report/7-4/latest.yaml")
     parser.add_argument("--output", type=Path, default=backend_root / "data/report/7-4/evidence")
-    parser.add_argument("--web-limit", type=int, default=3)
-    parser.add_argument("--sca-limit", type=int, default=3)
+    parser.add_argument("--web-limit", type=int, default=None,
+                        help="Cap web cases (default: all distinct cases)")
+    parser.add_argument("--sca-limit", type=int, default=None,
+                        help="Cap SCA cases (default: all distinct cases)")
     args = parser.parse_args()
     results = capture_latest(args.report, args.output, args.web_limit, args.sca_limit)
     print(json.dumps(results, ensure_ascii=False, indent=2))

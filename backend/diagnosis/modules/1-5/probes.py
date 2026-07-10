@@ -9,13 +9,22 @@ from typing import Any
 
 import httpx
 
+from diagnosis.exceptions import DiagnosisCancelled
 from diagnosis.result import DiagnosisFinding
 
-_MAX_WORKERS = 32
+_MAX_WORKERS = 8
 
 # job마다 새 httpx.Client()를 만들면 매 요청 새 TCP/TLS 커넥션을 맺는다 — 스레드별로
 # 하나씩 재사용해 커넥션 풀링 이득을 본다 (reflected_detector.py의 _session()과 동일 패턴).
 _thread_local = threading.local()
+
+
+def _raise_if_cancelled() -> None:
+    from app.services import diagnosis_progress as dp
+    from diagnosis.exceptions import DiagnosisCancelled
+
+    if dp.is_cancel_requested():
+        raise DiagnosisCancelled("User cancelled diagnosis")
 
 
 def _client() -> httpx.Client:
@@ -164,6 +173,10 @@ def run_redirect_jobs(
     lock = threading.Lock()
 
     def _run_one(job: dict[str, Any]) -> tuple[dict[str, Any], DiagnosisFinding | None, bool]:
+        # 이미 스레드풀 큐에 들어간 뒤 아직 시작되지 않은 job은 여기서 바로 빠진다 —
+        # 실행 중인 요청 자체를 강제 중단할 수는 없지만(최대 timeout초 뒤 자연 종료),
+        # 아직 안 쏜 요청까지 굳이 다 쏘지는 않게 막는다.
+        _raise_if_cancelled()
         finding, errored = _redirect_job_finding(
             job, sink_base=sink_base, is_open_redirect_fn=is_open_redirect_fn, timeout=timeout,
         )
@@ -171,8 +184,17 @@ def run_redirect_jobs(
 
     with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
         futures = [pool.submit(_run_one, job) for job in jobs]
+        cancelled = False
         for future in as_completed(futures):
-            job, finding, errored = future.result()
+            try:
+                job, finding, errored = future.result()
+            except DiagnosisCancelled:
+                # 아직 시작 안 된 나머지 future는 취소하고, 이미 실행 중인 것들만
+                # 자연 종료를 기다린 뒤(위 with 블록 종료 시) 취소로 마무리한다.
+                cancelled = True
+                for f in futures:
+                    f.cancel()
+                break
             phase = job.get("phase") or "?"
 
             with lock:
@@ -204,6 +226,8 @@ def run_redirect_jobs(
                 stats["open_redirects"] += 1
             findings.append(finding)
 
+    if cancelled:
+        raise DiagnosisCancelled("User cancelled diagnosis")
     return findings, stats
 
 
@@ -226,6 +250,7 @@ def run_cors_probes(
 
     with httpx.Client() as client:
         for target in targets:
+            _raise_if_cancelled()
             url = target["probe_url"]
             stats["probed"] += 1
             if on_progress:
@@ -272,6 +297,7 @@ def run_crossdomain_probes(
 
     with httpx.Client() as client:
         for target in targets:
+            _raise_if_cancelled()
             url = target["probe_url"]
             stats["probed"] += 1
             if on_progress:

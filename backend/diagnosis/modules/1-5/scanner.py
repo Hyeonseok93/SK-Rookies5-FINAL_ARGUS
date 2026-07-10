@@ -79,6 +79,32 @@ def _primary_auth(raw: dict[str, Any], *, data_dir: Path | None = None) -> dict[
     return sessions[0] if sessions else None
 
 
+def _refresh_job_auth(
+    jobs: list[dict[str, Any]], raw: dict[str, Any], *, data_dir: Path | None = None
+) -> None:
+    """job["headers"]에 박힌 로그인 세션(Authorization/Cookie)을 새로 받은 세션으로 갈아끼운다.
+
+    phase A/B job의 헤더는 스캔 시작 시점에 한 번 캡처된다(build_phase_a/b_jobs). XSS 검증은
+    sink 기반 redirect 검증(phase A+B, 최대 10,000+ job) + reflected_probe(같은 job 재검사)
+    다음인 3번째 단계라, 그 사이 수만 건의 요청이 오간 뒤에야 실행된다 — 스캔이 오래 걸리면
+    시작 시점 세션이 이 시점엔 만료돼 있을 수 있어, XSS 단계 직전에 한 번 더 로그인해 job의
+    인증 헤더만 최신 값으로 덮어쓴다(다른 헤더/본문은 그대로 둔다).
+    """
+    from inventory.auth_util import auth_headers, is_auth_header
+
+    try:
+        fresh_auth = _primary_auth(raw, data_dir=data_dir)
+    except Exception:
+        return
+    fresh_headers = auth_headers(fresh_auth)
+    if not fresh_headers:
+        return
+    for job in jobs:
+        headers = {k: v for k, v in (job.get("headers") or {}).items() if not is_auth_header(k)}
+        headers.update(fresh_headers)
+        job["headers"] = headers
+
+
 def _dedupe_redirect_findings(items: list[DiagnosisFinding]) -> list[DiagnosisFinding]:
     seen: set[str] = set()
     out: list[DiagnosisFinding] = []
@@ -229,6 +255,7 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         # 재사용해 확인한다 — phase B(추측성 redirect 파라미터명)는 XSS 관점에서 값이
         # 거의 없어 제외한다(위 grand_total 주석 참고).
         if phase_a:
+            _refresh_job_auth(phase_a, raw, data_dir=ctx.data_dir)
             xf, xstats = reflected_bridge.run_xss_on_jobs(
                 phase_a,
                 marker=run_id,
