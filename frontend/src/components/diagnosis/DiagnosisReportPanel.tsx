@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { AlertTriangle, ChevronDown } from "lucide-react";
 import type { DiagnosisSectionReport } from "../../types";
 
 const STATUS_STYLES: Record<string, string> = {
@@ -186,14 +186,33 @@ function FindingListItem({
 }: {
   f: { severity: string; message: string; evidence?: Record<string, unknown> };
 }) {
+  const findingType = f.evidence?.finding_type as string | undefined;
+  const isFpCandidate = findingType === "false_positive_candidate";
+  const isTruePositive = findingType === "true_positive";
   return (
-    <li className="rounded border border-cyber-border/30 bg-cyber-panel/30 px-3 py-2">
-      <div className="flex items-start gap-2">
+    <li
+      className={`rounded border px-3 py-2 ${
+        isFpCandidate
+          ? "border-amber-500/40 bg-amber-500/5"
+          : "border-cyber-border/30 bg-cyber-panel/30"
+      }`}
+    >
+      <div className="flex flex-wrap items-start gap-2">
         <span
           className={`shrink-0 font-mono text-[10px] uppercase ${SEVERITY_STYLES[f.severity] ?? SEVERITY_STYLES.info}`}
         >
           {f.severity}
         </span>
+        {isFpCandidate ? (
+          <span className="flex items-center gap-1 rounded border border-amber-400/40 bg-amber-500/15 px-1.5 py-0.5 font-mono text-[9px] text-amber-300">
+            <AlertTriangle className="h-2.5 w-2.5" />
+            오탐 후보
+          </span>
+        ) : isTruePositive ? (
+          <span className="rounded border border-rose-400/40 bg-rose-500/15 px-1.5 py-0.5 font-mono text-[9px] text-rose-300">
+            정탐
+          </span>
+        ) : null}
         <span className="text-xs text-white/90">{f.message}</span>
       </div>
       {f.evidence && Object.keys(f.evidence).length > 0 ? (
@@ -256,7 +275,41 @@ function CollapsibleFindingsSection({
   );
 }
 
+/** 오탐 후보(baseline 업로드 거부) 전용 섹션 */
+function FpCandidateSection({
+  findings,
+}: {
+  findings: { severity: string; message: string; evidence?: Record<string, unknown> }[];
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="mb-3 overflow-hidden rounded-lg border border-amber-500/40 bg-amber-500/5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition hover:bg-amber-500/10"
+      >
+        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+        <span className="text-xs font-semibold text-amber-300">엔드포인트 설정 확인 필요</span>
+        <span className="font-mono text-[10px] text-amber-400/80">{findings.length}</span>
+        <span className="ml-auto text-[10px] text-amber-500/70">
+          baseline(정상 이미지)가 거부됨 — 필드명·인증·extra_fields 검증 후 재진단 권장
+        </span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-amber-400/60 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open ? (
+        <ul className="space-y-2 border-t border-amber-500/20 px-3 py-2">
+          {findings.map((f, i) => (
+            <FindingListItem key={`fpc-${i}`} f={f} />
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 const ROLE_LABELS: Record<string, string> = {
+
   user: "일반사용자",
   seller: "판매자",
   admin: "관리자",
@@ -271,9 +324,17 @@ function GroupedG21FindingsPanel({
     return <p className="text-xs text-cyber-muted">finding 없음</p>;
   }
 
+  // 오탐 후보(baseline 거부)와 정탐을 분리
+  const fpCandidates = findings.filter(
+    (f) => f.evidence?.finding_type === "false_positive_candidate",
+  );
+  const trueFindings = findings.filter(
+    (f) => f.evidence?.finding_type !== "false_positive_candidate",
+  );
+
   const roles = ["user", "seller", "admin"];
-  const groups = new Map<string, typeof findings>();
-  findings.forEach((finding) => {
+  const groups = new Map<string, typeof trueFindings>();
+  trueFindings.forEach((finding) => {
     const ev = finding.evidence ?? {};
     const role = String(ev.business_role ?? "user");
     const feature = String(ev.feature_key ?? ev.endpoint_id ?? "file_upload");
@@ -283,6 +344,12 @@ function GroupedG21FindingsPanel({
 
   return (
     <>
+      {/* 오탐 후보 섹션 — 엔드포인트 설정을 먼저 검증해야 함을 강조 */}
+      {fpCandidates.length > 0 ? (
+        <FpCandidateSection findings={fpCandidates} />
+      ) : null}
+
+      {/* 정탐 섹션 — 역할별 그룹 */}
       {roles.map((role) => {
         const roleFindings = Array.from(groups.entries())
           .filter(([key]) => key.startsWith(`${role}::`))
@@ -292,7 +359,7 @@ function GroupedG21FindingsPanel({
           <CollapsibleFindingsSection
             key={role}
             title={ROLE_LABELS[role] ?? role}
-            subtitle="2-1 upload findings"
+            subtitle="2-1 정탐 findings"
             count={roleFindings.length}
             defaultOpen
             findings={roleFindings}
@@ -305,7 +372,7 @@ function GroupedG21FindingsPanel({
           <CollapsibleFindingsSection
             key={key}
             title={String(items[0]?.evidence?.feature_label ?? key)}
-            subtitle="2-1 upload findings"
+            subtitle="2-1 정탐 findings"
             count={items.length}
             defaultOpen={false}
             findings={items}
@@ -520,6 +587,9 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                   {" "}
                   · {1 + stats.auth_sessions} passes ({stats.auth_sessions} auth)
                 </span>
+              ) : null}
+              {stats.budget_exhausted ? (
+                <span className="text-amber-400/90"> · 요청 한도 초과 — 결과 불완전할 수 있음</span>
               ) : null}
             </>
           ) : null}
