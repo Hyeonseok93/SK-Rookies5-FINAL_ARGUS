@@ -182,7 +182,10 @@ def test_recorder_attaches_replay_to_finding(tmp_path: Path):
 
 
 def test_playwright_cookies_from_login():
-    from diagnosis.replay.browser_auth import playwright_cookies_from_login
+    from diagnosis.g22_replay import spa_browser_session_mod
+
+    SpaBrowserSessionConfig = spa_browser_session_mod().SpaBrowserSessionConfig
+    playwright_cookies_from_login = spa_browser_session_mod().playwright_cookies_from_login
 
     cookies = playwright_cookies_from_login(
         {
@@ -194,6 +197,7 @@ def test_playwright_cookies_from_login():
         },
         email="yerin@travel.com",
         base_url="http://localhost:5173",
+        spa=SpaBrowserSessionConfig.onde_default(),
     )
     names = {c["name"] for c in cookies}
     assert "onde_access_token" in names

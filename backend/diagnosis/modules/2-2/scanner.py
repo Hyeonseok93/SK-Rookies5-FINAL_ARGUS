@@ -13,7 +13,7 @@ from diagnosis.endpoint_auth_passes import load_login_report
 from diagnosis.context import DiagnosisContext
 from diagnosis.paths import section_evidence_dir
 from diagnosis.replay.normalize import collect_probe_base_urls, filter_endpoints_by_probe_bases
-from diagnosis.replay.recorder import ReplaySession
+from diagnosis.g22_replay import G22ReplaySession as ReplaySession
 from diagnosis.result import DiagnosisFinding
 from inventory.schema import ApiTree, Endpoint
 from inventory.load import load_api_tree

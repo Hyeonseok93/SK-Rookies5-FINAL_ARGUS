@@ -7,7 +7,14 @@ import json
 from typing import Any
 from urllib.parse import quote
 
-from diagnosis.replay.browser_auth import ONDE_COOKIE_NAMES
+from diagnosis.g22_replay import (
+    browser_full_cookie_pairs,
+    resolve_spa_browser_session,
+    spa_browser_session_mod,
+    unwrap_login_payload,
+)
+
+SpaBrowserSessionConfig = spa_browser_session_mod().SpaBrowserSessionConfig
 
 AUTH_PROFILES: tuple[str, ...] = (
     "bearer",
@@ -35,9 +42,18 @@ NON_API_TAMPER_LABEL_PARTS = (
 )
 
 
-def tamper_label_targets_api_auth(label: str) -> bool:
+def _frontend_only_tamper_labels(spa: SpaBrowserSessionConfig | None) -> tuple[str, ...]:
+    if spa is None:
+        return NON_API_TAMPER_LABEL_PARTS
+    labels = list(NON_API_TAMPER_LABEL_PARTS)
+    labels.extend(spa.frontend_only_cookie_names())
+    return tuple(dict.fromkeys(labels))
+
+
+def tamper_label_targets_api_auth(label: str, *, raw_config: dict[str, Any] | None = None) -> bool:
     low = (label or "").lower()
-    return not any(part in low for part in NON_API_TAMPER_LABEL_PARTS)
+    spa = resolve_spa_browser_session(raw_config)
+    return not any(part in low for part in _frontend_only_tamper_labels(spa))
 
 
 def _frontend_role(role: str) -> str:
@@ -167,6 +183,7 @@ def build_auth_headers(
     cross_from: dict[str, Any] | None = None,
     cross_fields: list[str] | None = None,
     overrides: dict[str, Any] | None = None,
+    raw_config: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Build probe HTTP auth headers for a given surface profile."""
     if profile not in AUTH_PROFILES:
@@ -212,33 +229,19 @@ def build_auth_headers(
             headers["Authorization"] = bearer if bearer.startswith("Bearer ") else f"Bearer {bearer}"
         return headers
 
-    # browser_full — matches Onde SPA + API dual auth (Burp capture shape)
-    cookie_parts = []
-    if access_cookie:
-        cookie_parts.extend(
-            [
-                ("accessToken", access_cookie),
-                (ONDE_COOKIE_NAMES["access"], access_cookie),
-            ]
+    # browser_full — API cookies + optional SPA browser jar (config-driven)
+    spa = resolve_spa_browser_session(raw_config)
+    if spa is None:
+        return build_auth_headers(
+            session,
+            "dual",
+            cross_from=cross_from,
+            cross_fields=cross_fields,
+            overrides=overrides,
+            raw_config=raw_config,
         )
-    if refresh:
-        cookie_parts.extend(
-            [
-                ("refreshToken", refresh),
-                (ONDE_COOKIE_NAMES["refresh"], refresh),
-            ]
-        )
-    if tokens["member_id"]:
-        cookie_parts.append((ONDE_COOKIE_NAMES["member_id"], tokens["member_id"]))
-    if tokens["role"]:
-        cookie_parts.append((ONDE_COOKIE_NAMES["role"], tokens["role"]))
-    if tokens["username"]:
-        cookie_parts.append((ONDE_COOKIE_NAMES["username"], quote(tokens["username"], safe="@")))
-    if tokens["name"]:
-        cookie_parts.append((ONDE_COOKIE_NAMES["name"], tokens["name"]))
-    if tokens["nickname"]:
-        cookie_parts.append((ONDE_COOKIE_NAMES["nickname"], tokens["nickname"]))
 
+    cookie_parts = browser_full_cookie_pairs(tokens, spa=spa)
     headers = {}
     if cookie_parts:
         headers["Cookie"] = _format_cookie_jar(cookie_parts)
@@ -254,12 +257,10 @@ def enrich_auth_session(
     auth_cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Attach access/refresh tokens and member fields from login response."""
-    from diagnosis.replay.browser_auth import _unwrap_login_payload
-
     out = dict(session)
     payload: dict[str, Any] = {}
     try:
-        payload = _unwrap_login_payload(resp.json())
+        payload = unwrap_login_payload(resp.json())
     except Exception:
         payload = {}
 

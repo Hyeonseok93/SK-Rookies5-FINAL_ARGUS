@@ -430,6 +430,21 @@ def _run_module(mod: Any, ctx: DiagnosisContext, section_id: str) -> SectionRepo
     except DiagnosisCancelled as exc:
         dp.cancel_finish(f"{section_id}: cancelled")
         raise RuntimeError(str(exc) or "Diagnosis cancelled") from exc
+    if section_id in {"1-2", "2-2", "7-4"} and report.status != "cancelled":
+        from app.services.evidence_capture_service import capture_after_diagnosis
+
+        dp.update(
+            phase="evidence",
+            message=f"{section_id}: 증거 스크린샷 생성 중…",
+            percent=99,
+        )
+        capture_result = capture_after_diagnosis(section_id, ctx.data_dir)
+        if not capture_result.get("ok"):
+            dp.update(
+                phase="evidence",
+                message=f"{section_id}: 스크린샷 생성 실패 — 진단 결과는 저장됨",
+                percent=99,
+            )
     _finish_progress(section_id, report)
     return report
 
@@ -609,4 +624,3 @@ def run_replay(section_id: str, *, finding_id: str | None = None, use_playwright
         raw_config=raw,
         use_playwright=use_playwright,
     )
-
