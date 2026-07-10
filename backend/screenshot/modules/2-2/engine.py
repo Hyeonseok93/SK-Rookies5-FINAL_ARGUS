@@ -166,7 +166,7 @@ def _authenticate_browser_context(context, case: EvidenceCase) -> None:
     if not browser_cookies:
         case.metadata["browser_login"] = {
             "ok": False,
-            "reason": "Login succeeded but SPA session cookies were not produced (check auth.spa_browser_session in config)",
+            "reason": "Login succeeded but SPA session cookies were not produced (check modules/2-2/replay/assets/spa_browser_session.yaml)",
         }
         return
 

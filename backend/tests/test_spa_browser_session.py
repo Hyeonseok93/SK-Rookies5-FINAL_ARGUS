@@ -1,4 +1,4 @@
-"""Tests for 2-2 config-driven SPA browser session cookies."""
+"""Tests for 2-2 module SPA browser session cookies (asset + dynamic resolve)."""
 
 from __future__ import annotations
 
@@ -41,10 +41,34 @@ def test_resolve_disabled_returns_none():
     assert resolve_spa_browser_session(raw) is None
 
 
-def test_resolve_onde_fallback_from_app_name():
+def test_resolve_module_asset_for_onde_app_name():
     spa = resolve_spa_browser_session({"app_name": "onde-pilot"})
     assert spa is not None
     assert spa.cookie_names["access"] == "onde_access_token"
+
+
+def test_resolve_module_asset_when_preferred():
+    spa = resolve_spa_browser_session({}, prefer_module_asset=True)
+    assert spa is not None
+    assert spa.cookie_names["member_id"] == "onde_member_id"
+
+
+def test_resolve_from_frontend_cookies():
+    raw = {
+        "frontend": {
+            "cookies": {
+                "names": {
+                    "access": "front_access",
+                    "member_id": "front_uid",
+                    "role": "front_role",
+                    "username": "front_user",
+                }
+            }
+        }
+    }
+    spa = resolve_spa_browser_session(raw)
+    assert spa is not None
+    assert spa.cookie_names["access"] == "front_access"
 
 
 def test_playwright_cookies_from_login_uses_mapping():

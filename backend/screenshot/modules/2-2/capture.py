@@ -160,7 +160,7 @@ def case_from_finding(
         from diagnosis.g22_replay import resolve_spa_browser_session
 
         metadata["app_name"] = raw_config.get("app_name")
-        spa = resolve_spa_browser_session(raw_config)
+        spa = resolve_spa_browser_session(raw_config, prefer_module_asset=True)
         if spa is not None:
             metadata["spa_browser_session"] = spa.to_dict()
     if frontend_base_url:

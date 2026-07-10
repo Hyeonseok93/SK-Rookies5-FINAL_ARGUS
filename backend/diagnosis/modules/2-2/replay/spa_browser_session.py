@@ -1,13 +1,24 @@
-"""2-2 config-driven SPA browser session cookies (Playwright + browser_full)."""
+"""2-2 SPA browser session cookies — module asset + optional config overrides.
+
+Resolution order:
+  1) config ``auth.spa_browser_session``
+  2) config ``frontend.cookies`` (same shape as screenshot 5-2)
+  3) ``modules/2-2/replay/assets/spa_browser_session.yaml``
+  4) best-effort infer from login JSON keys (no fixed app cookie names)
+"""
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
 
 import httpx
+import yaml
+
+_ASSET_PATH = Path(__file__).resolve().parent / "assets" / "spa_browser_session.yaml"
 
 _DEFAULT_LOGIN_FIELDS: dict[str, str] = {
     "access": "accessToken",
@@ -19,7 +30,21 @@ _DEFAULT_LOGIN_FIELDS: dict[str, str] = {
     "nickname": "nickname",
 }
 
-_ONDE_COOKIE_NAMES: dict[str, str] = {
+# Common login JSON aliases → logical cookie keys (app-agnostic).
+_LOGIN_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "access": ("accessToken", "access_token", "token", "jwt", "idToken"),
+    "refresh": ("refreshToken", "refresh_token"),
+    "member_id": ("memberId", "member_id", "userId", "user_id", "id"),
+    "role": ("role", "userRole", "user_role", "authority"),
+    "username": ("username", "email", "userName", "loginId"),
+    "name": ("name", "displayName", "fullName"),
+    "nickname": ("nickname", "nickName"),
+}
+
+_DEFAULT_REQUIRED = ("access", "member_id", "role", "username")
+
+# Legacy alias for inventory/tests. Prefer module asset / resolve_spa_browser_session.
+ONDE_COOKIE_NAMES = {
     "access": "onde_access_token",
     "refresh": "onde_refresh_token",
     "member_id": "onde_member_id",
@@ -38,23 +63,31 @@ class SpaBrowserSessionConfig:
     login_fields: dict[str, str] = field(default_factory=lambda: dict(_DEFAULT_LOGIN_FIELDS))
     api_access_cookie: str = "accessToken"
     api_refresh_cookie: str = "refreshToken"
+    required: tuple[str, ...] = _DEFAULT_REQUIRED
 
     @classmethod
     def onde_default(cls) -> SpaBrowserSessionConfig:
-        return cls(cookie_names=dict(_ONDE_COOKIE_NAMES))
+        """Load 2-2 module asset (legacy name kept for tests)."""
+        asset = _load_module_asset()
+        if asset is not None:
+            return asset
+        return cls(cookie_names=dict(ONDE_COOKIE_NAMES))
 
     @classmethod
     def from_mapping(cls, raw: dict[str, Any]) -> SpaBrowserSessionConfig | None:
-        cookies = dict(raw.get("cookies") or raw.get("cookie_names") or {})
+        cookies = dict(raw.get("cookies") or raw.get("cookie_names") or raw.get("names") or {})
         if not cookies:
             return None
         login_fields = dict(_DEFAULT_LOGIN_FIELDS)
         login_fields.update(dict(raw.get("login_fields") or {}))
+        required_raw = raw.get("required")
+        required = tuple(required_raw) if required_raw else _DEFAULT_REQUIRED
         return cls(
             cookie_names=cookies,
             login_fields=login_fields,
             api_access_cookie=str(raw.get("api_access_cookie") or "accessToken"),
             api_refresh_cookie=str(raw.get("api_refresh_cookie") or "refreshToken"),
+            required=tuple(str(x) for x in required),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -63,17 +96,20 @@ class SpaBrowserSessionConfig:
             "login_fields": dict(self.login_fields),
             "api_access_cookie": self.api_access_cookie,
             "api_refresh_cookie": self.api_refresh_cookie,
+            "required": list(self.required),
         }
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> SpaBrowserSessionConfig | None:
         if not isinstance(raw, dict) or not raw.get("cookie_names"):
             return None
+        required = raw.get("required") or _DEFAULT_REQUIRED
         return cls(
             cookie_names=dict(raw["cookie_names"]),
             login_fields=dict(raw.get("login_fields") or _DEFAULT_LOGIN_FIELDS),
             api_access_cookie=str(raw.get("api_access_cookie") or "accessToken"),
             api_refresh_cookie=str(raw.get("api_refresh_cookie") or "refreshToken"),
+            required=tuple(str(x) for x in required),
         )
 
     def frontend_only_cookie_names(self) -> tuple[str, ...]:
@@ -85,7 +121,55 @@ class SpaBrowserSessionConfig:
         return tuple(names)
 
 
-def resolve_spa_browser_session(raw_config: dict[str, Any] | None) -> SpaBrowserSessionConfig | None:
+def _load_module_asset() -> SpaBrowserSessionConfig | None:
+    if not _ASSET_PATH.is_file():
+        return None
+    try:
+        raw = yaml.safe_load(_ASSET_PATH.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return None
+    if isinstance(raw, dict) and raw.get("enabled") is False:
+        return None
+    return SpaBrowserSessionConfig.from_mapping(raw if isinstance(raw, dict) else {})
+
+
+def _from_frontend_cookies(raw_config: dict[str, Any] | None) -> SpaBrowserSessionConfig | None:
+    """Reuse config ``frontend.cookies`` (same section screenshot 5-2 reads)."""
+    front = dict((raw_config or {}).get("frontend") or {})
+    cookies = dict(front.get("cookies") or {})
+    names = dict(cookies.get("names") or {})
+    if not names:
+        return None
+    block = {
+        "cookies": names,
+        "required": cookies.get("required") or list(_DEFAULT_REQUIRED),
+        "login_fields": dict(front.get("login_fields") or {}),
+        "api_access_cookie": front.get("api_access_cookie") or "accessToken",
+        "api_refresh_cookie": front.get("api_refresh_cookie") or "refreshToken",
+    }
+    return SpaBrowserSessionConfig.from_mapping(block)
+
+
+def _looks_like_onde_app(raw: dict[str, Any]) -> bool:
+    app = str(raw.get("app_name") or "").lower()
+    if "onde" in app:
+        return True
+    inv = dict(raw.get("inventory") or {})
+    md = dict(inv.get("markdown") or {})
+    path = str(md.get("path") or "").lower()
+    return "onde" in path
+
+
+def resolve_spa_browser_session(
+    raw_config: dict[str, Any] | None,
+    *,
+    prefer_module_asset: bool = False,
+) -> SpaBrowserSessionConfig | None:
+    """Resolve SPA cookie mapping without requiring global config.yaml edits.
+
+    Order: auth.spa_browser_session → frontend.cookies → 2-2 module asset
+    (asset only when ``prefer_module_asset`` or the target looks like Onde).
+    """
     raw = raw_config or {}
     auth = dict(raw.get("auth") or {})
     block = auth.get("spa_browser_session") or auth.get("spa_browser_cookies")
@@ -95,24 +179,24 @@ def resolve_spa_browser_session(raw_config: dict[str, Any] | None) -> SpaBrowser
         parsed = SpaBrowserSessionConfig.from_mapping(block)
         if parsed is not None:
             return parsed
-    app_name = str(raw.get("app_name") or "").lower()
-    if "onde" in app_name:
-        return SpaBrowserSessionConfig.onde_default()
+
+    from_front = _from_frontend_cookies(raw)
+    if from_front is not None:
+        return from_front
+
+    if prefer_module_asset or _looks_like_onde_app(raw):
+        return _load_module_asset()
     return None
-
-
-# Backward-compatible alias used by older imports/tests.
-ONDE_COOKIE_NAMES = dict(_ONDE_COOKIE_NAMES)
 
 
 def unwrap_login_payload(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {}
-    if isinstance(data.get("data"), dict) and (
-        "accessToken" in data["data"] or "memberId" in data["data"]
+    if isinstance(data.get("data"), dict) and any(
+        k in data["data"] for k in ("accessToken", "access_token", "token", "memberId", "userId")
     ):
         return dict(data["data"])
-    if "accessToken" in data or "memberId" in data:
+    if any(k in data for k in ("accessToken", "access_token", "token", "memberId", "userId")):
         return dict(data)
     return {}
 
@@ -136,6 +220,10 @@ def _login_value(
         return str(login.get(source[1:]) or "")
     value = login.get(source)
     if value is None:
+        # Dynamic fallback: try common aliases for this logical field.
+        for alias in _LOGIN_FIELD_ALIASES.get(field_key, ()):
+            if login.get(alias) is not None:
+                return str(login.get(alias))
         return ""
     return str(value)
 
@@ -152,6 +240,39 @@ def session_values_from_login(
     return values
 
 
+def infer_spa_from_login(
+    login: dict[str, Any],
+    *,
+    email: str,
+    cookie_prefix: str = "session",
+) -> SpaBrowserSessionConfig | None:
+    """Best-effort mapping when no config/asset cookie names exist.
+
+    Builds cookie names as ``{prefix}_{logical_key}`` from whatever login fields
+    are present (accessToken/memberId/…). Prefer explicit asset/config mapping.
+    """
+    if not login:
+        return None
+    cookie_names: dict[str, str] = {}
+    login_fields: dict[str, str] = dict(_DEFAULT_LOGIN_FIELDS)
+    for logical, aliases in _LOGIN_FIELD_ALIASES.items():
+        for alias in aliases:
+            if login.get(alias) is not None:
+                cookie_names[logical] = f"{cookie_prefix}_{logical}"
+                login_fields[logical] = alias
+                break
+    if email and "username" not in cookie_names:
+        cookie_names["username"] = f"{cookie_prefix}_username"
+        login_fields["username"] = "@email"
+    if "access" not in cookie_names:
+        return None
+    return SpaBrowserSessionConfig(
+        cookie_names=cookie_names,
+        login_fields=login_fields,
+        required=tuple(k for k in _DEFAULT_REQUIRED if k in cookie_names) or ("access",),
+    )
+
+
 def playwright_cookies_from_login(
     login: dict[str, Any],
     *,
@@ -159,17 +280,16 @@ def playwright_cookies_from_login(
     base_url: str,
     spa: SpaBrowserSessionConfig | None = None,
 ) -> list[dict[str, Any]]:
-    """Build Playwright cookies for a configured SPA session."""
+    """Build Playwright cookies for a configured (or inferred) SPA session."""
+    if spa is None:
+        spa = infer_spa_from_login(login, email=email)
     if spa is None:
         return []
 
     values = session_values_from_login(login, email=email, spa=spa)
-    access = values.get("access", "")
-    member_id = values.get("member_id", "")
-    role = values.get("role", "")
-    username = values.get("username", "")
-    if not access or not member_id or not role or not username:
-        return []
+    for key in spa.required:
+        if not values.get(key):
+            return []
 
     domain = _cookie_domain(base_url)
     expires = login.get("expiresIn")
@@ -246,7 +366,8 @@ def perform_login(
         return {}, []
 
     if spa is None:
-        spa = resolve_spa_browser_session(raw_config)
+        # perform_login lives in the 2-2 module — default to module asset mapping.
+        spa = resolve_spa_browser_session(raw_config, prefer_module_asset=True)
 
     resp = client.post(login_url, json={id_field: email, pw_field: password})
     login_payload: dict[str, Any] = {}
@@ -288,6 +409,8 @@ def perform_login(
             pass
 
     cookie_base = frontend_base_url or login_url
+    if spa is None:
+        spa = infer_spa_from_login(login_payload, email=email)
     browser_cookies = playwright_cookies_from_login(
         login_payload,
         email=email,
