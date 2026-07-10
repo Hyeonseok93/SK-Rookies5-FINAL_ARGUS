@@ -46,6 +46,29 @@ auth:
     - "http://localhost:8080/api/v1/auth/login"
     - "http://localhost:8080/api/v1/auth/admin/login"
 
+
+frontend:
+  cookies:
+    names:
+      access: "onde_access_token"
+      refresh: "onde_refresh_token"
+      member_id: "onde_member_id"
+      role: "onde_member_role"
+      username: "onde_username"
+      name: "onde_name"
+      nickname: "onde_nickname"
+    required: [access, member_id, role, username]
+  error_phrases:
+    - "길을 잃"
+    - "페이지를 찾을 수 없"
+    - "문제가 발생했습니다"
+  # 경로 휴리스틱이 못 잡는 API→프론트 매핑만 명시(예: 이름이 안 겹치는 /mypage).
+  # api_path 는 fnmatch 글롭 지원, front_base 생략 시 인벤토리 프론트 base 사용.
+  route_overrides:
+    - { api_path: "*/members/me/profile", front_path: "/mypage" }
+    - { api_path: "*/members/me", front_path: "/mypage" }
+    - { api_path: "*/user/profile", front_path: "/mypage" }
+
 diagnosis_1_3:
   min_score: 2
   max_candidates: 80

@@ -10,6 +10,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && playwright install --with-deps chromium
 
+# Screenshot evidence capture (5-2 등) uses Playwright headless Chromium.
+RUN playwright install --with-deps chromium
+
 COPY app ./app
 COPY diagnosis ./diagnosis
 COPY inventory ./inventory
