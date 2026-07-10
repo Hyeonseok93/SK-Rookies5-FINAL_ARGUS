@@ -1,4 +1,4 @@
-"""Resolve UI navigation flows for evidence replay."""
+"""Resolve UI navigation flows for 2-2 evidence replay."""
 
 from __future__ import annotations
 

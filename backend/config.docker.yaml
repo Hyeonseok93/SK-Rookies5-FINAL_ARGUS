@@ -42,6 +42,22 @@ auth:
   token_field: cookie.accessToken
   delivery: cookie
   cookie_name: accessToken
+  spa_browser_session:
+    enabled: true
+    cookies:
+      access: onde_access_token
+      refresh: onde_refresh_token
+      member_id: onde_member_id
+      role: onde_member_role
+      username: onde_username
+      name: onde_name
+      nickname: onde_nickname
+    login_fields:
+      access: accessToken
+      refresh: refreshToken
+      member_id: memberId
+      role: role
+      username: "@email"
   login_urls:
     - "http://localhost:8080/api/v1/auth/login"
     - "http://localhost:8080/api/v1/auth/admin/login"

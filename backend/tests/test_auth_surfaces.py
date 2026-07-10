@@ -48,8 +48,24 @@ def test_build_dual_includes_bearer_and_cookies():
     assert "refreshToken=ref.jwt.token" in headers["Cookie"]
 
 
+def _onde_raw_config() -> dict:
+    from diagnosis.g22_replay import spa_browser_session_mod
+
+    SpaBrowserSessionConfig = spa_browser_session_mod().SpaBrowserSessionConfig
+
+    return {
+        "app_name": "onde-pilot",
+        "auth": {
+            "spa_browser_session": {
+                "enabled": True,
+                "cookies": dict(SpaBrowserSessionConfig.onde_default().cookie_names),
+            }
+        },
+    }
+
+
 def test_build_browser_full_matches_spa_shape():
-    headers = build_auth_headers(_sample_session(), "browser_full")
+    headers = build_auth_headers(_sample_session(), "browser_full", raw_config=_onde_raw_config())
     cookie = headers["Cookie"]
     assert "accessToken=acc.jwt.token" in cookie
     assert "onde_access_token=acc.jwt.token" in cookie
@@ -100,6 +116,7 @@ def test_partial_cross_bearer_only():
         "browser_full",
         cross_from=ctx["_cross_from"],
         cross_fields=ctx["_cross_fields"],
+        raw_config=_onde_raw_config(),
     )
     assert headers["Authorization"] == "Bearer other.jwt.token"
     assert "accessToken=acc.jwt.token" in headers["Cookie"]
