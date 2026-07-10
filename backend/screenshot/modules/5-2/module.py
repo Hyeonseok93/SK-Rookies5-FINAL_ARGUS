@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import re
@@ -42,6 +43,7 @@ def _load_local(name: str):
 grouping = _load_local("grouping")
 capture = _load_local("capture")
 render = _load_local("render")
+front_capture = _load_local("front_capture")
 
 
 @dataclass
@@ -124,10 +126,32 @@ def capture_from_findings(
     evidence_dir = section_evidence_dir(ctx.data_dir, "5-2")
     evidence_dir.mkdir(parents=True, exist_ok=True)
 
+    # 프론트 화면 캡처(보조 증거) — 인벤토리에 프론트 라우트가 있을 때만 활성화.
+    # 프론트 라우트는 verify가 떨궈낼 수 있어 전체(ready) 트리 기준으로 읽는다.
+    # 앱 종속 요소(쿠키 스킴/404 문구)는 config `frontend` 섹션에서 온다(미설정 시 프론트 비활성).
+    front_routes = front_capture.load_frontend_routes_best(ctx.data_dir)
+    front_overrides = front_capture.load_overrides(ctx.raw_config)
+    front_cfg = front_capture.load_front_config(ctx.raw_config)
+    front_enabled = bool(front_routes or front_overrides)
+
     manifest_shots: list[dict[str, Any]] = []
     shots_captured = 0
+    front_captured = 0
+    front_cache: dict[tuple[str, str], dict[str, Any]] = {}  # (account, route) → 동일 화면 재사용
 
-    with HttpxTransport(timeout=timeout) as transport, render.ScreenshotBrowser() as browser:
+    with contextlib.ExitStack() as stack:
+        transport = stack.enter_context(HttpxTransport(timeout=timeout))
+        browser = stack.enter_context(render.ScreenshotBrowser())
+        front_browser = None
+        if front_enabled:
+            try:
+                # 같은 Chromium을 재사용(별도 컨텍스트) — sync_playwright 이중 start 방지.
+                front_browser = stack.enter_context(
+                    front_capture.FrontBrowser(browser=browser.browser, error_phrases=front_cfg.error_phrases)
+                )
+            except Exception:
+                front_browser = None
+
         for shot in shots:
             endpoint = capture.find_endpoint(tree.endpoints, shot.endpoint_id)
             if endpoint is None:
@@ -193,6 +217,41 @@ def capture_from_findings(
             browser.capture(html_doc, out_path)
             shots_captured += 1
 
+            # 보조 증거: 이 계정으로 로그인한 실제 프론트 화면 (response shot + 대응 라우트 존재 시)
+            front_info: dict[str, Any] | None = None
+            if front_browser is not None and shot.kind == "response" and session is not None and matched:
+                route, how = front_capture.match_route(endpoint.path, front_routes, front_overrides)
+                if route is not None:
+                    cache_key = (shot.account, route.path)
+                    cached = front_cache.get(cache_key)
+                    if cached is not None:
+                        # 같은 (계정 × 프론트 라우트)는 화면이 동일하므로 한 번만 캡처하고 재사용.
+                        front_info = {**cached, "deduped": True}
+                    else:
+                        front_base = front_capture.resolve_front_base(route)
+                        cookies = front_capture.build_front_cookies(session, front_base, front_cfg)
+                        front_name = f"{shot.seq:02d}_{acct_slug}_frontpage_{_slugify(route.path)}.png"
+                        ok_f, info_f = front_browser.capture(
+                            front_base,
+                            route.path,
+                            cookies,
+                            evidence_dir / front_name,
+                            highlight_values=shot.response_body_markers,
+                        )
+                        if ok_f:
+                            front_captured += 1
+                        front_info = {
+                            "file": front_name if ok_f else None,
+                            "front_url": info_f if ok_f else None,
+                            "route_path": route.path,
+                            "match": how,
+                            "cookies_built": len(cookies),
+                            "ok": ok_f,
+                            "error": None if ok_f else info_f,
+                            "deduped": False,
+                        }
+                        front_cache[cache_key] = front_info
+
             expected = shot.url_markers + shot.request_body_markers + shot.response_body_markers
             visible = _markers_visible(expected, spec.url, req_body_pretty, resp_body_pretty)
             manifest_shots.append(
@@ -212,6 +271,7 @@ def capture_from_findings(
                     "status_code": result.status_code,
                     "reprobe_ok": result.ok,
                     "reprobe_error": result.error,
+                    "front": front_info,
                     "status": "captured",
                 }
             )
@@ -220,6 +280,8 @@ def capture_from_findings(
         "section_id": "5-2",
         "generated_at": utc_now_iso(),
         "shots_total": shots_captured,
+        "front_shots_total": front_captured,
+        "front_enabled": front_enabled,
         "shots": manifest_shots,
     }
     manifest_path = evidence_dir / "evidence_manifest.json"
@@ -227,7 +289,10 @@ def capture_from_findings(
 
     return ScreenshotRunResult(
         ok=True,
-        message=f"{shots_captured} screenshot(s) captured ({len(shots)} exposure shot(s)).",
+        message=(
+            f"{shots_captured} API screenshot(s) + {front_captured} front-page screenshot(s) "
+            f"captured ({len(shots)} exposure shot(s))."
+        ),
         cases_total=len(shots),
         screenshots_total=shots_captured,
         evidence_dir=str(evidence_dir),

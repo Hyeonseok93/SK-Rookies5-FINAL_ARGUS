@@ -305,6 +305,11 @@ class ScreenshotBrowser:
         self._page = self._browser.new_page(viewport={"width": FRAME_WIDTH, "height": FRAME_HEIGHT})
         return self
 
+    @property
+    def browser(self):
+        """The launched Chromium — reuse it for other contexts (front-page capture)."""
+        return self._browser
+
     def __exit__(self, *_args: object) -> None:
         if self._browser:
             self._browser.close()
