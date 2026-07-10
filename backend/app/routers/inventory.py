@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import uuid
 import json
 import yaml
@@ -138,7 +139,12 @@ def list_endpoints(
             or needle in e.base_url.lower()
         ]
     if source:
-        items = [e for e in items if source in e.sources]
+        items = [
+            e
+            for e in items
+            if source in e.sources
+            or (source == "openapi" and any(value.startswith("openapi:") for value in e.sources))
+        ]
 
     items = sorted(
         items,
@@ -358,11 +364,13 @@ async def build_attack_surface(
     url_list_enabled: bool = Form(False),
     api_list_enabled: bool = Form(False),
     openapi_enabled: bool = Form(False),
+    gradle_deps_enabled: bool = Form(False),
     url_list_file: UploadFile | None = File(None),
     api_list_file: UploadFile | None = File(None),
-    openapi_file: UploadFile | None = File(None),
+    openapi_files: list[UploadFile] | None = File(None),
+    gradle_deps_files: list[UploadFile] | None = File(None),
 ) -> BuildInventoryResponse:
-    if not any([url_list_enabled, api_list_enabled, openapi_enabled]):
+    if not any([url_list_enabled, api_list_enabled, openapi_enabled, gradle_deps_enabled]):
         return BuildInventoryResponse(
             ok=False,
             stats=InventoryStats(),
@@ -373,10 +381,12 @@ async def build_attack_surface(
     batch_dir = ensure_batch_dir(UPLOAD_DIR, batch_id)
     url_list_path: Path | None = None
     api_list_path: Path | None = None
-    openapi_path: Path | None = None
+    openapi_paths: list[Path] = []
+    gradle_dep_paths: list[Path] = []
     url_list_name: str | None = None
     api_list_name: str | None = None
-    openapi_name: str | None = None
+    openapi_names: list[str] = []
+    gradle_dep_names: list[str] = []
 
     if url_list_enabled:
         if not url_list_file or not url_list_file.filename:
@@ -397,21 +407,104 @@ async def build_attack_surface(
         await _save_upload(api_list_file, api_list_path)
 
     if openapi_enabled:
-        if not openapi_file or not openapi_file.filename:
+        if not openapi_files:
             return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Swagger file required.")
-        if not _ext_ok(openapi_file.filename, {".json", ".yaml", ".yml"}):
-            return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Swagger file: use .json or .yaml")
-        openapi_name = f"openapi{Path(openapi_file.filename).suffix.lower()}"
-        openapi_path = batch_dir / openapi_name
-        await _save_upload(openapi_file, openapi_path)
+        for index, upload in enumerate(openapi_files):
+            if not upload.filename:
+                continue
+            if not _ext_ok(upload.filename, {".json", ".yaml", ".yml"}):
+                return BuildInventoryResponse(
+                    ok=False,
+                    stats=InventoryStats(),
+                    message=f"Swagger file: use .json or .yaml ({upload.filename})",
+                )
+            suffix = Path(upload.filename).suffix.lower()
+            stored_path = batch_dir / f"openapi_{index}{suffix}"
+            await _save_upload(upload, stored_path)
+            openapi_paths.append(stored_path)
+            openapi_names.append(upload.filename)
+        if not openapi_paths:
+            return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Swagger file required.")
+
+    if gradle_deps_enabled:
+        if not gradle_deps_files:
+            return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Gradle dependency file required.")
+        gradle_dep_warnings: list[str] = []
+        for index, upload in enumerate(gradle_deps_files):
+            if not upload.filename:
+                continue
+            if not _ext_ok(upload.filename, {".txt"}):
+                return BuildInventoryResponse(
+                    ok=False,
+                    stats=InventoryStats(),
+                    message=f"Gradle dependency file: use .txt ({upload.filename})",
+                )
+            stored_name = f"deps_{index}.txt"
+            stored_path = batch_dir / stored_name
+            raw_bytes = await upload.read()
+            stored_path.parent.mkdir(parents=True, exist_ok=True)
+            stored_path.write_bytes(raw_bytes)
+            gradle_dep_paths.append(stored_path)
+            gradle_dep_names.append(upload.filename)
+            # 가볍게 지원 형식 여부 확인 (경고만, 저장은 완료)
+            try:
+                preview = raw_bytes[:4096].decode("utf-8", errors="replace")
+                _gradle_markers = ("runtimeClasspath", "+---", "\\---")
+                _maven_markers = ("[INFO]", "maven-dependency-plugin")
+                _pip_markers = ("==",)
+                _npm_markers = ('"dependencies"', '"packages"', '"version"')
+                recognized = (
+                    any(m in preview for m in _gradle_markers)
+                    or any(m in preview for m in _maven_markers)
+                    or preview.strip().startswith("{")
+                    or sum(1 for l in preview.splitlines()[:20]
+                           if re.search(r"[A-Za-z0-9_.-]+==", l)) >= 2
+                )
+                if not recognized:
+                    gradle_dep_warnings.append(
+                        f"{upload.filename}: 지원 형식(Gradle/Maven/pip/npm)이 아닐 수 있음"
+                    )
+            except Exception:
+                pass
+        if not gradle_dep_paths:
+            return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Gradle dependency file required.")
+        # 컨테이너 내부 절대경로 목록을 JSON에 저장 → diagnosis_service._context()가 읽음
+        dep_abs_paths = [str(p.resolve()) for p in gradle_dep_paths]
+        gradle_dep_files_json = DATA_DIR / "gradle_dep_files.json"
+        gradle_dep_files_json.write_text(
+            json.dumps({"paths": dep_abs_paths, "batch_id": batch_id}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    elif (DATA_DIR / "gradle_dep_files.json").is_file() and not gradle_deps_enabled:
+        # 명시적으로 비활성화한 경우 기존 파일 유지 (다른 업로드만 수행 중)
+        pass
 
     write_batch_manifest(
         batch_dir,
         batch_id=batch_id,
         url_list=url_list_name,
         api_list=api_list_name,
-        openapi=openapi_name,
+        openapi=openapi_names,
+        gradle_deps=gradle_dep_names if gradle_dep_names else None,
     )
+
+    # ── Gradle/Maven/pip/npm 의존성 파일만 올린 경우 ──────────────────────
+    # 엔드포인트 인벤토리(url_list/api_list/openapi)는 손대지 않고,
+    # 기존에 빌드돼 있던 api-tree를 그대로 둔 채 성공 처리한다.
+    if gradle_dep_names and not (url_list_enabled or api_list_enabled or openapi_enabled):
+        prune_upload_batches(UPLOAD_DIR)
+        existing_tree = _load_cached_tree("ready")
+        existing_stats = (
+            InventoryStats(**compute_stats(existing_tree))
+            if existing_tree
+            else InventoryStats()
+        )
+        return BuildInventoryResponse(
+            ok=True,
+            stats=existing_stats,
+            artifacts={"upload_batch": f"uploads/{batch_id}"},
+            message=f"Saved {len(gradle_dep_names)} dependency file(s) for scanning ({', '.join(gradle_dep_names)}).",
+        )
 
     cfg = load_config()
     saved_bases = resolved_base_url_strings()
@@ -436,21 +529,24 @@ async def build_attack_surface(
         openapi=openapi_enabled,
         url_list_path=url_list_path,
         api_list_path=api_list_path,
-        openapi_path=openapi_path,
+        openapi_paths=openapi_paths,
+        openapi_source_names=openapi_names,
         base_urls=build_bases or None,
     )
 
-    if not tree.endpoints:
+    if not tree.endpoints and not gradle_dep_names:
         return BuildInventoryResponse(
             ok=False,
             stats=InventoryStats(**compute_stats(tree)),
             message="No endpoints collected from uploaded files.",
         )
 
-    artifacts = persist_inventory(tree, DATA_DIR, openapi_path)
+    artifacts = persist_inventory(tree, DATA_DIR, openapi_paths)
     artifacts["upload_batch"] = f"uploads/{batch_id}"
-    if openapi_path is not None:
-        artifacts["openapi_upload"] = f"uploads/{batch_id}/{openapi_name}"
+    if openapi_paths:
+        artifacts["openapi_uploads"] = [
+            f"uploads/{batch_id}/{path.name}" for path in openapi_paths
+        ]
     prune_upload_batches(UPLOAD_DIR)
     stats = InventoryStats(**compute_stats(tree))
     return BuildInventoryResponse(
@@ -459,7 +555,6 @@ async def build_attack_surface(
         artifacts=artifacts,
         message=f"Built attack surface map with {stats.api_endpoints} API endpoints.",
     )
-
 
 def _config_path() -> Path:
     return CONFIG_PATH if CONFIG_PATH.is_file() else BACKEND_ROOT / "config.yaml"

@@ -1,4 +1,4 @@
-"""Orchestrate guideline 3-2 auth failure count limit scan."""
+"""3-2 인증 실패 횟수 제한 검사 오케스트레이션"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any
 from app.services.auth_probe_service import configured_login_entries, valid_login_accounts
 from app.services.test_accounts_service import load_test_accounts
 from diagnosis.context import DiagnosisContext
+from diagnosis.endpoint_auth_passes import load_login_report, pick_account_for_login_entry
 from diagnosis.result import DiagnosisFinding
 
 _MODULE_DIR = Path(__file__).resolve().parent
@@ -20,7 +21,7 @@ def _load_local(name: str):
     mod_name = f"diag_g32_{name}"
     spec = importlib.util.spec_from_file_location(mod_name, path)
     if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load {path}")
+        raise ImportError(f"{path}를 불러올 수 없습니다")
     mod = importlib.util.module_from_spec(spec)
     import sys
 
@@ -32,7 +33,7 @@ def _load_local(name: str):
 @dataclass
 class ScanOptions:
     timeout: float = 10.0
-    max_attempts: int = 12
+    max_attempts: int = 6
     interval_sec: float = 0.05
     wrong_password: str = "__ARGUS_INVALID_PASSWORD__"
     probe_account_email: str | None = None
@@ -52,7 +53,8 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
     cfg = raw.get("diagnosis_3_2") or raw.get("scan_3_2") or {}
     return ScanOptions(
         timeout=float(cfg.get("timeout", 10.0)),
-        max_attempts=max(3, min(int(cfg.get("max_attempts", 12)), 25)),
+        # 5회의 일반적인 실패 후 6번째 요청에서 잠금 신호가 나타날 수 있음
+        max_attempts=max(6, min(int(cfg.get("max_attempts", 6)), 25)),
         interval_sec=max(0.0, min(float(cfg.get("interval_sec", 0.05)), 2.0)),
         wrong_password=str(cfg.get("wrong_password") or "__ARGUS_INVALID_PASSWORD__"),
         probe_account_email=str(cfg["probe_account_email"]).strip()
@@ -61,28 +63,6 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
         strict=bool(cfg.get("strict", True)),
         max_login_entries=max(0, min(int(cfg.get("max_login_entries", 0)), 50)),
     )
-
-
-def _pick_account(
-    entry: dict[str, str],
-    *,
-    accounts: list[dict[str, str]],
-    override: str | None,
-) -> dict[str, str] | None:
-    if override:
-        for account in accounts:
-            if account.get("email") == override:
-                return account
-        return None
-
-    label = str(entry.get("label") or "").lower()
-    path = entry.get("url", "").lower()
-    if "admin" in label or "admin" in path:
-        for account in accounts:
-            if "admin" in account.get("email", "").lower():
-                return account
-
-    return accounts[0] if accounts else None
 
 
 def _overall_status(findings: list[DiagnosisFinding]) -> str:
@@ -107,20 +87,21 @@ def run_g32_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         return ScanResult(
             status="skipped",
             message=(
-                "No login endpoints — rebuild inventory (Build/Discover) and/or add login API "
-                "or page URLs under Dashboard Login Endpoints"
+                "로그인 엔드포인트가 없습니다 — 인벤토리를 재생성(Build/Discover)하거나 "
+                "대시보드 Login Endpoints에 로그인 API·페이지 URL을 추가하세요"
             ),
             stats={"login_entries": 0},
         )
     if not accounts:
         return ScanResult(
             status="skipped",
-            message="No test accounts — add a dedicated probe account in dashboard Test Accounts",
+            message="테스트 계정이 없습니다 — 대시보드 Test Accounts에 전용 probe 계정을 추가하세요",
             stats={"login_entries": len(entries), "accounts": 0},
         )
 
     rules_mod = _load_local("lockout_rules")
     probes_mod = _load_local("probes")
+    login_report = load_login_report(ctx.data_dir, ctx.raw_config)
 
     from diagnosis.progress_reporter import prepare, step_progress
 
@@ -141,10 +122,11 @@ def run_g32_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     entry_idx = 0
 
     for entry in entries:
-        account = _pick_account(
+        account = pick_account_for_login_entry(
             entry,
-            accounts=accounts,
-            override=opts.probe_account_email,
+            accounts,
+            login_report,
+            override_email=opts.probe_account_email,
         )
         if not account:
             continue
@@ -182,24 +164,24 @@ def run_g32_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     status = _overall_status(all_findings)
     if total_probed == 0:
         status = "skipped"
-        message = "No lockout probes executed"
+        message = "실행된 잠금 검사가 없습니다"
     elif combined_stats.get("errors", 0) == total_probed:
         status = "error"
-        message = "All lockout probes unreachable"
+        message = "모든 잠금 검사가 서버에 도달하지 못했습니다"
     elif status == "pass":
         message = (
-            f"Auth failure limit present on {total_limit}/{total_probed} login entry(s) "
-            f"({opts.max_attempts} attempts each)"
+            f"{total_probed}개 중 {total_limit}개 로그인 엔드포인트에서 인증 실패 제한 확인 "
+            f"(각 {opts.max_attempts}회 시도 내에서 5회 실패 정책 점검)"
         )
     elif status == "fail":
         message = (
-            f"Missing auth failure limit on {total_no_limit}/{total_probed} login entry(s) "
-            f"({opts.max_attempts} wrong-password attempts)"
+            f"{total_probed}개 중 {total_no_limit}개 로그인 엔드포인트에 인증 실패 제한 없음 "
+            f"(5회 연속 실패 후에도 제한 없음; 각 {opts.max_attempts}회 시도)"
         )
     else:
-        message = f"Auth failure limit scan: {total_probed} login entry(s)"
+        message = f"인증 실패 제한 검사: 로그인 엔드포인트 {total_probed}개"
 
     if total_limit and total_no_limit:
-        message += f" — mixed ({total_limit} ok, {total_no_limit} missing)"
+        message += f" — 혼재 (정상 {total_limit}개, 누락 {total_no_limit}개)"
 
     return ScanResult(findings=all_findings, stats=combined_stats, status=status, message=message)

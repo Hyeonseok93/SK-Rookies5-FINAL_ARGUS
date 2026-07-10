@@ -1,28 +1,44 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, ChevronDown, Loader2, Stethoscope } from "lucide-react";
+import { G12DiagnosisStartDialog } from "./G12DiagnosisStartDialog";
 import { G32DiagnosisStartDialog } from "./G32DiagnosisStartDialog";
 import { G34DiagnosisStartDialog } from "./G34DiagnosisStartDialog";
 import { G35DiagnosisStartDialog } from "./G35DiagnosisStartDialog";
 import { G36DiagnosisStartDialog } from "./G36DiagnosisStartDialog";
 import { G42DiagnosisStartDialog } from "./G42DiagnosisStartDialog";
 import { G15DiagnosisStartDialog } from "./G15DiagnosisStartDialog";
+import { G21DiagnosisStartDialog } from "./G21DiagnosisStartDialog";
 import { G41DiagnosisStartDialog } from "./G41DiagnosisStartDialog";
 import { G52DiagnosisStartDialog } from "./G52DiagnosisStartDialog";
 import { G61DiagnosisStartDialog } from "./G61DiagnosisStartDialog";
 import { G62DiagnosisStartDialog } from "./G62DiagnosisStartDialog";
 import { G71DiagnosisStartDialog } from "./G71DiagnosisStartDialog";
-import { G21DiagnosisStartDialog } from "./G21DiagnosisStartDialog";
+
 import { G22DiagnosisStartDialog } from "./G22DiagnosisStartDialog";
+import { G22SectionInfoPopover } from "./diagnosis/G22SectionInfoPopover";
+import { G45SectionInfoPopover } from "./diagnosis/G45SectionInfoPopover";
 import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
 import { G74DiagnosisStartDialog } from "./G74DiagnosisStartDialog";
 import { fetchDiagnosisCatalog, fetchDiagnosisProgress, fetchDiagnosisReport, runDiagnosisSection } from "../lib/api";
+import {
+  DEFAULT_G12_OPTIONS,
+  g12OptionsSummary,
+  g12OptionsToPayload,
+  type G12DiagnosisOptions,
+} from "../lib/g12DiagnosisOptions";
 import {
   DEFAULT_G15_OPTIONS,
   g15OptionsSummary,
   g15OptionsToPayload,
   type G15DiagnosisOptions,
 } from "../lib/g15DiagnosisOptions";
+import {
+  DEFAULT_G21_OPTIONS,
+  g21OptionsSummary,
+  g21OptionsToPayload,
+  type G21DiagnosisOptions,
+} from "../lib/g21DiagnosisOptions";
 import {
   DEFAULT_G41_OPTIONS,
   g41OptionsSummary,
@@ -130,6 +146,42 @@ const START_BTN_IDLE =
 const UNAVAILABLE_BTN =
   "border-amber-400/50 bg-amber-500/15 text-amber-300 cursor-not-allowed";
 
+function progressRatio(progress: DiagnosisProgressResponse): number {
+  if (progress.endpoints_total > 0) {
+    return Math.min(
+      100,
+      Math.max(0, Math.round((progress.endpoints_done * 100) / progress.endpoints_total)),
+    );
+  }
+  return Math.min(100, Math.max(0, progress.percent));
+}
+
+function progressLabel(progress: DiagnosisProgressResponse): string {
+  const ratio = progressRatio(progress);
+  if (progress.phase === "zap") {
+    const count =
+      progress.endpoints_total > 0
+        ? ` · ${progress.endpoints_done}/${progress.endpoints_total}`
+        : "";
+    return `ZAP ${ratio}%${count}`;
+  }
+  if (progress.phase === "zap_verify") {
+    const count =
+      progress.endpoints_total > 0
+        ? ` · alert ${progress.endpoints_done}/${progress.endpoints_total}`
+        : "";
+    return `ZAP 검증 ${ratio}%${count}`;
+  }
+  if (progress.phase === "injector") {
+    const count =
+      progress.endpoints_total > 0
+        ? ` · Direct ${progress.endpoints_done}/${progress.endpoints_total}`
+        : "";
+    return `Direct ${ratio}%${count}`;
+  }
+  return `${ratio}%`;
+}
+
 function DiagnosisStartButton({
   compact = false,
   disabled,
@@ -222,12 +274,15 @@ export function DiagnosisPage() {
   const [reports, setReports] = useState<Record<string, DiagnosisSectionReport>>({});
   const [runningId, setRunningId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [g12DialogOpen, setG12DialogOpen] = useState(false);
+  const [g12Options, setG12Options] = useState<G12DiagnosisOptions>(DEFAULT_G12_OPTIONS);
   const [g15DialogOpen, setG15DialogOpen] = useState(false);
   const [g15Options, setG15Options] = useState<G15DiagnosisOptions>(DEFAULT_G15_OPTIONS);
-  const [g41DialogOpen, setG41DialogOpen] = useState(false);
-  const [g41Options, setG41Options] = useState<G41DiagnosisOptions>(DEFAULT_G41_OPTIONS);
   const [g21DialogOpen, setG21DialogOpen] = useState(false);
   const [g21Options, setG21Options] = useState<G21DiagnosisOptions>(DEFAULT_G21_OPTIONS);
+  const [g41DialogOpen, setG41DialogOpen] = useState(false);
+  const [g41Options, setG41Options] = useState<G41DiagnosisOptions>(DEFAULT_G41_OPTIONS);
+
   const [g22DialogOpen, setG22DialogOpen] = useState(false);
   const [g22Options, setG22Options] = useState<G22DiagnosisOptions>(DEFAULT_G22_OPTIONS);
   const [g72DialogOpen, setG72DialogOpen] = useState(false);
@@ -257,17 +312,6 @@ export function DiagnosisPage() {
   const [runningSummary, setRunningSummary] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState<DiagnosisProgressResponse | null>(null);
 
-  useProgressPoll(
-    runningId !== null,
-    fetchDiagnosisProgress,
-    (p) => {
-      if (p.section_id === runningId || p.running) {
-        setRunProgress(p);
-      }
-    },
-    1200,
-  );
-
   useEffect(() => {
     fetchDiagnosisCatalog()
       .then((res) => {
@@ -289,6 +333,29 @@ export function DiagnosisPage() {
     }
   }, []);
 
+  const handleProgressUpdate = useCallback(
+    (p: DiagnosisProgressResponse) => {
+      if (p.running && p.section_id) {
+        setRunningId(p.section_id);
+        setOpenId(p.section_id);
+        setRunProgress(p);
+        return;
+      }
+      setRunProgress(p);
+      setRunningId(null);
+      setRunningSummary(null);
+      if (p.section_id) void loadReport(p.section_id);
+    },
+    [loadReport],
+  );
+
+  useProgressPoll(
+    true,
+    fetchDiagnosisProgress,
+    handleProgressUpdate,
+    1200,
+  );
+
   const handleToggle = useCallback(
     (sectionId: string) => {
       setOpenId((prev) => {
@@ -303,7 +370,7 @@ export function DiagnosisPage() {
   const handleRun = useCallback(
     async (
       sectionId: string,
-      options?: G15DiagnosisOptions | G21DiagnosisOptions | G41DiagnosisOptions | G42DiagnosisOptions | G22DiagnosisOptions | G32DiagnosisOptions | G34DiagnosisOptions | G35DiagnosisOptions | G36DiagnosisOptions | G52DiagnosisOptions | G61DiagnosisOptions | G62DiagnosisOptions | G71DiagnosisOptions | G72DiagnosisOptions | G73DiagnosisOptions | G74DiagnosisOptions,
+      options?: G12DiagnosisOptions | G15DiagnosisOptions | G21DiagnosisOptions | G41DiagnosisOptions | G42DiagnosisOptions | G22DiagnosisOptions | G32DiagnosisOptions | G34DiagnosisOptions | G35DiagnosisOptions | G36DiagnosisOptions | G52DiagnosisOptions | G61DiagnosisOptions | G62DiagnosisOptions | G71DiagnosisOptions | G72DiagnosisOptions | G73DiagnosisOptions | G74DiagnosisOptions,
     ) => {
       const mod = catalogById[sectionId];
       if (!mod?.diagnosable || !mod?.implemented) return;
@@ -311,8 +378,12 @@ export function DiagnosisPage() {
       setError(null);
       setRunningId(sectionId);
       setOpenId(sectionId);
-      if (sectionId === "1-5" && options && "corsEnabled" in options) {
+      if (sectionId === "1-2" && options && "useDirect" in options) {
+        setRunningSummary(g12OptionsSummary(options as G12DiagnosisOptions));
+      } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
         setRunningSummary(g15OptionsSummary(options as G15DiagnosisOptions));
+      } else if (sectionId === "2-1" && options && "sellerEmail" in options) {
+        setRunningSummary(g21OptionsSummary(options as G21DiagnosisOptions));
       } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
         setRunningSummary(g41OptionsSummary(options as G41DiagnosisOptions));
       } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
@@ -351,8 +422,12 @@ export function DiagnosisPage() {
 
       try {
         let body;
-        if (sectionId === "1-5" && options && "corsEnabled" in options) {
+        if (sectionId === "1-2" && options && "useDirect" in options) {
+          body = g12OptionsToPayload(options as G12DiagnosisOptions);
+        } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
           body = g15OptionsToPayload(options as G15DiagnosisOptions);
+        } else if (sectionId === "2-1" && options && "sellerEmail" in options) {
+          body = g21OptionsToPayload(options as G21DiagnosisOptions);
         } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
           body = g41OptionsToPayload(options as G41DiagnosisOptions);
         } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
@@ -385,7 +460,12 @@ export function DiagnosisPage() {
           body = g74OptionsToPayload(options as G74DiagnosisOptions);
         }
         const res = await runDiagnosisSection(sectionId, body);
-        setReports((prev) => ({ ...prev, [sectionId]: res.report }));
+        // Async modules return no report here (accepted/async_run); the report
+        // arrives later via progress polling. Only store a report we actually got.
+        const report = res.report;
+        if (report) {
+          setReports((prev) => ({ ...prev, [sectionId]: report }));
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -401,8 +481,16 @@ export function DiagnosisPage() {
     (sectionId: string) => {
       const mod = catalogById[sectionId];
       if (!mod?.diagnosable || !mod?.implemented || runningId) return;
+      if (sectionId === "1-2") {
+        setG12DialogOpen(true);
+        return;
+      }
       if (sectionId === "1-5") {
         setG15DialogOpen(true);
+        return;
+      }
+      if (sectionId === "2-1") {
+        setG21DialogOpen(true);
         return;
       }
       if (sectionId === "4-1") {
@@ -470,11 +558,29 @@ export function DiagnosisPage() {
     [catalogById, handleRun, runningId],
   );
 
+  const handleG12Start = useCallback(
+    (options: G12DiagnosisOptions) => {
+      setG12Options(options);
+      setG12DialogOpen(false);
+      void handleRun("1-2", options);
+    },
+    [handleRun],
+  );
+
   const handleG15Start = useCallback(
     (options: G15DiagnosisOptions) => {
       setG15Options(options);
       setG15DialogOpen(false);
       void handleRun("1-5", options);
+    },
+    [handleRun],
+  );
+
+  const handleG21Start = useCallback(
+    (options: G21DiagnosisOptions) => {
+      setG21Options(options);
+      setG21DialogOpen(false);
+      void handleRun("2-1", options);
     },
     [handleRun],
   );
@@ -670,7 +776,34 @@ export function DiagnosisPage() {
                         <span className="shrink-0 rounded border border-cyber-border/60 bg-cyber-bg px-2 py-0.5 font-mono text-[11px] text-cyber-accent">
                           {section.id}
                         </span>
-                        <span className="flex-1 text-sm text-white">{section.title}</span>
+                        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                          <span className="text-sm text-white">{section.title}</span>
+                          {section.id === "2-2" ? (
+                            <span
+                              className="shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              <G22SectionInfoPopover />
+                            </span>
+                          ) : section.id === "4-5" ? (
+                            <span
+                              className="shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              <G45SectionInfoPopover />
+                            </span>
+                          ) : section.description ? (
+                            <div className="group relative flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+                              <AlertCircle className="h-3.5 w-3.5 text-cyber-muted transition group-hover:text-cyan-400" />
+                              <div className="absolute left-1/2 top-full mt-2 hidden w-72 -translate-x-1/2 rounded border border-cyber-border/80 bg-cyber-bg px-3 py-2 text-xs text-white/90 shadow-xl group-hover:block z-50 whitespace-pre-wrap text-left leading-relaxed">
+                                {section.description}
+                                <div className="absolute -top-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-t border-l border-cyber-border/80 bg-cyber-bg"></div>
+                              </div>
+                            </div>
+                          ) : null}
+                        </span>
                         {badgeLabel ? (
                           <span
                             className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] ${
@@ -710,7 +843,46 @@ export function DiagnosisPage() {
                         />
                       </button>
                     </div>
-                    {open && report ? <DiagnosisReportPanel report={report} /> : null}
+                    {open && running ? (
+                      <div className="space-y-2 border-t border-cyber-border/40 px-4 py-3 text-xs text-cyan-300/90">
+                        <div className="flex items-center gap-2">
+                          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                          <span>
+                            진단 실행 중…
+                            {runningSummary ? ` (${runningSummary})` : null}
+                          </span>
+                        </div>
+                        {runProgress && runProgress.section_id === section.id ? (
+                          <>
+                            <div className="h-1.5 overflow-hidden rounded-full bg-cyber-border/40">
+                              <div
+                                className="h-full rounded-full bg-cyan-400/80 transition-all duration-500"
+                                style={{ width: `${Math.max(2, progressRatio(runProgress))}%` }}
+                              />
+                            </div>
+                            <p className="font-mono text-[10px] text-cyber-muted">
+                              {progressLabel(runProgress)}
+                              {runProgress.requests_sent > 0
+                                ? ` · 요청 ${runProgress.requests_sent.toLocaleString()}`
+                                : null}
+                              {runProgress.requests_cap
+                                ? ` / ${runProgress.requests_cap.toLocaleString()}`
+                                : runProgress.phase !== "zap" && runProgress.requests_sent > 0
+                                  ? " · 무제한"
+                                  : null}
+                            </p>
+                            {runProgress.message ? (
+                              <p className="truncate text-[10px] text-white/80">{runProgress.message}</p>
+                            ) : null}
+                          </>
+                        ) : runningSummary?.includes("ZAP") ? (
+                          <p className="text-[10px] text-cyber-muted">
+                            ZAP은 수십 분 걸릴 수 있습니다
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {open && !running && report ? <DiagnosisReportPanel report={report} /> : null}
                     {open && !report && !running && reviewLater ? (
                       <div className="border-t border-amber-400/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200/90">
                         추후 검토 — 자동 진단 범위에 포함되지 않습니다.
@@ -727,50 +899,6 @@ export function DiagnosisPage() {
                         저장된 리포트 없음 — 「진단 시작」을 눌러 실행하세요.
                       </div>
                     ) : null}
-                    {open && running ? (
-                      <div className="space-y-2 border-t border-cyber-border/40 px-4 py-3 text-xs text-cyan-300/90">
-                        <div className="flex items-center gap-2">
-                          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-                          <span>
-                            진단 실행 중…
-                            {runningSummary ? ` (${runningSummary})` : null}
-                          </span>
-                        </div>
-                        {runProgress && runProgress.section_id === section.id ? (
-                          <>
-                            <div className="h-1.5 overflow-hidden rounded-full bg-cyber-border/40">
-                              <div
-                                className="h-full rounded-full bg-cyan-400/80 transition-all duration-500"
-                                style={{ width: `${Math.max(2, runProgress.percent)}%` }}
-                              />
-                            </div>
-                            <p className="font-mono text-[10px] text-cyber-muted">
-                              {runProgress.percent > 0
-                                ? `${runProgress.percent}%`
-                                : "0%"}
-                              {runProgress.endpoints_total > 0
-                                ? ` · API ${runProgress.endpoints_done}/${runProgress.endpoints_total}`
-                                : null}
-                              {runProgress.requests_sent > 0
-                                ? ` · 요청 ${runProgress.requests_sent.toLocaleString()}`
-                                : null}
-                              {runProgress.requests_cap
-                                ? ` / ${runProgress.requests_cap.toLocaleString()}`
-                                : runProgress.requests_sent > 0
-                                  ? " · 무제한"
-                                  : null}
-                            </p>
-                            {runProgress.message ? (
-                              <p className="truncate text-[10px] text-white/80">{runProgress.message}</p>
-                            ) : null}
-                          </>
-                        ) : runningSummary?.includes("ZAP") ? (
-                          <p className="text-[10px] text-cyber-muted">
-                            ZAP은 수십 분 걸릴 수 있습니다
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : null}
                   </div>
                 );
               })}
@@ -779,11 +907,23 @@ export function DiagnosisPage() {
         ))}
       </div>
 
+      <G12DiagnosisStartDialog
+        open={g12DialogOpen && !runningId}
+        initialOptions={g12Options}
+        onClose={() => setG12DialogOpen(false)}
+        onStart={handleG12Start}
+      />
       <G15DiagnosisStartDialog
         open={g15DialogOpen && !runningId}
         initialOptions={g15Options}
         onClose={() => setG15DialogOpen(false)}
         onStart={handleG15Start}
+      />
+      <G21DiagnosisStartDialog
+        open={g21DialogOpen && !runningId}
+        initialOptions={g21Options}
+        onClose={() => setG21DialogOpen(false)}
+        onStart={handleG21Start}
       />
       <G41DiagnosisStartDialog
         open={g41DialogOpen && !runningId}

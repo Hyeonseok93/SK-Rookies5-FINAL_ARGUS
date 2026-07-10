@@ -43,7 +43,7 @@ class ScanOptions:
     )
     logout_enabled: bool = True
     client_logout_enabled: bool = True
-    refresh_path: str = "/api/v1/auth/refresh"
+    refresh_path: str | None = None
     no_server_logout_finding: bool = True
 
 
@@ -78,8 +78,11 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
         or ["203.0.113.10", "198.51.100.20"],
         logout_enabled=bool(cfg.get("logout_enabled", True)),
         client_logout_enabled=bool(cfg.get("client_logout_enabled", True)),
-        refresh_path=str(cfg.get("refresh_path", "/api/v1/auth/refresh")).strip()
-        or "/api/v1/auth/refresh",
+        refresh_path=(
+            str(cfg["refresh_path"]).strip()
+            if cfg.get("refresh_path")
+            else None
+        ),
         no_server_logout_finding=bool(cfg.get("no_server_logout_finding", True)),
     )
 
@@ -154,6 +157,7 @@ def run_g42_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         login_report,
         raw_config=raw,
         override_email=opts.probe_account_email,
+        probe_path=opts.probe_path,
     )
     login_url = None
     if account:
@@ -278,13 +282,24 @@ def run_g42_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                             login_url=login_url,
                         )
                     )
+            refresh_path = opts.refresh_path
+            if not refresh_path:
+                refresh_path = targets.resolve_refresh_path_for_base(
+                    raw,
+                    base_url=base_url,
+                    data_dir=ctx.data_dir,
+                )
+            stats["refresh_path"] = refresh_path
+            stats["refresh_paths_inventory"] = targets.discover_refresh_paths(
+                raw, data_dir=ctx.data_dir
+            )
             client_findings, client_stats = lifecycle.probe_client_only_logout(
                 auth_cfg,
                 account,
                 login_url,
                 base_url=base_url,
                 probe_path=opts.probe_path,
-                refresh_path=opts.refresh_path,
+                refresh_path=refresh_path,
                 timeout=opts.timeout,
             )
             lifecycle_stats["client_logout"] = client_stats

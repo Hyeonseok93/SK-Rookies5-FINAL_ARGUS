@@ -1,0 +1,7 @@
+id: "1-4"
+title: "SSRF / File Inclusion 공격 가능성"
+chapter: 1
+implemented: false
+diagnosable: false
+status_label: "수동 진단"
+engine: pending

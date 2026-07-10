@@ -44,11 +44,45 @@ auth:
   delivery: cookie
   cookie_name: accessToken
 
+diagnosis_1_3:
+  min_score: 2
+  max_candidates: 80
+  max_mutations_per_param: 5
+  httpx_enabled: true
+  scan_all_inventory: false
+  # Phase 4 (llm_interpret.py) — RawFinding 해석에만 사용, 탐지 자체는 LLM 비의존.
+  # Claude를 쓰려면 ANTHROPIC_API_KEY 환경변수를 설정 (여기에 키를 직접 쓰지 않음).
+  llm_interpret_enabled: true
+  ollama_base_url: "http://localhost:11434"
+  ollama_model: "qwen2.5:7b"
+
 diagnosis_1_5:
   redirect_sink_base: "http://127.0.0.1:8001/argus-redirect-sink"
-  probe_mode: sample
+  probe_mode: full
   sample_size: 60
+  max_phase_a_jobs: 5000
+  max_phase_b_jobs: 10000
   zap_enabled: false
+
+diagnosis_1_6:
+  # ui_target left unset on purpose: scanner.py falls back to
+  # inventory.markdown.frontend_base_url (above) when it's absent. Verified
+  # equal to the old explicit value (http://localhost:5173) before removing it.
+  # ui_target: "http://localhost:5173"
+  zap_host: "127.0.0.1"
+  skip_zap: true
+  skip_spider: true
+  skip_selenium: true
+  timeout_sec: 36000
+  max_report_findings: 50
+  # role_login_targets/role_login_paths left unset on purpose: scanner.py
+  # auto-discovers login endpoints per role from the uploaded api-tree
+  # (g16_auth.auto_role_login_targets) when these are absent. Verified to
+  # produce the exact same values as below before removing them:
+  # role_login_targets:
+  #   admin: "http://localhost:8080"
+  # role_login_paths:
+  #   admin: "/api/v1/auth/admin/login"
 
 diagnosis_4_1:
   probe_mode: sample
@@ -98,12 +132,6 @@ diagnosis_6_1:
   enable_header_fuzz: true
   enable_auth_modes: true
   httpx_enabled: true
-  zap_enabled: true
-  zap_unified_enabled: true
-  zap_supplemental_enabled: true
-  zap_max_requests: 8000
-  zap_max_minutes: 15
-  zap_seed_cap: 200
 
 diagnosis_4_2:
   timeout: 10.0
@@ -120,5 +148,4 @@ diagnosis_4_2:
   logout_enabled: true
   logout_urls: []
   client_logout_enabled: true
-  refresh_path: "/api/v1/auth/refresh"
   no_server_logout_finding: true

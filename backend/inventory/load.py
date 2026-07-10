@@ -8,17 +8,36 @@ from pathlib import Path
 from inventory.schema import ApiTree
 
 BEST_TREE_FILES = ("api-tree-verified.json", "api-tree-ready.json", "api-tree.json")
+PARAM_DISCOVERY_TREE_FILES = ("api-tree-verified.json", "api-tree-ready.json")
 
 
 def load_best_api_tree(data_dir: Path | None) -> ApiTree | None:
     """Prefer verified tree, then ready, then legacy api-tree.json."""
+    tree, _source = load_param_discovery_api_tree(data_dir, include_legacy=True)
+    return tree
+
+
+def load_param_discovery_api_tree(
+    data_dir: Path | None,
+    *,
+    include_legacy: bool = False,
+) -> tuple[ApiTree | None, str | None]:
+    """
+    Load api-tree for download param discovery.
+
+    Default order: verified → ready.
+    When ``include_legacy`` is True, also tries ``api-tree.json`` (general diagnosis).
+    """
     if data_dir is None:
-        return None
-    for name in BEST_TREE_FILES:
+        return None, None
+    names = PARAM_DISCOVERY_TREE_FILES
+    if include_legacy:
+        names = BEST_TREE_FILES
+    for name in names:
         path = data_dir / name
         if path.is_file():
-            return ApiTree.load(path)
-    return None
+            return ApiTree.load(path), name
+    return None, None
 
 
 # Alias used across diagnosis modules
@@ -37,26 +56,36 @@ def load_cached_tree(data_dir: Path, *, inventory: str = "ready") -> ApiTree | N
     return None
 
 
-def find_openapi_spec(data_dir: Path) -> Path | None:
-    """Latest uploaded OpenAPI spec from bundle metadata or newest uploads batch."""
+def find_openapi_specs(data_dir: Path) -> list[Path]:
+    """All uploaded OpenAPI specs referenced by the current ZAP bundle."""
     from inventory.upload_batch import resolve_openapi_ref
 
     bundle_path = data_dir / "zap-inventory-bundle.json"
     if bundle_path.is_file():
         raw = json.loads(bundle_path.read_text(encoding="utf-8"))
+        found_specs: list[Path] = []
         for item in raw.get("openapi_imports") or []:
             found = resolve_openapi_ref(data_dir, str(item.get("file", "")))
             if found is not None:
-                return found
+                found_specs.append(found)
+        if found_specs:
+            return found_specs
 
     uploads = data_dir / "uploads"
     if not uploads.is_dir():
-        return None
+        return []
 
-    patterns = ("*/openapi.json", "*/openapi.yaml", "*/openapi.yml")
+    patterns = ("*/openapi*.json", "*/openapi*.yaml", "*/openapi*.yml")
     candidates: list[Path] = []
     for pattern in patterns:
         candidates.extend(uploads.glob(pattern))
-    if candidates:
-        return max(candidates, key=lambda p: p.stat().st_mtime).resolve()
-    return None
+    if not candidates:
+        return []
+    newest_parent = max(candidates, key=lambda p: p.stat().st_mtime).parent
+    return sorted(path.resolve() for path in candidates if path.parent == newest_parent)
+
+
+def find_openapi_spec(data_dir: Path) -> Path | None:
+    """Backward-compatible first-spec helper."""
+    specs = find_openapi_specs(data_dir)
+    return specs[0] if specs else None

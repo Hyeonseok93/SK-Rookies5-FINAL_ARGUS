@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { Check, FileJson, Globe, Server, X } from "lucide-react";
+import { Check, FileJson, Globe, Package, Server, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import apiEx1Img from "../assets/API_EX1.png";
 import apiEx2Img from "../assets/API_EX2.png";
@@ -123,7 +123,7 @@ interface BuildSourcePanelProps {
   sources: SourceOption[];
   files: SourceFiles;
   building: boolean;
-  onFileSelect: (id: SourceId, file: File | null) => void;
+  onFileSelect: (id: SourceId | "gradle_deps", file: File | File[] | null) => void;
   onBuild: () => void;
   onClose: () => void;
 }
@@ -137,10 +137,13 @@ export function BuildSourcePanel({
   onBuild,
   onClose,
 }: BuildSourcePanelProps) {
-  const inputRefs = useRef<Partial<Record<SourceId, HTMLInputElement | null>>>({});
-  const readyCount = sources.filter((s) => files[s.id] != null).length;
+  const inputRefs = useRef<Partial<Record<SourceId | "gradle_deps", HTMLInputElement | null>>>({});
+  const readyCount =
+    sources.filter((source) =>
+      source.id === "openapi" ? files.openapi.length > 0 : files[source.id] != null,
+    ).length + (files.gradle_deps.length > 0 ? 1 : 0);
 
-  const openPicker = (id: SourceId) => {
+  const openPicker = (id: SourceId | "gradle_deps") => {
     inputRefs.current[id]?.click();
   };
 
@@ -171,7 +174,7 @@ export function BuildSourcePanel({
           <div className="grid gap-3 overflow-visible p-5 pt-8 sm:grid-cols-3">
             {sources.map((source) => {
               const id = source.id;
-              const hasFile = files[id] != null;
+              const hasFile = id === "openapi" ? files.openapi.length > 0 : files[id] != null;
               const Icon = SOURCE_ICONS[id];
               const exampleImages = SOURCE_EXAMPLES[id];
 
@@ -185,11 +188,18 @@ export function BuildSourcePanel({
                       inputRefs.current[id] = el;
                     }}
                     type="file"
+                    multiple={id === "openapi"}
                     accept={FILE_ACCEPT[id]}
                     className="hidden"
                     onChange={(e) => {
-                      const file = e.target.files?.[0] ?? null;
-                      onFileSelect(id, file);
+                      if (id === "openapi") {
+                        const selected = Array.from(e.target.files ?? []);
+                        const byName = new Map(files.openapi.map((file) => [file.name, file]));
+                        for (const file of selected) byName.set(file.name, file);
+                        onFileSelect(id, Array.from(byName.values()));
+                      } else {
+                        onFileSelect(id, e.target.files?.[0] ?? null);
+                      }
                       e.target.value = "";
                     }}
                   />
@@ -223,12 +233,153 @@ export function BuildSourcePanel({
                       </div>
                     </div>
                     <p className="mt-3 truncate text-sm font-semibold text-white">
-                      {hasFile ? files[id]!.name : SOURCE_LABELS[id]}
+                      {id === "openapi" && files.openapi.length > 1
+                        ? `${files.openapi.length} Swagger files`
+                        : id === "openapi" && files.openapi.length === 1
+                          ? files.openapi[0].name
+                          : hasFile
+                            ? (files[id] as File).name
+                            : SOURCE_LABELS[id]}
                     </p>
                   </button>
+                  {id === "openapi" && files.openapi.length > 1 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {files.openapi.map((file) => (
+                        <span
+                          key={file.name}
+                          className="inline-flex max-w-full items-center gap-1 rounded border border-cyber-accent/30 bg-cyber-accent/10 px-2 py-1 text-[10px] text-cyber-accent"
+                        >
+                          <span className="truncate">{file.name}</span>
+                          <button
+                            type="button"
+                            className="shrink-0 rounded hover:text-white"
+                            aria-label={`Remove ${file.name}`}
+                            onClick={() =>
+                              onFileSelect(
+                                "openapi",
+                                files.openapi.filter((item) => item.name !== file.name),
+                              )
+                            }
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
+          </div>
+
+          {/* ── Gradle 의존성 파일 업로드 ── */}
+          <div className="border-t border-cyber-border/40 px-5 py-4">
+            <div className="mb-3 flex items-center gap-2">
+              <Package className="h-4 w-4 text-emerald-400" strokeWidth={1.5} />
+              <p className="text-sm font-semibold text-white">Gradle 의존성 파일 (deps.txt)</p>
+              <span className="ml-auto text-[10px] text-cyber-muted">SCA / 7-4</span>
+            </div>
+            <p className="mb-3 text-[10px] leading-relaxed text-cyber-muted">
+              형식별 명령어:
+              {" "}<code className="rounded bg-cyber-border/40 px-1 py-0.5 font-mono text-cyan-300/80">
+                Gradle: ./gradlew :&lt;module&gt;:dependencies --configuration runtimeClasspath
+              </code>
+              {" / "}
+              <code className="rounded bg-cyber-border/40 px-1 py-0.5 font-mono text-cyan-300/80">
+                Maven: mvn dependency:tree -Dscope=runtime
+              </code>
+              {" / "}
+              <code className="rounded bg-cyber-border/40 px-1 py-0.5 font-mono text-cyan-300/80">
+                pip: pip freeze
+              </code>
+              {" / "}
+              <code className="rounded bg-cyber-border/40 px-1 py-0.5 font-mono text-cyan-300/80">
+                npm: npm ls --all --json
+              </code>
+              {" "}— 형식 자동 감지 (여러 파일 동시 업로드 가능)
+            </p>
+
+            <input
+              ref={(el) => { inputRefs.current["gradle_deps"] = el; }}
+              type="file"
+              multiple
+              accept=".txt"
+              className="hidden"
+              onChange={(e) => {
+                const selected = Array.from(e.target.files ?? []);
+                const byName = new Map(files.gradle_deps.map((f) => [f.name, f]));
+                for (const f of selected) byName.set(f.name, f);
+                onFileSelect("gradle_deps", Array.from(byName.values()));
+                e.target.value = "";
+              }}
+            />
+
+            <button
+              type="button"
+              onClick={() => openPicker("gradle_deps")}
+              className={`w-full rounded-lg border p-3 text-left transition-all duration-200 ${
+                files.gradle_deps.length > 0
+                  ? "border-emerald-400/60 bg-emerald-500/10"
+                  : "border-cyber-border bg-cyber-bg/60 hover:border-emerald-400/30 hover:bg-emerald-500/5"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div
+                  className={`rounded-lg p-2 ${
+                    files.gradle_deps.length > 0
+                      ? "bg-emerald-500/20 text-emerald-400"
+                      : "bg-cyber-border/40 text-cyber-muted"
+                  }`}
+                >
+                  <Package className="h-4 w-4" strokeWidth={1.5} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="truncate text-xs font-medium text-white">
+                    {files.gradle_deps.length === 0
+                      ? ".txt 파일 선택 (멀티 선택 가능)"
+                      : files.gradle_deps.length === 1
+                        ? files.gradle_deps[0].name
+                        : `${files.gradle_deps.length}개 deps 파일`}
+                  </p>
+                  <p className="text-[10px] text-cyber-muted">멀티모듈 프로젝트는 모듈별 .txt 파일 각각 업로드</p>
+                </div>
+                <div
+                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition ${
+                    files.gradle_deps.length > 0
+                      ? "border-emerald-400 bg-emerald-400 text-cyber-bg"
+                      : "border-cyber-border bg-transparent"
+                  }`}
+                >
+                  {files.gradle_deps.length > 0 && <Check className="h-3 w-3" strokeWidth={3} />}
+                </div>
+              </div>
+            </button>
+
+            {files.gradle_deps.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {files.gradle_deps.map((file) => (
+                  <span
+                    key={file.name}
+                    className="inline-flex max-w-full items-center gap-1 rounded border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300"
+                  >
+                    <span className="truncate">{file.name}</span>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded hover:text-white"
+                      aria-label={`Remove ${file.name}`}
+                      onClick={() =>
+                        onFileSelect(
+                          "gradle_deps",
+                          files.gradle_deps.filter((item) => item.name !== file.name),
+                        )
+                      }
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex items-center justify-end gap-2 border-t border-cyber-border px-5 py-3">

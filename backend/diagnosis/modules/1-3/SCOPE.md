@@ -158,6 +158,9 @@ couponId, point, points, commissionRate
 | 2 | ZAP Rule **40008** Parameter Tampering merge |
 | 3 | 계정 A 로그인 + **계정 B** `memberId` 교차 probe |
 | 4 | Value Generator 스타일 **필드명→mutation** YAML 확장 |
+| 5 | **LLM 해석 단계 (Phase 4, `llm_interpret.py`)** — `compare.py`가 규칙 기반으로 1차 탐지한 `RawFinding`을 LLM(Claude/Ollama)이 해석해 취약 여부·severity·설명을 확정. ARGUS_Backend를 그대로 포팅. **탐지 자체(Phase 2/3)는 여전히 LLM 미사용·유계 실행시간** — LLM은 이미 잡힌 이상 징후에 대한 보강 역할로만 개입하므로 v1의 "규칙 기반이라 자동화에 안전" 특성은 유지됨. `diagnosis_1_3.llm_interpret_enabled: false`로 언제든 v1 동작(규칙 기반만)으로 되돌릴 수 있음. |
+
+> ARGUS_Backend에는 원래 LLM이 퍼징 **전**에 파라미터 이름만 보고 분류하는 구조였는데, 이 호출에 timeout이 없어 celery 워커가 수 시간째 멈추는 사고가 있었다. 그 경험으로 LLM을 퍼징 **후** 해석 단계로 옮기고 timeout을 명시했다 — 이 모듈(1-3)에 동일하게 반영됨 (`llm_interpret.py` 참고).
 
 ---
 
@@ -173,14 +176,15 @@ modules/1-3/
   param_classify.py
   mutations.py
   probes.py
-  compare.py
+  compare.py                # Phase 3 — 규칙 기반 1차 탐지 (RawFinding 반환, LLM 미사용)
+  llm_interpret.py          # Phase 4 — LLM 해석/확정 (timeout 적용, 실패 시 규칙 기반 폴백)
   design_review.py
   assets/
     sensitive-param-patterns.yaml
     mutation-values.yaml
-  reports/
-    latest.yaml
 ```
+
+리포트는 `modules/1-3/reports/`가 아니라 `data/report/1-3/latest.yaml`에 저장됩니다 (README 공통 규칙).
 
 ---
 
@@ -188,11 +192,11 @@ modules/1-3/
 
 ### v1
 
-- [ ] `SCOPE.md` 확정 (이 문서)
-- [ ] `sensitive-param-patterns.yaml`
-- [ ] `candidates.py` + inventory tag `1-3-candidate`
-- [ ] `probes.py` baseline + single-param mutation
-- [ ] `compare.py` JSON/business diff
-- [ ] `scanner.py` + `module.py`
-- [ ] PoC: `insurances/calculate`, `report/integrated`
-- [ ] Replay baseline / mutated / compare
+- [x] `SCOPE.md` 확정 (이 문서)
+- [x] `sensitive-param-patterns.yaml`
+- [x] `candidates.py` (`score_candidate` — sensitive param 이름 기반 스코어링, endpoint 태깅 없이 직접 계산)
+- [x] `probes.py` baseline(전체 필드) + single-param mutation (`inventory.probe_build` 재사용)
+- [x] `compare.py` JSON/business diff (PRIVILEGE_BYPASS / DATA_EXPOSURE / POTENTIAL_IDOR / ERROR_SUPPRESSED)
+- [x] `scanner.py` + `module.py`
+- [ ] PoC: `insurances/calculate`, `report/integrated` (실제 대상 대비 수동 검증 — 아직 미실시)
+- [ ] Replay baseline / mutated / compare evidence 저장 (v1.1 — `diagnosis.paths.section_evidence_dir` 연동)

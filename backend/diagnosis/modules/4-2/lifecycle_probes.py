@@ -22,9 +22,11 @@ def _probe_refresh_token(
     client: httpx.Client,
     *,
     base_url: str,
-    refresh_path: str,
+    refresh_path: str | None,
     session: dict[str, Any],
 ) -> tuple[int, str]:
+    if not refresh_path:
+        return 0, "no_refresh_path"
     refresh = str(session.get("refresh_token") or "").strip()
     if not refresh:
         return 0, "no_refresh_token"
@@ -413,7 +415,7 @@ def probe_client_only_logout(
     *,
     base_url: str,
     probe_path: str,
-    refresh_path: str,
+    refresh_path: str | None,
     timeout: float,
 ) -> tuple[list[DiagnosisFinding], dict[str, Any]]:
     """

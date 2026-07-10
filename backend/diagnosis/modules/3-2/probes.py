@@ -1,4 +1,4 @@
-"""Repeated failed-login probes for guideline 3-2."""
+"""반복 로그인 실패 probe"""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def _load_g62_probes():
     mod_name = "diag_g62_probes_for_g32"
     spec = importlib.util.spec_from_file_location(mod_name, path)
     if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load {path}")
+        raise ImportError(f"{path}를 불러올 수 없습니다")
     mod = importlib.util.module_from_spec(spec)
     import sys
 
@@ -30,7 +30,84 @@ def _load_g62_probes():
 
 
 _G62 = _load_g62_probes()
-_post_login = _G62._post_login
+
+
+def _post_login_once_with_retry_after(
+    client: httpx.Client,
+    *,
+    url: str,
+    mode: str,
+    id_field: str,
+    pw_field: str,
+    email: str,
+    password: str,
+    timeout: float,
+) -> tuple[int | None, str, str | None, str | None, str | None]:
+    """1회 POST 요청. 공용 6-2 헬퍼가 버리는 Retry-After 헤더를 유지"""
+    payload = {id_field: email, pw_field: password}
+    headers = {"User-Agent": "ARGUS-3-2/1.0"}
+    try:
+        if mode == "json":
+            response = client.post(
+                url,
+                json=payload,
+                timeout=timeout,
+                headers={**headers, "Accept": "application/json, */*"},
+            )
+        else:
+            response = client.post(
+                url,
+                data=payload,
+                timeout=timeout,
+                headers={**headers, "Accept": "text/html, application/json, */*"},
+                follow_redirects=True,
+            )
+        return (
+            response.status_code,
+            response.text,
+            response.headers.get("content-type"),
+            None,
+            response.headers.get("retry-after"),
+        )
+    except httpx.HTTPError as exc:
+        return None, "", None, str(exc)[:200], None
+
+
+def _post_login_with_retry_after(
+    client: httpx.Client,
+    *,
+    login_url: str,
+    id_field: str,
+    pw_field: str,
+    email: str,
+    password: str,
+    timeout: float,
+) -> tuple[int | None, str, str | None, str | None, str, str | None]:
+    """6-2의 form/JSON 폴백 로직을 따르면서 Retry-After도 함께 반환"""
+    url = probe_url(login_url)
+    if _G62._is_api_login_url(url):
+        status, body, ctype, err, retry_after = _post_login_once_with_retry_after(
+            client, url=url, mode="json", id_field=id_field, pw_field=pw_field,
+            email=email, password=password, timeout=timeout,
+        )
+        return status, body, ctype, err, "json", retry_after
+
+    first = _post_login_once_with_retry_after(
+        client, url=url, mode="form", id_field=id_field, pw_field=pw_field,
+        email=email, password=password, timeout=timeout,
+    )
+    status, body, ctype, err, retry_after = first
+    if err is None and status not in (404, 405, 415, None):
+        return status, body, ctype, err, "form", retry_after
+
+    second = _post_login_once_with_retry_after(
+        client, url=url, mode="json", id_field=id_field, pw_field=pw_field,
+        email=email, password=password, timeout=timeout,
+    )
+    status2, body2, ctype2, err2, retry_after2 = second
+    if err2 is None and (err is not None or status2 not in (404, 405, 415, None)):
+        return status2, body2, ctype2, err2, "json", retry_after2
+    return status, body, ctype, err, "form", retry_after
 
 
 def run_lockout_probes(
@@ -39,7 +116,7 @@ def run_lockout_probes(
     auth_cfg: dict[str, Any],
     account_email: str,
     wrong_password: str = DEFAULT_WRONG_PASSWORD,
-    max_attempts: int = 12,
+    max_attempts: int = 6,
     interval_sec: float = 0.05,
     snapshot_fn: Any,
     analyze_fn: Any,
@@ -74,7 +151,7 @@ def run_lockout_probes(
             last_err: str | None = None
 
             for attempt in range(1, max_attempts + 1):
-                status, body, ctype, err, mode = _post_login(
+                status, body, ctype, err, mode, retry_after = _post_login_with_retry_after(
                     client,
                     login_url=login_url,
                     id_field=id_field,
@@ -84,7 +161,6 @@ def run_lockout_probes(
                     timeout=timeout,
                 )
                 probe_mode = mode
-                retry_after: str | None = None
                 if err:
                     last_err = err
                     snap = snapshot_fn(
@@ -113,6 +189,7 @@ def run_lockout_probes(
                         "error_code": snap.error_code,
                         "primary_message": snap.primary_message,
                         "body_fingerprint": snap.body_fingerprint,
+                        "retry_after": retry_after,
                         "error": err,
                     }
                 )
@@ -136,8 +213,8 @@ def run_lockout_probes(
                 "attempts": attempt_rows,
                 "analysis": analysis.to_dict(),
                 "remediation": (
-                    "Enforce account lockout or rate limiting after repeated failed logins "
-                    "(e.g. lock account or return 429 after N failures)"
+                    "반복 로그인 실패 시 계정 잠금 또는 요청 제한(rate limit)을 적용하세요 "
+                    "(예: N회 실패 후 계정 잠금 또는 429 응답)"
                 ),
             }
 
@@ -146,7 +223,7 @@ def run_lockout_probes(
                 findings.append(
                     DiagnosisFinding(
                         severity="info",
-                        message=f"[3-2] Login lockout probe unreachable at `{label}`: {last_err}",
+                        message=f"[3-2] `{label}` 로그인 잠금 검사 도달 불가: {last_err}",
                         evidence={**base_evidence, "trigger": "probe_unreachable", "error": last_err},
                     )
                 )
@@ -158,8 +235,8 @@ def run_lockout_probes(
                     DiagnosisFinding(
                         severity="info",
                         message=(
-                            f"[3-2] Auth failure limit detected at `{label}` — "
-                            f"attempt {analysis.detected_at_attempt}/{max_attempts} "
+                            f"[3-2] `{label}`에서 인증 실패 제한 감지 — "
+                            f"{analysis.detected_at_attempt}/{max_attempts}회차 "
                             f"({analysis.limit_type}: {analysis.reason})"
                         ),
                         evidence={
@@ -176,8 +253,9 @@ def run_lockout_probes(
                     DiagnosisFinding(
                         severity="medium",
                         message=(
-                            f"[3-2] No auth failure limit at `{label}` — "
-                            f"{max_attempts} wrong-password attempt(s), response unchanged"
+                            f"[3-2] `{label}`에 인증 실패 제한 없음 — "
+                            "5회 연속 실패에도 계정 잠금·요청 제한 없음 "
+                            f"(총 {max_attempts}회 시도, 응답 불변)"
                         ),
                         evidence={
                             **base_evidence,

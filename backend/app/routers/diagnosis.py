@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.schemas import (
     DiagnosisCatalogModule,
@@ -52,11 +53,27 @@ def _report_to_response(report) -> DiagnosisSectionReportResponse:
     )
 
 
+@router.post("/cancel")
+def cancel_diagnosis_run() -> dict[str, object]:
+    section_id = diagnosis_service.request_cancel_run()
+    if not section_id:
+        raise HTTPException(status_code=409, detail="No diagnosis run in progress")
+    return {"ok": True, "section_id": section_id}
+
+
 @router.get("/progress", response_model=DiagnosisProgressResponse)
 def get_diagnosis_progress() -> DiagnosisProgressResponse:
     from app.services import diagnosis_progress
 
     return DiagnosisProgressResponse(**diagnosis_progress.snapshot())
+
+
+@router.get("/modules/6-1/report/summary", response_model=DiagnosisSectionReportResponse)
+def get_g61_module_report_summary() -> DiagnosisSectionReportResponse:
+    payload = diagnosis_service.get_g61_report_summary()
+    if payload is None:
+        raise HTTPException(status_code=404, detail="No report for module 6-1")
+    return DiagnosisSectionReportResponse.model_validate(payload)
 
 
 @router.get("/modules/{section_id}/report", response_model=DiagnosisSectionReportResponse)
@@ -65,6 +82,14 @@ def get_module_report(section_id: str) -> DiagnosisSectionReportResponse:
     if report is None:
         raise HTTPException(status_code=404, detail=f"No report for module {section_id}")
     return _report_to_response(report)
+
+
+@router.get("/modules/{section_id}/evidence")
+def get_evidence_file(section_id: str, path: str) -> FileResponse:
+    resolved = diagnosis_service.resolve_evidence_file(section_id, path)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="Evidence file not found")
+    return FileResponse(resolved)
 
 
 @router.post("/modules/{section_id}/run", response_model=DiagnosisRunSectionResponse)
@@ -85,13 +110,19 @@ def run_module(
     g35_opts = None
     g32_opts = None
     g34_opts = None
+    g12_opts = None
     g15_opts = None
+    g16_opts = None
     g41_opts = None
     g42_opts = None
+    g45_opts = None
+    g21_opts = None
+    if body and body.g12 is not None:
+        g12_opts = body.g12.model_dump(exclude_none=True)
     if body and body.g15 is not None:
         g15_opts = body.g15.model_dump(exclude_none=True)
-    if body and body.g21 is not None:
-        g21_opts = body.g21.model_dump(exclude_none=True)
+    if body and body.g16 is not None:
+        g16_opts = body.g16.model_dump(exclude_none=True)
     if body and body.g41 is not None:
         g41_opts = body.g41.model_dump(exclude_none=True)
     if body and body.g22 is not None:
@@ -120,26 +151,52 @@ def run_module(
         g34_opts = body.g34.model_dump(exclude_none=True)
     if body and body.g42 is not None:
         g42_opts = body.g42.model_dump(exclude_none=True)
-    try:
-        report = diagnosis_service.run_section(
-            section_id,
-            g15_options=g15_opts,
-            g21_options=g21_opts,
-            g41_options=g41_opts,
-            g22_options=g22_opts,
-            g71_options=g71_opts,
-            g72_options=g72_opts,
-            g73_options=g73_opts,
-            g74_options=g74_opts,
-            g52_options=g52_opts,
-            g61_options=g61_opts,
-            g62_options=g62_opts,
-            g36_options=g36_opts,
-            g35_options=g35_opts,
-            g32_options=g32_opts,
-            g34_options=g34_opts,
-            g42_options=g42_opts,
+    if body and body.g45 is not None:
+        g45_opts = body.g45.model_dump(exclude_none=True)
+    if body and body.g21 is not None:
+        g21_opts = body.g21.model_dump(exclude_none=True)
+    run_kwargs = dict(
+        g12_options=g12_opts,
+        g15_options=g15_opts,
+        g41_options=g41_opts,
+        g22_options=g22_opts,
+        g71_options=g71_opts,
+        g72_options=g72_opts,
+        g73_options=g73_opts,
+        g74_options=g74_opts,
+        g52_options=g52_opts,
+        g61_options=g61_opts,
+        g62_options=g62_opts,
+        g36_options=g36_opts,
+        g35_options=g35_opts,
+        g32_options=g32_opts,
+        g34_options=g34_opts,
+        g42_options=g42_opts,
+        g45_options=g45_opts,
+        g16_options=g16_opts,
+        g21_options=g21_opts,
+    )
+    if section_id in ("6-1", "2-1"):
+        try:
+            diagnosis_service.start_section_run_background(section_id, **run_kwargs)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        payload = DiagnosisRunSectionResponse(
+            ok=True,
+            accepted=True,
+            async_run=True,
+            report=None,
         )
+        return JSONResponse(
+            status_code=202,
+            content=payload.model_dump(),
+        )
+    try:
+        report = diagnosis_service.run_section(section_id, **run_kwargs)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:

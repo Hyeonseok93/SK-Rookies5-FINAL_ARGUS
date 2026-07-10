@@ -51,6 +51,14 @@ def test_lockout_on_429():
     assert result.limit_type == "rate_limit"
 
 
+def test_lockout_on_retry_after_header_without_limit_status():
+    snaps = [_snap(i, status=401, message="invalid credentials") for i in range(1, 4)]
+    result = rules.analyze_lockout_sequence(snaps, retry_after_headers=[None, None, "60"])
+    assert result.detected
+    assert result.detected_at_attempt == 3
+    assert result.limit_type == "rate_limit"
+
+
 def test_lockout_on_message_change():
     snaps = [
         _snap(1, status=401, message="invalid credentials", code="AUTH-001"),

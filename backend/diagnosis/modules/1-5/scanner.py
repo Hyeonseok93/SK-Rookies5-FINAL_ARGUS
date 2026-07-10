@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from app.services.auth_probe_service import login_all_accounts
+from diagnosis.probe_auth import all_account_auths_with_meta
 from app.services.zap_util import ZapNotAvailableError
 from diagnosis.context import DiagnosisContext
 from diagnosis.result import DiagnosisFinding
@@ -74,13 +74,35 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
     )
 
 
-def _primary_auth(raw: dict[str, Any]) -> dict[str, Any] | None:
-    auth_cfg = raw.get("auth") or {}
-    accounts = auth_cfg.get("accounts") or []
-    if not accounts:
-        return None
-    logins = login_all_accounts(auth_cfg, accounts)
-    return logins[0] if logins else None
+def _primary_auth(raw: dict[str, Any], *, data_dir: Path | None = None) -> dict[str, Any] | None:
+    sessions, _meta = all_account_auths_with_meta(raw, data_dir=data_dir, refresh=True)
+    return sessions[0] if sessions else None
+
+
+def _refresh_job_auth(
+    jobs: list[dict[str, Any]], raw: dict[str, Any], *, data_dir: Path | None = None
+) -> None:
+    """job["headers"]에 박힌 로그인 세션(Authorization/Cookie)을 새로 받은 세션으로 갈아끼운다.
+
+    phase A/B job의 헤더는 스캔 시작 시점에 한 번 캡처된다(build_phase_a/b_jobs). XSS 검증은
+    sink 기반 redirect 검증(phase A+B, 최대 10,000+ job) + reflected_probe(같은 job 재검사)
+    다음인 3번째 단계라, 그 사이 수만 건의 요청이 오간 뒤에야 실행된다 — 스캔이 오래 걸리면
+    시작 시점 세션이 이 시점엔 만료돼 있을 수 있어, XSS 단계 직전에 한 번 더 로그인해 job의
+    인증 헤더만 최신 값으로 덮어쓴다(다른 헤더/본문은 그대로 둔다).
+    """
+    from inventory.auth_util import auth_headers, is_auth_header
+
+    try:
+        fresh_auth = _primary_auth(raw, data_dir=data_dir)
+    except Exception:
+        return
+    fresh_headers = auth_headers(fresh_auth)
+    if not fresh_headers:
+        return
+    for job in jobs:
+        headers = {k: v for k, v in (job.get("headers") or {}).items() if not is_auth_header(k)}
+        headers.update(fresh_headers)
+        job["headers"] = headers
 
 
 def _dedupe_redirect_findings(items: list[DiagnosisFinding]) -> list[DiagnosisFinding]:
@@ -88,7 +110,17 @@ def _dedupe_redirect_findings(items: list[DiagnosisFinding]) -> list[DiagnosisFi
     out: list[DiagnosisFinding] = []
     for f in items:
         ev = f.evidence or {}
-        key = f"{ev.get('rule_id')}|{ev.get('engine')}|{ev.get('test_url') or ev.get('url')}|{ev.get('location')}"
+        # confirmed_redirect=False인 항목(REFLECTED_VALUE/REFLECTED_XSS 후보)은 어떤
+        # payload를 썼는지만 다를 뿐 같은 endpoint+파라미터에 대해 같은 결론("이스케이프
+        # 없이 반사됨")을 payload 개수(리다이렉트 13종/XSS 4종)만큼 반복 생성한다 — 이미
+        # 하나로 결론이 났으면 나머지는 대표 finding 하나로 합친다. 확정 취약점
+        # (LOCATION_HEADER/META_REFRESH/JS_REDIRECT/CLIENT_JS_CONFIRMED, 그리고
+        # confirmed_redirect 필드가 없는 CORS/crossdomain/sink 기반 open redirect)은
+        # payload/위치별로 구분 가치가 있으므로 기존대로 location까지 키에 포함한다.
+        if ev.get("confirmed_redirect") is False:
+            key = f"{ev.get('rule_id')}|{ev.get('engine')}|{ev.get('test_url') or ev.get('url')}"
+        else:
+            key = f"{ev.get('rule_id')}|{ev.get('engine')}|{ev.get('test_url') or ev.get('url')}|{ev.get('location')}"
         if key in seen:
             continue
         seen.add(key)
@@ -125,6 +157,14 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         "cors_probe_origin": cors_origin,
     }
 
+    # account_auth 없이 프로브를 보내면 로그인이 필요한 엔드포인트는 컨트롤러 로직에
+    # 도달하기도 전에 401로 막혀, 페이로드가 반사/리다이렉트될 여지 자체가 없어져 실제
+    # 취약점이 있어도 절대 못 잡는다 — phase A/B 모두 로그인 세션을 붙여서 보낸다.
+    try:
+        auth_session = _primary_auth(raw, data_dir=ctx.data_dir)
+    except Exception:
+        auth_session = None
+
     phase_a = targets.build_phase_a_jobs(
         tree,
         raw_config=raw,
@@ -134,6 +174,7 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         sample_size=opts.sample_size,
         max_params_per_endpoint=opts.max_params_per_endpoint,
         max_jobs=opts.max_phase_a_jobs,
+        account_auth=auth_session,
     )
     phase_b = targets.build_phase_b_jobs(
         tree,
@@ -143,6 +184,7 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         probe_mode=opts.probe_mode,
         sample_size=opts.sample_size,
         max_jobs=opts.max_phase_b_jobs,
+        account_auth=auth_session,
     )
     redirect_jobs = phase_a + phase_b
     stats["phase_a_jobs"] = len(phase_a)
@@ -152,7 +194,22 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     cors_targets = targets.build_cors_targets(bases) if opts.cors_enabled and bases else []
     xd_targets = targets.build_crossdomain_targets(bases) if opts.crossdomain_enabled and bases else []
-    grand_total = len(redirect_jobs) + len(cors_targets) + len(xd_targets)
+    # redirect_jobs는 실제로 세 번 순회된다 — sink 기반 확정 검증(run_redirect_jobs),
+    # reflected_bridge의 META_REFRESH/JS_REDIRECT/REFLECTED_VALUE 보강 검증(run_on_jobs),
+    # 그리고 그중 로그인 문맥만 추린 소수 후보에 대한 브라우저 검증. 이 셋을 모두
+    # grand_total에 포함해야 진행률이 각 단계에서 실제로 올라간다.
+    reflected_bridge = _load_local("reflected_bridge")
+    login_candidate_count = reflected_bridge.count_login_redirect_candidates(redirect_jobs) if redirect_jobs else 0
+    # redirect_jobs(phase A+B)는 sink 기반 확정 검증(run_redirect_jobs)과 reflected_bridge의
+    # 리다이렉트 반사 보강 검증(run_on_jobs) 두 번 순회된다. XSS 반사 검증(run_xss_on_jobs)은
+    # phase A(실제 선언된 endpoint 파라미터: posts/comments/profile 등)에만 적용한다 —
+    # phase B는 GET 엔드포인트에 추측성 redirect 파라미터명(REDIRECT_PARAM_NAMES)을 쿼리로
+    # 덧붙이는 것이라 서버가 아예 읽지 않는 파라미터일 가능성이 높아 XSS 관점에서는 값이
+    # 거의 없는데 job 수만 크게 늘려(phase B가 보통 더 큼) 스캔 시간을 불필요하게 늘린다.
+    grand_total = (
+        len(redirect_jobs) * 2 + len(phase_a) + login_candidate_count
+        + len(cors_targets) + len(xd_targets)
+    )
     prepare(grand_total, f"1-5: {grand_total} probe(s)")
     progress_offset = 0
 
@@ -180,6 +237,51 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         findings.extend(rf)
         stats["redirect"] = rstats
         progress_offset += len(redirect_jobs)
+
+        # sink 기반 검증은 Location 헤더(서버 사이드 리다이렉트)만 확인한다 — meta refresh /
+        # JS location 대입 / 리다이렉트 실행 증거 없이 값만 반사되는 케이스는 다루지 않으므로
+        # reflected_bridge로 같은 job 목록을 재사용해 그 세 가지만 보강 확인한다.
+        vf, vstats = reflected_bridge.run_on_jobs(
+            redirect_jobs,
+            on_progress=_seg_progress(len(redirect_jobs), "reflected "),
+        )
+        findings.extend(vf)
+        stats["reflected_probe"] = vstats
+        progress_offset += len(redirect_jobs)
+
+        # 위 두 검증은 리다이렉트 실행 여부만 본다 — posts/comments/profile 같은 일반
+        # CRUD 필드에 스크립트/HTML이 이스케이프 없이 반사되는지(반사형 XSS)는 별도
+        # 판별 규칙이 필요하므로 phase A job(실제 선언된 파라미터)만 xss_detector로
+        # 재사용해 확인한다 — phase B(추측성 redirect 파라미터명)는 XSS 관점에서 값이
+        # 거의 없어 제외한다(위 grand_total 주석 참고).
+        if phase_a:
+            _refresh_job_auth(phase_a, raw, data_dir=ctx.data_dir)
+            xf, xstats = reflected_bridge.run_xss_on_jobs(
+                phase_a,
+                marker=run_id,
+                on_progress=_seg_progress(len(phase_a), "xss "),
+            )
+            findings.extend(xf)
+            stats["reflected_xss"] = xstats
+            progress_offset += len(phase_a)
+
+        # SPA는 로그인 성공 후 클라이언트 JS가 ?next=/?returnUrl= 값을 읽어 location을
+        # 대입하는 경우가 흔한데, 이건 정적 응답 문자열 매칭(위 reflected_bridge)으로는
+        # 원리적으로 못 잡는다 — 로그인/인증 문맥 후보만 추려 실제 헤드리스 브라우저로
+        # 검증한다 (느리므로 소수 후보에만 적용).
+        # auth_session은 위에서 이미 조회했다 — phase A/B job 생성에 쓴 것과 같은
+        # 세션을 재사용해 여기서 다시 로그인하지 않는다.
+        browser_cookies = None
+        if auth_session and auth_session.get("delivery") == "cookie" and auth_session.get("token"):
+            browser_cookies = {auth_session.get("cookie_name", "accessToken"): auth_session["token"]}
+        bf, bstats = reflected_bridge.run_login_redirect_browser_check(
+            redirect_jobs,
+            cookies=browser_cookies,
+            on_progress=_seg_progress(login_candidate_count, "browser "),
+        )
+        findings.extend(bf)
+        stats["reflected_browser"] = bstats
+        progress_offset += login_candidate_count
 
     if opts.cors_enabled and bases:
         cf, cstats = probes.run_cors_probes(
@@ -214,7 +316,7 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     if opts.zap_enabled:
         zap = _load_local("zap_scan")
-        auth = _primary_auth(raw)
+        auth = _primary_auth(raw, data_dir=ctx.data_dir)
         try:
             zap_phase("ZAP 1-5 redirect scan…")
             zf, zstats = zap.run_zap_phase(

@@ -1,0 +1,5 @@
+section_id: "1-6"
+title: "입력 값 크기 및 무결성 검증 오류"
+chapter: 1
+engine: "argus-w16-embedded"
+implemented: true

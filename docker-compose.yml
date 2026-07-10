@@ -18,10 +18,13 @@ services:
       - api.disablekey=true
     ports:
       - "8090:8090"
+    volumes:
+      # backend가 저장한 Swagger 업로드 파일을 같은 절대 경로에서 읽습니다.
+      - ./backend/data:/app/data:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8090/JSON/core/view/version/ || exit 1"]
+      test: [ "CMD-SHELL", "curl -sf http://127.0.0.1:8090/JSON/core/view/version/ || exit 1" ]
       interval: 5s
       timeout: 5s
       retries: 18
@@ -43,21 +46,15 @@ services:
       - ..:/workspace:ro
       # 빌드·진단 산출물 유지 (uploads, report, api-tree 등)
       - ./backend/data:/app/data
-      # 진단 모듈 코드 → 호스트와 동기화
-      - ./backend/diagnosis/modules:/app/diagnosis/modules
+      # 진단 패키지 전체 → 호스트와 동기화 (modules 외 auth_session_pool 등 포함)
+      - ./backend/diagnosis:/app/diagnosis
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       zap:
         condition: service_healthy
     healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)",
-        ]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)" ]
       interval: 5s
       timeout: 5s
       retries: 12

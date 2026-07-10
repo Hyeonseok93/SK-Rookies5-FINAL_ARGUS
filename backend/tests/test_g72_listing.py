@@ -144,3 +144,22 @@ def test_zap_passive_10033_maps_to_7_2_finding():
     assert finding is not None
     assert finding.evidence["listing_type"] == "zap_passive_directory_browsing"
     assert finding.evidence["plugin_id"] == "10033"
+
+
+def test_unreachable_probe_does_not_emit_finding():
+    mod_name = "diag_g72_probes_test"
+    spec = importlib.util.spec_from_file_location(mod_name, _MODULE_DIR / "probes.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[mod_name] = mod
+    spec.loader.exec_module(mod)
+
+    findings, stats = mod.run_listing_probes(
+        [{"probe_url": "http://127.0.0.1:1/nope", "label": "dead", "base_url": "http://127.0.0.1:1"}],
+        classify_fn=lambda *a, **k: None,
+        remediation_fn=lambda _t: "",
+        fingerprint_fn=lambda _b: "",
+        timeout=0.5,
+    )
+    assert stats["unreachable"] == 1
+    assert findings == []

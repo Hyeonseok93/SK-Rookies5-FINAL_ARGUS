@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from inventory.auth_util import auth_headers, is_auth_header
@@ -10,18 +11,106 @@ from inventory.schema import Endpoint, InputParam, build_full_url
 from parsers.parse_endpoints import materialize_path_params
 
 WRITE_METHODS = frozenset({"POST", "PUT", "PATCH"})
-GATEWAY_PREFIXES = ("/user-api", "/admin-api")
-
-DEFAULT_SEARCH_QUERY: dict[str, str] = {
-    "checkIn": "2026-06-28",
-    "checkOut": "2026-06-29",
-    "guests": "2",
-    "page": "0",
-    "size": "20",
-    "region": "도쿄",
-}
 
 DEFAULT_PAGINATION: dict[str, str] = {"page": "0", "size": "20"}
+
+
+_GENERIC_PROBE_SAMPLES = frozenset({"", "1", "test", "sample", "argus"})
+
+# 이름 기반 휴리스틱이 인식하는 카테고리별 "그럴듯한 형식" 정규식 — 캡처된 sample이
+# 필드 이름이 암시하는 형식과 실제로 맞는지 검증하는 데 쓴다. 특정 플레이스홀더
+# 문자열("John Doe" 같은)을 이름으로 나열하는 대신 형식 검증으로 일반화한다 — 어떤
+# 타겟 앱이 어떤 범용 예시 문자열을 쓰든(예: "Jane Smith", "홍길동", "Test User")
+# 형식이 안 맞으면 동일하게 걸러진다.
+import re as _re
+
+_SHAPE_PATTERNS: dict[str, "_re.Pattern[str]"] = {
+    "phone": _re.compile(r"^\+?\d[\d\-\s]{6,}\d$"),
+    "email": _re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$"),
+    "date": _re.compile(r"^\d{4}-\d{2}-\d{2}"),
+}
+
+
+def _shape_category(name_compact: str) -> str | None:
+    if "phone" in name_compact or "tel" in name_compact:
+        return "phone"
+    if name_compact == "email":
+        return "email"
+    if "birth" in name_compact or name_compact.endswith("date") or name_compact == "date":
+        return "date"
+    return None
+
+
+def _is_generic_probe_sample(value: Any, name_compact: str = "") -> bool:
+    text = str(value).strip()
+    if text.lower() in _GENERIC_PROBE_SAMPLES:
+        return True
+    category = _shape_category(name_compact)
+    if category is not None:
+        pattern = _SHAPE_PATTERNS[category]
+        if not pattern.match(text):
+            # 캡처된 sample이 이 필드 이름이 암시하는 형식(전화번호/이메일/날짜)과
+            # 맞지 않는다 — openapi/zap 캡처가 여러 필드에 같은 범용 예시 문자열을
+            # 그대로 복사해 붙인 경우 흔히 생기는 패턴이다. 값 자체가 무엇이든
+            # "이 필드에는 안 맞는 값"이라는 사실만으로 일반값 취급한다.
+            return True
+    return False
+
+
+_OPTIONAL_PASSWORD_CHANGE_FIELDS = frozenset(
+    {"newpassword", "newpwd", "changepassword", "passwordconfirm", "newpasswordconfirm"}
+)
+
+
+def _is_risky_optional_field(inp: InputParam) -> bool:
+    """선택값(optional)인 새 비밀번호류 필드는 채우지 않고 생략한다.
+
+    실제로 값을 채우면 두 가지 문제가 생긴다: (1) 이런 필드는 보통 비밀번호 정책
+    (길이/문자 조합)이 있어 임의 샘플 값("John Doe" 등)을 넣으면 검증에서 항상 400으로
+    막혀 다른 필드(예: name/nickname) 퍼징 결과 자체를 관찰할 수 없게 되고, (2) 정책을
+    통과하는 그럴듯한 값을 넣으면 이번엔 실제로 테스트 계정 비밀번호가 바뀌어버려
+    이후 로그인이 필요한 다른 검사들이 전부 깨진다. 서버가 이 필드의 부재를 "값 변경
+    없음"으로 처리하는 게 일반적이므로(실측 확인됨), required가 아니면 아예 생략한다.
+    """
+    if inp.required:
+        return False
+    name = "".join(ch for ch in inp.name.lower() if ch.isalnum())
+    return name in _OPTIONAL_PASSWORD_CHANGE_FIELDS
+
+
+def _name_based_sample(inp: InputParam, path: str = "") -> Any | None:
+    """필드 이름에서 흔한 형식/의미를 추론한다 — 특정 타겟 앱의 도메인(예약 종류,
+    상품 등급 같은 enum 값)은 알 수 없으므로 다루지 않고, 어떤 REST API에나 널리
+    나타나는 범용 필드 이름(이메일/전화번호/날짜/제목/본문/평점/금액/수량)만 다룬다.
+    """
+    name = inp.name.lower()
+    compact = "".join(ch for ch in name if ch.isalnum())
+
+    if "birth" in compact:
+        return "1995-05-25"
+    if compact.endswith("date") or compact == "date" or compact == "month":
+        # 예약/체크인류 필드는 "미래 날짜"만 유효로 검증하는 경우가 흔하다 — 고정
+        # 리터럴은 시간이 지나면 과거가 되어 baseline 요청부터 400으로 막히므로
+        # 항상 호출 시점 기준 미래 날짜로 계산한다.
+        return (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+    if compact.endswith("time"):
+        return (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%dT09:00:00")
+
+    if compact in {"title", "name", "nickname"}:
+        return "argus-probe"
+    if compact in {"content", "description", "message", "comment"}:
+        return "probe"
+    if compact == "email":
+        return "argus-probe@example.com"
+    if "phone" in compact or "tel" in compact:
+        return "010-1234-5678"
+    if compact == "rating":
+        return 5
+    if any(token in compact for token in ("amount", "price", "total")):
+        return 10000
+    if compact in {"guests", "capacity", "quantity", "count"}:
+        return 2
+    return None
 
 
 def _valid_probe_header_name(name: str) -> bool:
@@ -32,13 +121,19 @@ def _valid_probe_header_name(name: str) -> bool:
     return not (upper.startswith("GET ") or upper.startswith("POST ") or upper.startswith("HTTP/"))
 
 
-def sample_value(inp: InputParam) -> Any:
+def sample_value(inp: InputParam, path: str = "") -> Any:
+    heuristic = _name_based_sample(inp, path)
+    name_compact = "".join(ch for ch in inp.name.lower() if ch.isalnum())
+    if heuristic is not None and (inp.sample is None or _is_generic_probe_sample(inp.sample, name_compact)):
+        return heuristic
     if inp.sample is not None:
         if inp.type in ("integer", "int64", "number") and str(inp.sample).isdigit():
             return int(inp.sample)
         if inp.type == "boolean":
             return str(inp.sample).lower() in ("true", "1", "yes")
         return inp.sample
+    if heuristic is not None:
+        return heuristic
     if inp.type in ("integer", "int64"):
         return 1
     if inp.type == "boolean":
@@ -49,27 +144,18 @@ def sample_value(inp: InputParam) -> Any:
 
 
 def frontend_gateway_path(base_url: str, path: str) -> str:
-    """Vite dev server proxies API via /user-api or /admin-api."""
-    if ":5173" not in base_url:
-        return path
-    if path.startswith(GATEWAY_PREFIXES):
-        return path
-    if path.startswith("/api/v1/admin"):
-        return f"/admin-api{path}"
-    if path.startswith("/api/"):
-        return f"/user-api{path}"
-    return path
+    """Return the inventory path as-is (no per-app gateway rewriting)."""
+    _ = base_url
+    return path or "/"
 
 
 def _heuristic_query(path: str, method: str) -> dict[str, str]:
+    """선언된 쿼리 파라미터가 없는 GET류 요청에 쓸 최소 fallback. 페이지네이션은 REST
+    API 전반에서 흔한 관례라 범용으로 다루지만, 그 외 타겟별 검색/필터 파라미터는 알 수
+    없으므로 다루지 않는다."""
     if method not in ("GET", "DELETE", "HEAD", "OPTIONS"):
         return {}
-    lower = path.lower()
-    if "search" in lower or ("accommodation" in lower and method == "GET"):
-        return dict(DEFAULT_SEARCH_QUERY)
-    if method == "GET":
-        return dict(DEFAULT_PAGINATION)
-    return {}
+    return dict(DEFAULT_PAGINATION)
 
 
 def _multipart_body(fields: dict[str, str]) -> tuple[str, str]:
@@ -86,36 +172,13 @@ def _multipart_body(fields: dict[str, str]) -> tuple[str, str]:
 
 
 def _heuristic_body(path: str, method: str) -> tuple[str, str] | None:
+    """body_inputs가 아예 없는 엔드포인트(선언된 body 파라미터가 하나도 없을 때)에 쓸
+    최후의 fallback body — POST는 "{}", 그 외(PATCH/PUT)는 "{"id": 1}". body_inputs로
+    이미 실제 필드값이 채워진 body가 있는 경우에는 이 fallback으로 덮어쓰면 안 된다
+    (build_probe_request 참고).
+    """
     if method not in WRITE_METHODS:
         return None
-    lower = path.lower()
-
-    if "posts" in lower and method == "POST" and "comment" not in lower:
-        return _multipart_body(
-            {"title": "argus-probe", "content": "probe", "type": "PHOTO", "rating": ""}
-        )
-
-    if "insurance" in lower:
-        obj = {
-            "productId": 1,
-            "insuranceProductId": 1,
-            "insuredName": "argus-probe",
-            "insuredBirthdate": "1995-05-25",
-            "startDate": "2026-07-01",
-            "endDate": "2026-07-10",
-            "coverageLevel": "DELUXE",
-            "totalPremium": 135000,
-        }
-        return "application/json", json.dumps(obj, ensure_ascii=False)
-
-    if "report/integrated" in lower:
-        obj = {
-            "memberId": 1,
-            "template": "verification",
-            "logoUrl": "https://onde.click/assets/logo.png",
-        }
-        return "application/json", json.dumps(obj, ensure_ascii=False)
-
     if method == "POST":
         return "application/json", "{}"
     return "application/json", json.dumps({"id": 1}, ensure_ascii=False)
@@ -123,17 +186,9 @@ def _heuristic_body(path: str, method: str) -> tuple[str, str] | None:
 
 def build_body_object(ep: Endpoint) -> dict[str, Any]:
     """Build JSON body dict — all fields at valid baseline; fuzzing overrides one param only."""
-    lower = ep.path.lower()
-    if "report/integrated" in lower:
-        return {
-            "memberId": 1,
-            "template": "verification",
-            "logoUrl": "https://onde.click/assets/logo.png",
-        }
-
     body_inputs = [i for i in ep.request_params if i.in_ in ("body", "form") and i.role == "input"]
     if body_inputs:
-        return {inp.name: sample_value(inp) for inp in body_inputs if inp.in_ == "body"}
+        return {inp.name: sample_value(inp, ep.path) for inp in body_inputs if inp.in_ == "body"}
 
     guessed = _heuristic_body(ep.path, ep.method.upper())
     if guessed:
@@ -171,15 +226,21 @@ def build_probe_request(
     for inp in ep.request_params:
         if inp.in_ == "query" and inp.role == "input":
             if inp.required or inp.sample is not None:
-                query[inp.name] = str(inp.sample if inp.sample is not None else sample_value(inp))
+                query[inp.name] = str(sample_value(inp, ep.path))
         elif inp.in_ == "header" and inp.role in ("input", "auth"):
             if is_auth_header(inp.name):
                 continue
-            if inp.name.lower() != "content-type" and _valid_probe_header_name(inp.name):
+            if inp.name.lower() in ("content-type", "content-length", "transfer-encoding"):
+                continue
+            if _valid_probe_header_name(inp.name):
                 headers[inp.name] = str(inp.sample or "1")
 
     for hdr in ep.request_headers:
-        if hdr.name.lower() == "content-type":
+        if hdr.name.lower() in ("content-type", "content-length", "transfer-encoding"):
+            # Content-Length/Transfer-Encoding은 실제 전송 바디에 맞춰 HTTP 클라이언트가
+            # 계산해야 하는 값이다 — 과거에 캡처된 값을 그대로 넣으면 이번 프로브의
+            # body_str 길이와 어긋나 h11이 "Too much data for declared Content-Length"로
+            # 요청 자체를 거부한다(probes.py의 동일 문제와 같은 이유).
             continue
         if is_auth_header(hdr.name):
             continue
@@ -194,16 +255,20 @@ def build_probe_request(
         query.update(_heuristic_query(ep.path, method))
 
     body_str = ""
-    body_inputs = [i for i in ep.request_params if i.in_ in ("body", "form") and i.role == "input"]
+    body_inputs = [
+        i
+        for i in ep.request_params
+        if i.in_ in ("body", "form") and i.role == "input" and not _is_risky_optional_field(i)
+    ]
 
     if method in WRITE_METHODS:
         if body_inputs:
             if any(i.in_ == "form" for i in body_inputs):
-                fields = {inp.name: str(sample_value(inp)) for inp in body_inputs}
+                fields = {inp.name: str(sample_value(inp, ep.path)) for inp in body_inputs}
                 ctype, body_str = _multipart_body(fields)
                 headers["Content-Type"] = ctype
             else:
-                obj = {inp.name: sample_value(inp) for inp in body_inputs if inp.in_ == "body"}
+                obj = {inp.name: sample_value(inp, ep.path) for inp in body_inputs if inp.in_ == "body"}
                 body_str = json.dumps(obj, ensure_ascii=False)
                 headers["Content-Type"] = "application/json"
         else:
@@ -211,12 +276,6 @@ def build_probe_request(
             if guessed:
                 ctype, body_str = guessed
                 headers["Content-Type"] = ctype
-
-        # Valid fixture overrides generic probe samples (e.g. template "1" → "verification")
-        fixture = _heuristic_body(ep.path, method)
-        if fixture and body_str:
-            ctype, body_str = fixture
-            headers["Content-Type"] = ctype
 
     url = build_full_url(rewrite(ep.base_url.rstrip("/")), path, query or None)
     return {"method": method, "url": url, "headers": headers, "body": body_str}

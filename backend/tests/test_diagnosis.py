@@ -8,7 +8,11 @@ from app.services import diagnosis_service
 from diagnosis.catalog import SECTIONS
 from diagnosis.registry import list_registered_ids, module_dir
 
-SHELL_ONLY_SECTIONS = frozenset({"1-1", "1-2", "1-4", "1-6"})
+SHELL_ONLY_SECTIONS = frozenset()
+
+MANUAL_DIAGNOSIS_SECTIONS = frozenset(
+    {"1-3", "1-4", "3-1", "3-3", "4-1", "4-2", "4-3", "5-1", "8-1"}
+)
 
 
 def test_all_modules_registered():
@@ -27,42 +31,53 @@ def test_catalog_matches_modules():
 
 
 def test_run_module_stub():
+    from diagnosis.context import DiagnosisContext
     from diagnosis.paths import diagnosis_report_path
+    from diagnosis.registry import get_module
 
-    report = diagnosis_service.run_section("1-3")
-    assert report.section_id == "1-3"
-    assert report.status == "not_implemented"
-    assert report.implemented is False
+    # 3-3 is still a StubDiagnosisModule (review_later + diagnosable: false) — 1-3 was
+    # the last diagnosable review_later stub before it got a real v1 implementation.
+    # diagnosis_service.run_section() gates non-diagnosable sections (see
+    # test_not_diagnosable_sections), so exercise the module directly here.
     data_dir = Path(__file__).resolve().parents[1] / "data"
-    assert diagnosis_report_path(data_dir, "1-3").is_file()
+    mod = get_module("3-3")
+    assert mod is not None
+    report = mod.run(DiagnosisContext(data_dir=data_dir))
+    assert report.section_id == "3-3"
+    assert report.status == "not_diagnosable"
+    assert report.implemented is False
+    assert diagnosis_report_path(data_dir, "3-3").is_file()
 
 
 def test_not_diagnosable_sections():
     catalog = diagnosis_service.catalog()
-    for section_id in ("3-1", "3-3", "4-3", "4-4", "4-5", "5-1", "8-1"):
+    for section_id in MANUAL_DIAGNOSIS_SECTIONS:
         row = next(r for r in catalog if r["id"] == section_id)
         assert row["diagnosable"] is False
         assert row["implemented"] is False
 
 
-def test_review_later_sections():
+def test_no_review_later_sections():
     catalog = diagnosis_service.catalog()
-    for section_id in ("1-3", "3-3", "4-3", "4-4", "4-5", "5-1", "8-1"):
+    for section_id in ("3-3", "4-3", "4-4", "4-5", "5-1", "8-1"):
         row = next(r for r in catalog if r["id"] == section_id)
         assert row["review_later"] is True
 
 
-def test_g31_manual_status_label():
+def test_manual_diagnosis_sections():
     catalog = diagnosis_service.catalog()
-    row = next(r for r in catalog if r["id"] == "3-1")
-    assert row["status_label"] == "회원가입에서 직접 확인"
-    assert row["review_later"] is False
+    for section_id in MANUAL_DIAGNOSIS_SECTIONS:
+        row = next(r for r in catalog if r["id"] == section_id)
+        assert row["status_label"] == "수동 진단"
+        assert row["review_later"] is False
+        assert row["diagnosable"] is False
+        assert row["implemented"] is False
 
 
 def test_run_not_diagnosable_raises():
     import pytest
 
-    for section_id in ("3-1", "3-3", "4-3", "4-4", "4-5", "5-1", "8-1"):
+    for section_id in MANUAL_DIAGNOSIS_SECTIONS:
         with pytest.raises(ValueError, match="not diagnosable"):
             diagnosis_service.run_section(section_id)
 
@@ -120,7 +135,7 @@ def test_g61_module_implemented():
     mod = diagnosis_service.catalog()
     row = next(r for r in mod if r["id"] == "6-1")
     assert row["implemented"] is True
-    assert row["engine"] == "httpx+zap"
+    assert row["engine"] == "httpx"
 
 
 def test_g35_module_implemented():
@@ -152,6 +167,14 @@ def test_g34_module_implemented():
     assert row["engine"] == "httpx"
 
 
+def test_g11_module_implemented():
+    mod = diagnosis_service.catalog()
+    row = next(r for r in mod if r["id"] == "1-1")
+    assert row["implemented"] is True
+    assert row["registered"] is True
+    assert row["engine"] == "httpx+zap"
+
+
 def test_g15_module_implemented():
     mod = diagnosis_service.catalog()
     row = next(r for r in mod if r["id"] == "1-5")
@@ -159,18 +182,30 @@ def test_g15_module_implemented():
     assert row["engine"] == "httpx+zap"
 
 
-def test_g41_module_implemented():
+def test_g41_module_manual_diagnosis():
     mod = diagnosis_service.catalog()
     row = next(r for r in mod if r["id"] == "4-1")
-    assert row["implemented"] is True
-    assert row["engine"] == "httpx"
+    assert row["implemented"] is False
+    assert row["status_label"] == "수동 진단"
+    assert row["review_later"] is False
+    assert row["diagnosable"] is False
 
 
-def test_g42_module_implemented():
+def test_g42_module_manual_diagnosis():
     mod = diagnosis_service.catalog()
     row = next(r for r in mod if r["id"] == "4-2")
-    assert row["implemented"] is True
-    assert row["engine"] == "httpx"
+    assert row["implemented"] is False
+    assert row["status_label"] == "수동 진단"
+    assert row["review_later"] is False
+    assert row["diagnosable"] is False
+
+
+def test_g44_module_has_start_button_catalog():
+    mod = diagnosis_service.catalog()
+    row = next(r for r in mod if r["id"] == "4-4")
+    assert row["review_later"] is False
+    assert row["diagnosable"] is True
+    assert row["status_label"] is None
 
 
 def test_run_g15_with_options(tmp_path, monkeypatch):
@@ -215,45 +250,14 @@ def test_run_g15_with_options(tmp_path, monkeypatch):
     assert g15["cors_enabled"] is False
 
 
-def test_run_g41_with_options(tmp_path, monkeypatch):
-    import yaml
-    from diagnosis.context import DiagnosisContext
-    from diagnosis.registry import get_module
-    from diagnosis.result import SectionReport, utc_now_iso
+def test_run_g41_not_diagnosable():
+    import pytest
 
-    captured: list[DiagnosisContext] = []
-
-    def fake_run(ctx):
-        captured.append(ctx)
-        return SectionReport(
-            section_id="4-1",
-            title="test",
-            chapter=4,
-            status="pass",
-            implemented=True,
-            checked_at=utc_now_iso(),
+    with pytest.raises(ValueError, match="not diagnosable"):
+        diagnosis_service.run_section(
+            "4-1",
+            g41_options={"probe_mode": "full", "tamper_enabled": False, "max_endpoints": 100},
         )
-
-    mod = get_module("4-1")
-    monkeypatch.setattr(mod, "run", fake_run)
-
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(
-        yaml.safe_dump({"diagnosis_4_1": {"probe_mode": "sample", "cross_cookie_enabled": True}}),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("CONFIG_PATH", str(cfg))
-    monkeypatch.setattr(diagnosis_service, "BACKEND_ROOT", tmp_path)
-
-    diagnosis_service.run_section(
-        "4-1",
-        g41_options={"probe_mode": "full", "tamper_enabled": False, "max_endpoints": 100},
-    )
-    assert captured
-    g41 = captured[0].raw_config["diagnosis_4_1"]
-    assert g41["probe_mode"] == "full"
-    assert g41["tamper_enabled"] is False
-    assert g41["max_endpoints"] == 100
 
 
 def test_run_g21_with_options(tmp_path, monkeypatch):
@@ -342,3 +346,45 @@ def test_run_g22_with_options(tmp_path, monkeypatch):
     assert g22["zap_enabled"] is False
     assert g22["httpx_enabled"] is False
     assert g22["max_candidates"] == 10
+
+
+def test_run_g45_with_options(tmp_path, monkeypatch):
+    import yaml
+    from diagnosis.context import DiagnosisContext
+    from diagnosis.registry import get_module
+
+    captured: list[DiagnosisContext] = []
+
+    def fake_run(ctx):
+        captured.append(ctx)
+        from diagnosis.result import SectionReport, utc_now_iso
+
+        return SectionReport(
+            section_id="4-5",
+            title="test",
+            chapter=4,
+            status="pass",
+            implemented=True,
+            checked_at=utc_now_iso(),
+        )
+
+    mod = get_module("4-5")
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        yaml.safe_dump({"diagnosis_4_5": {"probe_mode": "sample", "timeout": 5.0}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CONFIG_PATH", str(cfg))
+    monkeypatch.setattr(diagnosis_service, "BACKEND_ROOT", tmp_path)
+
+    diagnosis_service.run_section(
+        "4-5",
+        g45_options={"probe_mode": "full", "timeout": 10.0, "max_endpoints": 25},
+    )
+    assert captured
+    g45 = captured[0].raw_config["diagnosis_4_5"]
+    assert g45["probe_mode"] == "full"
+    assert g45["timeout"] == 10.0
+    assert g45["max_endpoints"] == 25

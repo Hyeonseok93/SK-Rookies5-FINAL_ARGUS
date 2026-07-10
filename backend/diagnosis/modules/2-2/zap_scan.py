@@ -15,6 +15,7 @@ from app.services.zap_util import (
     reset_zap_workspace,
 )
 from diagnosis.result import DiagnosisFinding
+from inventory.net import probe_base_url
 
 _MODULE_DIR = Path(__file__).resolve().parent
 
@@ -141,7 +142,7 @@ def collect_zap_supplemental_findings(zap: Any, base_urls: list[str]) -> list[Di
                         "param": alert.get("param"),
                         "risk": alert.get("risk"),
                         "evidence": alert.get("evidence"),
-                        "base_url": base,
+                        "base_url": probe_base_url(base),
                         "trigger": f"zap_rule_{plugin_id}",
                         "trigger_label": PLUGIN_LABELS.get(plugin_id, f"ZAP Rule {plugin_id}"),
                     },
@@ -162,6 +163,8 @@ def run_zap_phase(
     unauth_probe_enabled: bool = True,
     account_auths: list[dict[str, Any]] | None = None,
     idor_probe_enabled: bool = True,
+    forced_browse_enabled: bool = True,
+    zap_supplemental_enabled: bool = True,
     idor_seeds: dict[str, Any] | None = None,
 ) -> tuple[list[DiagnosisFinding], dict[str, Any]]:
     """Unified ARGUS probes via ZAP transport + supplemental native scan."""
@@ -195,23 +198,35 @@ def run_zap_phase(
             account_auths=account_auths,
             unauth_probe_enabled=unauth_probe_enabled,
             idor_probe_enabled=idor_probe_enabled,
+            forced_browse_enabled=forced_browse_enabled,
             idor_seeds=idor_seeds,
             replay_session=None,
         )
         stats["unified"] = unified_stats
 
-        configure_22_supplemental_scanners(zap)
-        max_minutes = int(scan_cfg.get("zap_max_minutes", 20))
-        scan_ids = active_scan_bases(zap, seed_urls or base_urls, max_minutes=max_minutes)
-        supplemental_findings = collect_zap_supplemental_findings(zap, base_urls)
-        stats.update(
-            {
-                "unified_findings": len(unified_findings),
-                "native_findings": len(supplemental_findings),
-                "active_scans": len(scan_ids),
-                "alerts": len(unified_findings) + len(supplemental_findings),
-            }
-        )
+        if zap_supplemental_enabled:
+            configure_22_supplemental_scanners(zap)
+            max_minutes = int(scan_cfg.get("zap_max_minutes", 20))
+            scan_ids = active_scan_bases(zap, seed_urls or base_urls, max_minutes=max_minutes)
+            supplemental_findings = collect_zap_supplemental_findings(zap, base_urls)
+            stats.update(
+                {
+                    "unified_findings": len(unified_findings),
+                    "native_findings": len(supplemental_findings),
+                    "active_scans": len(scan_ids),
+                    "alerts": len(unified_findings) + len(supplemental_findings),
+                }
+            )
+        else:
+            stats.update(
+                {
+                    "supplemental": "skipped",
+                    "unified_findings": len(unified_findings),
+                    "native_findings": 0,
+                    "active_scans": 0,
+                    "alerts": len(unified_findings),
+                }
+            )
     finally:
         try:
             stats["workspace_reset_after"] = reset_zap_workspace(zap, session_name="argus-g22-done")

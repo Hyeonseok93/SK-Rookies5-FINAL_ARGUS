@@ -151,7 +151,8 @@ def discover_login_entries(
         if not is_login_candidate(ep, auth_cfg):
             continue
         path_key = ep.path.split("?")[0].lower()
-        key = (ep.method.upper(), path_key)
+        origin_key = probe_base_key(ep.base_url)
+        key = (ep.method.upper(), path_key, origin_key)
         score = _base_score(ep.base_url, ep, preferred)
         prev = best_by_path.get(key)
         if prev is None or score > prev[1]:
@@ -194,12 +195,29 @@ def resolve_login_entries(
         raw_config = _load_raw_config()
 
     from app.services.login_endpoints_service import dashboard_login_entries
-    from diagnosis.replay.normalize import filter_login_entries_by_probe_bases
+    from diagnosis.replay.normalize import dedupe_login_entries, filter_login_entries_by_probe_bases
 
-    by_url: dict[str, dict[str, str]] = {}
-    for entry in discover_login_entries(auth_cfg, raw_config, data_dir=data_dir):
-        by_url[entry["url"]] = entry
-    for entry in dashboard_login_entries(raw_config):
-        by_url[entry["url"]] = entry
-    merged = sorted(by_url.values(), key=lambda e: (e.get("source") != "dashboard", e.get("url", "")))
+    collected: list[dict[str, str]] = []
+    explicit_urls = auth_cfg.get("login_urls") or []
+    if isinstance(explicit_urls, str):
+        explicit_urls = [explicit_urls]
+    for raw_url in explicit_urls:
+        url = str(raw_url or "").strip().rstrip("/")
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            continue
+        collected.append(
+            {
+                "url": url,
+                "label": _entry_label(url, multi=True),
+                "base_url": f"{parsed.scheme}://{parsed.netloc}",
+                "source": "config",
+                "kind": "api",
+                "method": "POST",
+                "path": parsed.path or "/",
+            }
+        )
+    collected.extend(discover_login_entries(auth_cfg, raw_config, data_dir=data_dir))
+    collected.extend(dashboard_login_entries(raw_config))
+    merged = dedupe_login_entries(collected)
     return filter_login_entries_by_probe_bases(merged, raw_config)

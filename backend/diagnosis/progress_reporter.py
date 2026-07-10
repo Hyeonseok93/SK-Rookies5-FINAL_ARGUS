@@ -33,8 +33,22 @@ def prepare(total: int, message: str) -> None:
     phase(message, phase_name="preparing", done=0, total=max(0, total))
 
 
-def zap_phase(message: str = "ZAP scan…", *, done: int | None = None, total: int | None = None) -> None:
-    phase(message, phase_name="zap", done=done, total=total, percent=90 if total is None else None)
+def zap_phase(
+    message: str = "ZAP scan…",
+    *,
+    done: int | None = None,
+    total: int | None = None,
+    percent: int | None = None,
+    requests_sent: int | None = None,
+) -> None:
+    phase(
+        message,
+        phase_name="zap",
+        done=done if done is not None else 0,
+        total=total if total is not None else 0,
+        percent=percent if percent is not None else (90 if total is None else None),
+        requests_sent=requests_sent,
+    )
 
 
 def endpoint_progress(

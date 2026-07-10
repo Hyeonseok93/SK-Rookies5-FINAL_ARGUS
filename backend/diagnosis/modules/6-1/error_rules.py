@@ -1,4 +1,10 @@
-"""Detect information disclosure in HTTP error responses (6-1)."""
+"""Detect information disclosure in HTTP error responses (6-1).
+
+SK Shielders 6-1 checklist buckets:
+  - dbms      : DBMS / SQL error disclosure
+  - exception : stack traces, framework internals, path in exceptions
+  - http      : server error messages, verbose HTTP pages, debug fields, ZAP disclosure
+"""
 
 from __future__ import annotations
 
@@ -7,17 +13,47 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+SK_DBMS = "dbms"
+SK_EXCEPTION = "exception"
+SK_HTTP = "http"
+
+SK_LABELS: dict[str, str] = {
+    SK_DBMS: "DBMS 오류",
+    SK_EXCEPTION: "익셉션 오류",
+    SK_HTTP: "HTTP/서버 오류",
+}
+
+_RE_FLAGS = re.IGNORECASE | re.MULTILINE
+
+_TECHNICAL_MARKERS = (
+    "exception",
+    "stack",
+    "trace",
+    "sqlexception",
+    "sqlstate",
+    "caused by",
+    "traceback",
+    "at com.",
+    "at org.",
+    "at java.",
+    "at sun.",
+    ".java:",
+    ".py:",
+    "nested exception",
+    "fatal error",
+)
+
 
 @dataclass(frozen=True)
 class LeakHit:
     rule_id: str
     severity: str
     category: str
+    sk_class: str
     marker: str
     hint: str
+    confidence: str = "high"
 
-
-_RE_FLAGS = re.IGNORECASE | re.MULTILINE
 
 _DB_PATTERNS: list[tuple[str, str, str]] = [
     (r"sqlsyntaxerrorexception|sqlexception|sqlstate\[", "sql_exception", "SQL exception text"),
@@ -26,14 +62,59 @@ _DB_PATTERNS: list[tuple[str, str, str]] = [
     (r"duplicate entry|foreign key constraint|violates .* constraint", "db_constraint", "DB constraint detail"),
 ]
 
-_STACK_PATTERNS: list[tuple[str, str, str]] = [
+_JAVA_STACK_PATTERNS: list[tuple[str, str, str]] = [
     (r"\bat\s+[\w.$]+\([\w./\\:]+\)", "java_stack", "Java stack frame"),
     (r"caused by:\s*\w", "java_caused", "Java Caused by chain"),
+    (r"nested exception is", "nested_exception", "Nested exception chain"),
+]
+
+_PY_DOTNET_PATTERNS: list[tuple[str, str, str]] = [
     (r"traceback \(most recent call last\)", "python_trace", "Python traceback"),
     (r'file "(/|\\)[^"]+", line \d+', "python_file", "Python source path"),
-    (r"fatal error:|parse error:|warning:.* in /", "php_error", "PHP error with path"),
     (r"at microsoft\.|at system\.|system\.\w+exception", "dotnet_stack", ".NET exception"),
-    (r"nested exception is", "nested_exception", "Nested exception chain"),
+]
+
+# WAS/framework-specific debug pages & stack formats not covered by the
+# generic Java/Python/.NET patterns above. Added to widen coverage to match
+# the WAS/framework examples the SK Shielders guideline calls out (IIS,
+# ASP.NET, and comparable stacks for other common runtimes).
+_WAS_STACK_PATTERNS: list[tuple[str, str, str]] = [
+    (
+        r"server error in '/' application|"
+        r"microsoft vbscript runtime error|"
+        r"microsoft ole db provider for|"
+        r"compilation error|"
+        r"an unhandled exception occurred while processing the request",
+        "aspnet_debug",
+        "ASP.NET / classic ASP debug page",
+    ),
+    (
+        r"django version:|you're seeing this error because you have debug = true|"
+        r"disallowedhost at |exception type:.*exception value:",
+        "django_debug",
+        "Django debug error page",
+    ),
+    (r"werkzeug debugger|traceback \(most recent call last\).*flask", "flask_debug", "Flask/Werkzeug debug page"),
+    (
+        r"at object\.<anonymous>|internal/modules/cjs/loader\.js|unhandledpromiserejection|"
+        r"throw err;\s*\^",
+        "node_stack",
+        "Node.js/Express stack trace",
+    ),
+    (
+        r"actioncontroller::routingerror|app/controllers/.*\.rb:\d+|"
+        r"activerecord::\w*error",
+        "rails_stack",
+        "Ruby on Rails stack trace",
+    ),
+    (r"weblogic\.\w+\.\w+exception|weblogic\.servlet", "weblogic_stack", "WebLogic exception leak"),
+    (r"jeus\.\w+\.\w+exception|tmax jeus", "jeus_stack", "Jeus exception leak"),
+]
+
+_PHP_PATTERNS: list[tuple[str, str, str]] = [
+    (r"fatal error:.* in /", "php_fatal", "PHP fatal error with path"),
+    (r"parse error:.* in /", "php_parse", "PHP parse error with path"),
+    (r"warning:.* in /[^\s]+\.php", "php_warning", "PHP warning with path"),
 ]
 
 _PATH_PATTERNS: list[tuple[str, str, str]] = [
@@ -45,32 +126,82 @@ _PATH_PATTERNS: list[tuple[str, str, str]] = [
 
 _FRAMEWORK_PATTERNS: list[tuple[str, str, str]] = [
     (r"whitelabel error page", "spring_whitelabel", "Spring Whitelabel error page"),
-    (r"org\.springframework\.|springframework/web", "spring_framework", "Spring framework leak"),
     (r"org\.hibernate\.|hibernate exception", "hibernate", "Hibernate leak"),
     (r"tomcat\.|apache tomcat|error report", "tomcat", "Tomcat default error"),
+    (
+        r"iis (detailed error|10\.0 detailed error)|the page cannot be displayed|"
+        r"http error 500\.19|http error 500\.0|internet information services",
+        "iis_default",
+        "IIS default error page",
+    ),
+    (r"webtob|tmaxsoft webtob", "webtob_default", "WebToB default error page"),
+    (r"jeus error page|jeus web server", "jeus_default", "Jeus default error page"),
+    (r"iplanet-web-server", "iplanet_banner", "iPlanet web server banner"),
+]
+
+_SPRING_STRICT_PATTERNS: list[tuple[str, str, str]] = [
+    (
+        r"org\.springframework\.[\w.$]+exception|springframework/web.*exception",
+        "spring_framework",
+        "Spring framework exception leak",
+    ),
+]
+
+_HTTP_PATTERNS: list[tuple[str, str, str]] = [
+    (r"internal server error.*(exception|stack|trace)", "verbose_500", "Verbose 5xx HTML/text body"),
+    (r"debug message|developer message", "verbose_field", "Debug/developer error field name"),
+    (r'"systemMessage"\s*:\s*"[^"]{1,}"', "json_system_message", "JSON systemMessage field (server error text)"),
+    (r'"trace"\s*:\s*"[^"]{8,}"', "json_trace_field", "JSON trace field with content"),
+    (r'"stack"\s*:\s*"[^"]{8,}"', "json_stack_field", "JSON stack field with content"),
+    (r'"exception"\s*:\s*"[^"]{8,}"', "json_exception_field", "JSON exception field with content"),
     (r"nginx/\d|apache/\d", "web_server_banner", "Web server version in body"),
 ]
 
-_VERBOSE_PATTERNS: list[tuple[str, str, str]] = [
-    (r"internal server error.*(exception|stack|trace)", "verbose_500", "Verbose 500 body"),
-    (r"debug message|systemmessage|developer message", "verbose_field", "Verbose error field name"),
-    (r"\"trace\"\s*:\s*\"", "json_trace_field", "JSON trace field with content"),
-    (r"\"stack\"\s*:\s*\"", "json_stack_field", "JSON stack field with content"),
-    (r"\"exception\"\s*:\s*\"", "json_exception_field", "JSON exception field with content"),
-]
-
-_ALL_RULES: list[tuple[str, str, list[tuple[str, str, str]]]] = [
-    ("high", "database", _DB_PATTERNS),
-    ("high", "stack_trace", _STACK_PATTERNS),
-    ("medium", "path_disclosure", _PATH_PATTERNS),
-    ("medium", "framework", _FRAMEWORK_PATTERNS),
-    ("low", "verbose_error", _VERBOSE_PATTERNS),
-]
+# Categories whose patterns key off generic substrings / keyword co-occurrence
+# rather than an unambiguous exception/stack signature. These can plausibly
+# false-positive (e.g. a legitimate page mentioning "/opt/" or a long verbose
+# 200 body), so hits here are downgraded to "review" instead of "high"
+# confidence — a diagnostician should confirm before treating them as a fail.
+_REVIEW_CATEGORIES = {"path_disclosure", "verbose_error"}
 
 
-def _response_text(body: str | bytes | None, content_type: str | None) -> str:
+def _confidence_for_category(category: str) -> str:
+    return "review" if category in _REVIEW_CATEGORIES else "high"
+
+
+_CATEGORY_SK: dict[str, str] = {
+    "database": SK_DBMS,
+    "stack_trace": SK_EXCEPTION,
+    "path_disclosure": SK_EXCEPTION,
+    "framework": SK_EXCEPTION,
+    "verbose_error": SK_HTTP,
+    "zap_error_disclosure": SK_HTTP,
+}
+
+_RULE_SK: dict[str, str] = {
+    "6-1-zap-90022": SK_HTTP,
+    "6-1-zap-10023": SK_HTTP,
+    "web_server_banner": SK_HTTP,
+    "tomcat": SK_HTTP,
+    "verbose_500": SK_HTTP,
+    "verbose_500_body": SK_HTTP,
+    "verbose_field": SK_HTTP,
+    "json_system_message": SK_HTTP,
+    "server_error_message": SK_HTTP,
+    "json_error_field": SK_HTTP,
+    "api_error_envelope": SK_HTTP,
+}
+
+
+def classify_sk(*, category: str, rule_id: str) -> str:
+    if rule_id in _RULE_SK:
+        return _RULE_SK[rule_id]
+    return _CATEGORY_SK.get(category, SK_HTTP)
+
+
+def _response_text(body: str | bytes | None, content_type: str | None) -> tuple[str, Any | None, bool]:
     if body is None:
-        return ""
+        return "", None, False
     if isinstance(body, bytes):
         try:
             text = body.decode("utf-8", errors="replace")
@@ -81,13 +212,122 @@ def _response_text(body: str | bytes | None, content_type: str | None) -> str:
     if len(text) > 120_000:
         text = text[:120_000]
     ct = (content_type or "").lower()
-    if "json" in ct or text.lstrip().startswith(("{", "[")):
+    is_json = "json" in ct or text.lstrip().startswith(("{", "["))
+    parsed: Any | None = None
+    if is_json:
         try:
             parsed = json.loads(text)
-            return json.dumps(parsed, ensure_ascii=False)
+            return json.dumps(parsed, ensure_ascii=False), parsed, True
         except (json.JSONDecodeError, TypeError):
             pass
-    return text
+    return text, None, is_json and text.lstrip().startswith("{")
+
+
+def _has_technical_leak(text: str) -> bool:
+    lower = text.lower()
+    return any(marker in lower for marker in _TECHNICAL_MARKERS)
+
+
+def _walk_strings(obj: Any) -> list[tuple[str, str]]:
+    """Return (field_name, value) pairs from nested JSON structures."""
+    out: list[tuple[str, str]] = []
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            if isinstance(val, str) and val.strip():
+                out.append((str(key), val.strip()))
+            elif isinstance(val, (dict, list)):
+                out.extend(_walk_strings(val))
+    elif isinstance(obj, list):
+        for item in obj:
+            out.extend(_walk_strings(item))
+    return out
+
+
+def _detect_sk_api_error_json(parsed: Any, *, status_code: int) -> list[LeakHit]:
+    """Flag server-side error text returned to the client (SK Shielders 6-1).
+
+    These are generic JSON-field heuristics (any "message"/"error"/"systemMessage"
+    field on an error response) rather than a deterministic exception signature,
+    so they are tagged "review" confidence — a diagnostician should confirm
+    whether the field genuinely leaks server-internal detail or is just the
+    app's normal error envelope shape.
+    """
+    if status_code < 400 or not isinstance(parsed, dict):
+        return []
+
+    hits: list[LeakHit] = []
+    fields = _walk_strings(parsed)
+    for key, value in fields:
+        key_lower = key.lower()
+        if key_lower == "systemmessage":
+            hits.append(
+                LeakHit(
+                    rule_id="json_system_message",
+                    severity="medium",
+                    category="verbose_error",
+                    sk_class=SK_HTTP,
+                    marker=value[:120],
+                    hint="systemMessage field exposes server error text to client",
+                    confidence="review",
+                )
+            )
+            break
+
+    msg = parsed.get("message")
+    if isinstance(msg, str) and msg.strip():
+        hits.append(
+            LeakHit(
+                rule_id="server_error_message",
+                severity="medium",
+                category="verbose_error",
+                sk_class=SK_HTTP,
+                marker=msg.strip()[:120],
+                hint="Error response message field exposes server/application error text",
+                confidence="review",
+            )
+        )
+
+    err = parsed.get("error")
+    if isinstance(err, str) and err.strip():
+        hits.append(
+            LeakHit(
+                rule_id="json_error_field",
+                severity="medium",
+                category="verbose_error",
+                sk_class=SK_HTTP,
+                marker=err.strip()[:120],
+                hint="Error string field in JSON error response",
+                confidence="review",
+            )
+        )
+    elif isinstance(err, dict):
+        detail = err.get("message") or err.get("systemMessage") or err.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            hits.append(
+                LeakHit(
+                    rule_id="json_error_field",
+                    severity="medium",
+                    category="verbose_error",
+                    sk_class=SK_HTTP,
+                    marker=detail.strip()[:120],
+                    hint="Nested error object exposes server error text",
+                    confidence="review",
+                )
+            )
+
+    if parsed.get("success") is False and not hits:
+        hits.append(
+            LeakHit(
+                rule_id="api_error_envelope",
+                severity="low",
+                category="verbose_error",
+                sk_class=SK_HTTP,
+                marker="success:false",
+                hint="API error envelope returned to client on failed request",
+                confidence="review",
+            )
+        )
+    return hits
 
 
 def _match_patterns(
@@ -99,20 +339,44 @@ def _match_patterns(
 ) -> list[LeakHit]:
     hits: list[LeakHit] = []
     lower = text.lower()
+    confidence = _confidence_for_category(category)
     for pattern, rule_id, hint in patterns:
-        if re.search(pattern, text, _RE_FLAGS) or re.search(pattern, lower, _RE_FLAGS):
-            m = re.search(pattern, text, _RE_FLAGS) or re.search(pattern, lower, _RE_FLAGS)
-            marker = m.group(0)[:120] if m else pattern
-            hits.append(
-                LeakHit(
-                    rule_id=rule_id,
-                    severity=severity,
-                    category=category,
-                    marker=marker,
-                    hint=hint,
-                )
+        if not re.search(pattern, text, _RE_FLAGS) and not re.search(pattern, lower, _RE_FLAGS):
+            continue
+        m = re.search(pattern, text, _RE_FLAGS) or re.search(pattern, lower, _RE_FLAGS)
+        marker = m.group(0)[:120] if m else pattern
+        hits.append(
+            LeakHit(
+                rule_id=rule_id,
+                severity=severity,
+                category=category,
+                sk_class=classify_sk(category=category, rule_id=rule_id),
+                marker=marker,
+                hint=hint,
+                confidence=confidence,
             )
+        )
     return hits
+
+
+def _filter_hits(
+    hits: list[LeakHit],
+    *,
+    status_code: int,
+    is_json: bool,
+) -> list[LeakHit]:
+    out: list[LeakHit] = []
+    seen: set[str] = set()
+    for hit in hits:
+        if hit.rule_id in seen:
+            continue
+        if hit.sk_class == SK_HTTP and status_code < 400:
+            continue
+        if is_json and hit.rule_id.startswith("php_"):
+            continue
+        seen.add(hit.rule_id)
+        out.append(hit)
+    return out
 
 
 def analyze_error_response(
@@ -121,37 +385,48 @@ def analyze_error_response(
     headers: dict[str, str] | None,
     body: str | bytes | None,
 ) -> list[LeakHit]:
-    """Return leak hits when error status or body contains disclosure markers."""
+    """Return leak hits when error body contains disclosure markers."""
     hdrs = {k.lower(): v for k, v in (headers or {}).items()}
     content_type = hdrs.get("content-type", "")
-    text = _response_text(body, content_type)
+    text, parsed, is_json = _response_text(body, content_type)
     if not text.strip():
         return []
 
     hits: list[LeakHit] = []
-    seen: set[str] = set()
-    for severity, category, patterns in _ALL_RULES:
-        for hit in _match_patterns(text, patterns, severity=severity, category=category):
-            if hit.rule_id in seen:
-                continue
-            seen.add(hit.rule_id)
-            hits.append(hit)
+    hits.extend(_match_patterns(text, _DB_PATTERNS, severity="high", category="database"))
 
-    if status_code >= 500 and len(text) > 400 and any(
-        k in text.lower() for k in ("exception", "stack", "trace", "sql", "caused by")
-    ):
-        key = "verbose_500_body"
-        if key not in seen:
-            hits.append(
-                LeakHit(
-                    rule_id=key,
-                    severity="medium",
-                    category="verbose_error",
-                    marker=text[:80].replace("\n", " "),
-                    hint="Large 5xx body with exception-like content",
-                )
+    stack_patterns = list(_JAVA_STACK_PATTERNS)
+    if not is_json:
+        stack_patterns.extend(_PHP_PATTERNS)
+    hits.extend(_match_patterns(text, stack_patterns, severity="high", category="stack_trace"))
+    hits.extend(_match_patterns(text, _PY_DOTNET_PATTERNS, severity="high", category="stack_trace"))
+    hits.extend(_match_patterns(text, _WAS_STACK_PATTERNS, severity="high", category="stack_trace"))
+
+    hits.extend(_match_patterns(text, _PATH_PATTERNS, severity="medium", category="path_disclosure"))
+    hits.extend(_match_patterns(text, _FRAMEWORK_PATTERNS, severity="medium", category="framework"))
+
+    if status_code >= 400 or _has_technical_leak(text):
+        hits.extend(_match_patterns(text, _SPRING_STRICT_PATTERNS, severity="medium", category="framework"))
+
+    if status_code >= 400:
+        hits.extend(_match_patterns(text, _HTTP_PATTERNS, severity="low", category="verbose_error"))
+        if parsed is not None:
+            hits.extend(_detect_sk_api_error_json(parsed, status_code=status_code))
+
+    if status_code >= 500 and len(text) > 400 and _has_technical_leak(text):
+        hits.append(
+            LeakHit(
+                rule_id="verbose_500_body",
+                severity="medium",
+                category="verbose_error",
+                sk_class=SK_HTTP,
+                marker=text[:80].replace("\n", " "),
+                hint="Large 5xx body with exception-like content",
+                confidence="review",
             )
-    return hits
+        )
+
+    return _filter_hits(hits, status_code=status_code, is_json=is_json)
 
 
 def remediation_hint(rule_id: str) -> str:
@@ -161,7 +436,24 @@ def remediation_hint(rule_id: str) -> str:
         "python_trace": "Set DEBUG=False / disable traceback in API error handlers.",
         "spring_whitelabel": "Use custom error pages; disable Whitelabel in production.",
         "json_trace_field": "Remove trace/stack fields from JSON error payloads (e.g. Spring error attributes).",
+        "json_system_message": "Do not return systemMessage or internal error text to clients; log server-side only.",
+        "server_error_message": "Return a generic user-facing message; keep server error details in logs only.",
+        "json_error_field": "Remove detailed error fields from API error responses.",
+        "api_error_envelope": "Use a unified generic error handler; avoid exposing server failure details in JSON.",
         "unix_home_path": "Strip filesystem paths from error messages.",
         "verbose_500_body": "Return minimal 5xx JSON/HTML without internal exception text.",
+        "aspnet_debug": "Set customErrors mode=On in web.config; disable IIS/ASP.NET debug pages in production.",
+        "django_debug": "Set DEBUG=False in Django settings and configure ALLOWED_HOSTS / custom 500 handler.",
+        "flask_debug": "Disable Werkzeug debugger (debug=False) in production Flask/WSGI config.",
+        "node_stack": "Add a generic error-handling middleware; never send err.stack to the client.",
+        "rails_stack": "Set config.consider_all_requests_local = false and config.action_dispatch.show_exceptions = false.",
+        "weblogic_stack": "Configure WebLogic error-page mapping (web.xml) for all HTTP codes; disable verbose faults.",
+        "jeus_stack": "Set print-error-to-browser=false in WEBMain.xml and configure Jeus error documents.",
+        "iis_default": "Configure IIS custom error pages (Error Pages panel) for 400/401/403/404/405/500.",
+        "webtob_default": "Configure ErrorDocument mapping in WebToB's http.m for all error codes.",
+        "jeus_default": "Configure Jeus admin console error-document settings per node/engine.",
+        "iplanet_banner": "Configure obj.conf Error fn=\"send-error\" for each error reason with a custom page.",
+        "6-1-zap-90022": "Return generic 5xx responses without stack traces or debug text.",
+        "6-1-zap-10023": "Disable debug error messages in production.",
     }
     return hints.get(rule_id, "Return generic error pages without internal implementation details.")

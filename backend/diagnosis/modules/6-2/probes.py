@@ -248,16 +248,6 @@ def run_login_enumeration_probes(
 
             if comparison.uniform:
                 stats["uniform"] += 1
-                findings.append(
-                    DiagnosisFinding(
-                        severity="info",
-                        message=(
-                            f"[6-2] Uniform login failure at `{label}` — "
-                            f"A/B/C responses match"
-                        ),
-                        evidence=base_evidence,
-                    )
-                )
             else:
                 stats["enumeration_risk"] += 1
                 diff_summary = "; ".join(comparison.differences)

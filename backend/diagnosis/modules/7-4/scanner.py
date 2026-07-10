@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from app.services.auth_probe_service import login_all_accounts
+from diagnosis.endpoint_auth_passes import load_login_report, primary_session_for_probe
+from diagnosis.probe_auth import all_account_auths_with_meta
 from app.services.zap_util import ZapNotAvailableError
 from diagnosis.context import DiagnosisContext
 from diagnosis.result import DiagnosisFinding
@@ -40,6 +41,7 @@ class ScanOptions:
     zap_enabled: bool = False
     zap_max_minutes: int = 10
     zap_seed_cap: int = 200
+    gradle_dep_files: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -64,16 +66,22 @@ def _scan_options(raw: dict[str, Any]) -> ScanOptions:
         zap_enabled=bool(cfg.get("zap_enabled", False)),
         zap_max_minutes=max(1, min(int(cfg.get("zap_max_minutes", 10)), 120)),
         zap_seed_cap=max(20, min(int(cfg.get("zap_seed_cap", 200)), 5000)),
+        gradle_dep_files=[str(p) for p in (cfg.get("gradle_dep_files") or []) if p],
     )
 
 
-def _primary_auth(raw: dict[str, Any]) -> dict[str, Any] | None:
-    auth_cfg = raw.get("auth") or {}
-    accounts = auth_cfg.get("accounts") or []
-    if not accounts:
-        return None
-    logins = login_all_accounts(auth_cfg, accounts)
-    return logins[0] if logins else None
+def _primary_auth(
+    raw: dict[str, Any],
+    *,
+    data_dir: Path | None = None,
+    base_url: str = "",
+    path: str = "/",
+) -> dict[str, Any] | None:
+    sessions, _meta = all_account_auths_with_meta(raw, data_dir=data_dir, refresh=True)
+    login_report = load_login_report(data_dir, raw)
+    if base_url:
+        return primary_session_for_probe(base_url, path, sessions, login_report)
+    return sessions[0] if sessions else None
 
 
 def _collapse_security_findings(
@@ -168,31 +176,74 @@ def run_g74_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         sample_size=opts.sample_size,
         extra_paths=opts.extra_paths,
     )
-    if not probe_targets:
+    if not probe_targets and not opts.gradle_dep_files:
         return ScanResult(
             status="skipped",
-            message="No base URLs configured — add targets in dashboard Base URLs or config.yaml",
+            message="No base URLs or dependency files configured.",
             stats={"targets": 0, "probe_mode": opts.probe_mode},
         )
 
     from diagnosis.progress_reporter import endpoint_progress, prepare, zap_phase
 
-    prepare(len(probe_targets), f"7-4: {len(probe_targets)} URL(s)")
-
     scan_rules = rules_mod.scan_rules_from_config(ctx.raw_config)
-    findings, stats = probes_mod.run_security_probes(
-        probe_targets,
-        scan_response_fn=lambda url, h, **kw: rules_mod.scan_response_security(
-            url, h, rules=scan_rules, **kw
-        ),
-        timeout=opts.timeout,
-        scan_rules=scan_rules,
-        on_progress=endpoint_progress(total=len(probe_targets), phase_name="httpx", prefix="httpx "),
-    )
+    findings: list[DiagnosisFinding] = []
+    stats: dict[str, Any] = {}
+
+    if probe_targets:
+        prepare(len(probe_targets), f"7-4: {len(probe_targets)} URL(s)")
+        probe_findings, probe_stats = probes_mod.run_security_probes(
+            probe_targets,
+            scan_response_fn=lambda url, h, **kw: rules_mod.scan_response_security(
+                url, h, rules=scan_rules, **kw
+            ),
+            timeout=opts.timeout,
+            scan_rules=scan_rules,
+            on_progress=endpoint_progress(total=len(probe_targets), phase_name="httpx", prefix="httpx "),
+        )
+        findings.extend(probe_findings)
+        stats.update(probe_stats)
+
     stats.update(target_meta)
     stats["probe_mode"] = opts.probe_mode
     stats["sample_size"] = opts.sample_size
     stats["httpx"] = {"probed": stats.get("probed", 0), "issues": stats.get("issues", 0)}
+
+    # TLS / certificate checks on HTTPS base URLs (target-agnostic, stdlib ssl).
+    # http 대상은 tls_check 가 알아서 무시함(전송암호화 부재는 security_rules 가 이미 지적).
+    tls_mod = _load_local("tls_check")
+    tls_base_urls = targets_mod.collect_base_urls(ctx.raw_config)
+    tls_findings, tls_stats = tls_mod.check_tls_for_base_urls(
+        tls_base_urls,
+        timeout=opts.timeout,
+    )
+    findings.extend(tls_findings)
+    stats["tls"] = tls_stats
+
+    # CVE / version-disclosure checks on all base URLs (target-agnostic).
+    version_mod = _load_local("version_check")
+    version_findings, version_stats = version_mod.check_versions_for_base_urls(
+        tls_base_urls,
+        timeout=opts.timeout,
+    )
+    findings.extend(version_findings)
+    stats["version"] = version_stats
+
+    # Sensitive open-port scan on target hosts (target-agnostic).
+    port_mod = _load_local("port_scan")
+    port_findings, port_stats = port_mod.scan_ports_for_base_urls(
+        tls_base_urls,
+    )
+    findings.extend(port_findings)
+    stats["ports"] = port_stats
+
+    # SCA / CVE — parse gradle dependency-tree files and query OSV.dev (target-agnostic).
+    if opts.gradle_dep_files:
+        from pathlib import Path as _Path
+        dep_paths = [_Path(p) for p in opts.gradle_dep_files]
+        sca_mod = _load_local("dependency_check")
+        sca_findings, sca_stats = sca_mod.scan_gradle_dependency_files(dep_paths)
+        findings.extend(sca_findings)
+        stats["sca"] = sca_stats
 
     priority_seed_urls: list[str] = []
     for finding in findings:
@@ -209,11 +260,17 @@ def run_g74_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         try:
             zap_phase("ZAP 7-4 security scan…")
             zap_mod = _load_local("zap_scan")
+            zap_primary = _primary_auth(
+                ctx.raw_config,
+                data_dir=ctx.data_dir,
+                base_url=str(probe_targets[0].get("base_url") or ""),
+                path=str(probe_targets[0].get("path") or "/"),
+            ) if probe_targets else _primary_auth(ctx.raw_config, data_dir=ctx.data_dir)
             zap_findings, zap_stats = zap_mod.run_zap_phase(
                 ctx.raw_config,
                 probe_targets,
                 base_urls,
-                _primary_auth(ctx.raw_config),
+                zap_primary,
                 max_minutes=opts.zap_max_minutes,
                 seed_cap=opts.zap_seed_cap,
                 priority_seed_urls=priority_seed_urls,

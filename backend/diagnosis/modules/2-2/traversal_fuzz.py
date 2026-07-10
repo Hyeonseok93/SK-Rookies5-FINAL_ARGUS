@@ -13,7 +13,8 @@ from app.services.zap_util import (
     zap_send_raw_request_full,
 )
 from diagnosis.result import DiagnosisFinding
-from inventory.probe_build import build_body_object, build_probe_request, format_raw_http_request
+from inventory.net import probe_base_url
+from inventory.probe_build import build_body_object, build_probe_request, format_raw_http_request, sample_value
 from inventory.schema import Endpoint
 from inventory.tags import PATH_LIKE_NAMES
 
@@ -137,6 +138,31 @@ def file_like_targets(ep: Endpoint) -> list[tuple[str, str]]:
     return targets
 
 
+def traversal_targets(ep: Endpoint) -> list[tuple[str, str]]:
+    """Params to fuzz: all dashboard-download inputs; otherwise file-like query/body only."""
+    if "dashboard-download" in (ep.tags or []):
+        targets: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for inp in ep.request_params:
+            if inp.role in ("auth", "meta"):
+                continue
+            if inp.in_ in ("query", "body", "form", "path"):
+                key = (inp.in_, inp.name)
+                if key not in seen:
+                    seen.add(key)
+                    targets.append(key)
+        return targets
+    return file_like_targets(ep)
+
+
+def path_param_defaults(ep: Endpoint) -> dict[str, str]:
+    defaults: dict[str, str] = {}
+    for inp in ep.request_params:
+        if inp.in_ == "path" and inp.role == "input":
+            defaults[inp.name] = str(sample_value(inp, ep.path))
+    return defaults
+
+
 def inject_query(url: str, param: str, value: str) -> str:
     from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -170,18 +196,37 @@ def build_traversal_probe(
     payload: str,
     auth: dict[str, Any] | None,
     baseline_body: dict[str, Any] | None = None,
+    baseline_path_defaults: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    probe = build_probe_request(ep, probe_base_fn=probe_url, account_auth=auth)
+    path_defaults = baseline_path_defaults if baseline_path_defaults is not None else path_param_defaults(ep)
+    probe = build_probe_request(
+        ep,
+        probe_base_fn=probe_url,
+        account_auth=auth,
+        path_param_defaults=path_defaults or None,
+    )
     base_obj = baseline_body if baseline_body is not None else build_body_object(ep)
     if param_in == "query":
         probe = dict(probe)
         probe["url"] = inject_query(probe["url"], param_name, payload)
+    elif param_in == "path":
+        overrides = dict(path_defaults)
+        overrides[param_name] = payload
+        probe = build_probe_request(
+            ep,
+            probe_base_fn=probe_url,
+            account_auth=auth,
+            path_param_defaults=overrides,
+        )
     else:
         probe = dict(probe)
         if base_obj:
             probe["body"] = inject_json_body("", param_name, payload, baseline=base_obj)
         else:
             probe["body"] = inject_json_body(probe.get("body") or "", param_name, payload)
+        if probe.get("body"):
+            probe["headers"] = dict(probe.get("headers") or {})
+            probe["headers"]["Content-Type"] = "application/json"
     return probe
 
 
@@ -323,6 +368,7 @@ def build_probe_result_evidence(
         "endpoint_id": ep.endpoint_id,
         "method": ep.method,
         "path": ep.path,
+        "base_url": probe_base_url(ep.base_url or ""),
         "param": param_name,
         "param_in": param_in,
         "payload": primary.get("payload"),
@@ -447,7 +493,7 @@ def run_traversal_probes_via_zap(
     sent = 0
 
     for ep in candidates:
-        targets = file_like_targets(ep)
+        targets = traversal_targets(ep)
         if not targets:
             continue
 
@@ -455,8 +501,14 @@ def run_traversal_probes_via_zap(
         baseline_body: bytes = b""
         baseline_headers: dict[str, str] = {}
         baseline_body_obj = build_body_object(ep)
+        baseline_path_defaults = path_param_defaults(ep)
 
-        baseline_probe = build_probe_request(ep, probe_base_fn=probe_url, account_auth=auth)
+        baseline_probe = build_probe_request(
+            ep,
+            probe_base_fn=probe_url,
+            account_auth=auth,
+            path_param_defaults=baseline_path_defaults or None,
+        )
         if baseline_body_obj and ep.method.upper() in ("POST", "PUT", "PATCH"):
             baseline_probe = dict(baseline_probe)
             baseline_probe["body"] = json.dumps(baseline_body_obj, ensure_ascii=False)
@@ -478,6 +530,7 @@ def run_traversal_probes_via_zap(
                     payload=payload,
                     auth=auth,
                     baseline_body=baseline_body_obj,
+                    baseline_path_defaults=baseline_path_defaults,
                 )
                 raw = format_raw_http_request(injected)
                 resp = zap_send_raw_request_full(zap, raw)
