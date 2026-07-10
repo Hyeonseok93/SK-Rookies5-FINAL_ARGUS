@@ -7,7 +7,7 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
-from diagnosis.replay.recorder import ReplaySession
+from diagnosis.g22_replay import G22ReplaySession as ReplaySession
 from diagnosis.result import DiagnosisFinding
 from inventory.schema import Endpoint
 

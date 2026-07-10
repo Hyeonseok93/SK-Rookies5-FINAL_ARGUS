@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.services.zap_util import probe_url
-from diagnosis.replay.recorder import ReplaySession
+from diagnosis.g22_replay import G22ReplaySession as ReplaySession
 from diagnosis.result import DiagnosisFinding
 from inventory.net import probe_base_url
 from inventory.probe_build import build_probe_request

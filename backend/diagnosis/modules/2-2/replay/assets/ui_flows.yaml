@@ -1,4 +1,4 @@
-# UI navigation flows for evidence replay (Playwright).
+# UI navigation flows for 2-2 evidence replay (Playwright).
 # Match API endpoints to browser steps users take before the vulnerable action.
 
 flows:

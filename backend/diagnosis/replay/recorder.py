@@ -100,25 +100,14 @@ class ReplayRecorder:
         )
         return step_id
 
-    def prepend_ui_flow(self, *, method: str, path: str) -> bool:
-        from diagnosis.replay.ui_flows import match_ui_flow, ui_flow_to_replay_steps
-
-        flow = match_ui_flow(method=method, path=path)
-        if not flow:
-            return False
-        ui_steps = ui_flow_to_replay_steps(flow, public_base_url=self.public_base)
-        self.steps = ui_steps + self.steps
-        return True
+    def _capture_modes(self, *modes: str) -> list[str]:
+        return list(modes)
 
     def append_ui_flow(self, *, method: str, path: str) -> bool:
-        from diagnosis.replay.ui_flows import match_ui_flow, ui_flow_to_replay_steps
+        return False
 
-        flow = match_ui_flow(method=method, path=path)
-        if not flow:
-            return False
-        ui_steps = ui_flow_to_replay_steps(flow, public_base_url=self.public_base, step_offset=len(self.steps))
-        self.steps.extend(ui_steps)
-        return True
+    def prepend_ui_flow(self, *, method: str, path: str) -> bool:
+        return False
 
     def record_http(
         self,
@@ -169,7 +158,7 @@ class ReplayRecorder:
                 account_email=account_email,
                 request=HttpRequestSpec(method=method, url=norm_url, headers=hdrs, body=body_str),
                 expect=expect,
-                capture=["response_file", "evidence_screenshot"],
+                capture=self._capture_modes("response_file", "evidence_screenshot"),
                 artifact_refs={"response_file": artifact_name},
                 manipulated_param=manipulated_param,
             )
@@ -215,7 +204,7 @@ class ReplayRecorder:
                 label=label,
                 left=left_id,
                 right=right_id,
-                capture=["evidence_screenshot"],
+                capture=self._capture_modes("evidence_screenshot"),
             )
         )
         return step_id
@@ -228,7 +217,7 @@ class ReplayRecorder:
                 action="annotate",
                 label=label or "Note",
                 text=text,
-                capture=["evidence_screenshot"],
+                capture=self._capture_modes("evidence_screenshot"),
             )
         )
         return step_id

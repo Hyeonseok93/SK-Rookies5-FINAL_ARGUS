@@ -426,7 +426,7 @@ def _run_module(mod: Any, ctx: DiagnosisContext, section_id: str) -> SectionRepo
     except DiagnosisCancelled as exc:
         dp.cancel_finish(f"{section_id}: cancelled")
         raise RuntimeError(str(exc) or "Diagnosis cancelled") from exc
-    if section_id in {"1-2", "7-4"} and report.status != "cancelled":
+    if section_id in {"1-2", "2-2", "7-4"} and report.status != "cancelled":
         from app.services.evidence_capture_service import capture_after_diagnosis
 
         dp.update(

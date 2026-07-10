@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 import httpx
 
 from diagnosis.replay.artifacts import body_fingerprint, guess_extension, save_response_artifact
-from diagnosis.replay.browser_auth import perform_login
+from diagnosis.g22_replay import perform_login
 from diagnosis.replay.evidence_panel import render_evidence_panel
 from diagnosis.replay.normalize import normalize_url, resolve_public_base_url
 from diagnosis.replay.schema import ReplayPlan, ReplayStep
@@ -125,6 +125,8 @@ class _AuthState:
             delivery=auth.delivery,
             cookie_name=auth.cookie_name,
             token_field=token_field,
+            raw_config=self.raw_config,
+            frontend_base_url=self.plan.env.public_base_url,
         )
         hdrs.update(self._auth_headers)
         return hdrs
