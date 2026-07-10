@@ -1,12 +1,12 @@
-"""Group 5-2 findings into evidence shots (one screenshot per endpoint × account).
+"""5-2 finding을 증거 shot으로 그룹핑 (엔드포인트 × 계정당 스크린샷 1장)
 
-Consolidation rules (confirmed with the user):
-  * response_body findings  → grouped by (endpoint, account); every value that account
-                              exposes on that endpoint is highlighted in one shot.
-  * request_body/request_url→ grouped by endpoint only (the probe we send is identical
-                              across accounts) → one "probe request" shot per endpoint.
-  * transport (http plain)  → no dedicated shot; the http:// is already visible in the
-                              address bar of every shot, so it's absorbed there.
+통합 규칙:
+  * response_body finding   → (엔드포인트, 계정)으로 그룹핑. 해당 계정이 그 엔드포인트에서
+                              노출하는 모든 값을 한 shot에 함께 강조.
+  * request_body/request_url→ 엔드포인트 단위로만 그룹핑(우리가 보내는 프로브는 계정과
+                              무관하게 동일) → 엔드포인트당 "프로브 요청" shot 1장.
+  * transport (http plain)  → 전용 shot 없음. http:// 는 모든 shot의 주소창에 이미
+                              보이므로 그쪽으로 흡수됨.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ class Shot:
     seq: int
     endpoint_id: str
     kind: str  # "response" | "request"
-    account: str  # auth_mode string, "anonymous", or "__probe__"
+    account: str  # auth_mode 문자열, "anonymous", 또는 "__probe__"
     severity: str = "info"
     categories: list[str] = field(default_factory=list)
     rule_ids: list[str] = field(default_factory=list)
@@ -50,7 +50,7 @@ class Shot:
             return "프로브 요청 (계정 무관)"
         if self.account in ("", "anonymous"):
             return "익명"
-        # "authenticated:yerin@travel.com:login" → "yerin@travel.com"
+        # "authenticated:yerin@travel.com:login" → "yerin@travel.com"으로 축약
         parts = self.account.split(":")
         return parts[1] if len(parts) >= 2 else self.account
 
@@ -64,12 +64,12 @@ class Shot:
 
 
 def real_findings(findings: list[DiagnosisFinding]) -> list[DiagnosisFinding]:
-    """Drop the synthetic '5-2 scan statistics' info finding — keep only PII hits."""
+    """합성된 '5-2 스캔 통계' info finding은 버리고 개인정보 탐지 건만 남김"""
     return [f for f in findings if (f.evidence or {}).get("rule_id")]
 
 
 def _accounts_for(ev: dict) -> list[str]:
-    """Every auth pass that saw this exact value (expand a collapsed 'multiple')."""
+    """이 값을 정확히 관측한 모든 인증 pass(축약된 'multiple'을 펼침)"""
     modes = ev.get("auth_modes")
     if isinstance(modes, list) and modes:
         return [str(m) for m in modes]
@@ -95,7 +95,7 @@ def _add_meta(shot: Shot, ev: dict, severity: str) -> None:
 
 
 def select_shots(findings: list[DiagnosisFinding]) -> list[Shot]:
-    """Collapse findings into one shot per (endpoint × account) exposure."""
+    """finding을 (엔드포인트 × 계정) 노출당 하나의 shot으로 합침"""
     shots: dict[tuple[str, str, str], Shot] = {}
 
     def _get(endpoint_id: str, kind: str, account: str) -> Shot:
@@ -127,7 +127,7 @@ def select_shots(findings: list[DiagnosisFinding]) -> list[Shot]:
                 if marker and marker not in shot.request_body_markers:
                     shot.request_body_markers.append(str(marker))
             _add_meta(shot, ev, f.severity)
-        # transport → absorbed into the address bar; no dedicated shot.
+        # transport → 주소창으로 흡수됨. 전용 shot 없음.
 
     ordered = sorted(
         shots.values(),

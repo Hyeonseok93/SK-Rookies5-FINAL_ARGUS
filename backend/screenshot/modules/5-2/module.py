@@ -1,9 +1,8 @@
-"""Screenshot capture for guideline 5-2: 요청 및 응답 값 내 주요정보 포함여부 확인.
+"""점검 항목 5-2 스크린샷 캡처: 요청 및 응답 값 내 주요정보 포함여부 확인
 
-Reads the 5-2 diagnosis report (data/report/5-2/latest.yaml), groups findings into
-distinct cases, re-issues each selected finding's original probe to capture real
-request/response evidence, and renders a 1280x720 PNG per instance into
-data/report/5-2/evidence/.
+5-2 진단 리포트(data/report/5-2/latest.yaml)를 읽어 finding을 개별 케이스로 그룹핑하고, 
+선택된 각 finding의 원본 프로브를 다시 전송해 실제 요청/응답 증거를 확보한 뒤, 
+인스턴스마다 1280x720 PNG를 data/report/5-2/evidence/ 에 렌더링
 """
 
 from __future__ import annotations
@@ -83,7 +82,7 @@ def _short_id(*parts: str) -> str:
 
 
 def _markers_visible(expected: list[str], *texts: str) -> int:
-    """How many expected markers actually appear in the rendered request/response text."""
+    """렌더링된 요청/응답 텍스트에 실제로 나타난 기대 마커의 개수"""
     blob = "\n".join(texts)
     return sum(1 for m in expected if m and m in blob)
 
@@ -105,11 +104,10 @@ def capture_from_findings(
     sessions: list[dict[str, Any]] | None = None,
     timeout: float = 15.0,
 ) -> ScreenshotRunResult:
-    """Capture evidence screenshots from in-memory findings (called by the 5-2 scanner).
+    """메모리상의 finding으로부터 증거 스크린샷을 캡처 (5-2 스캐너가 호출)
 
-    One screenshot per (endpoint × account) exposure — every value that account leaks on
-    that endpoint is highlighted together. `sessions` lets the caller pass already-
-    authenticated diagnosis sessions so we don't trigger a second round of logins.
+    (엔드포인트 × 계정) 노출당 스크린샷 1장 — 해당 계정이 그 엔드포인트에서 흘리는 모든 값을 함께 강조,
+    `sessions`로 이미 인증된 진단 세션을 넘겨주면 로그인을 다시 수행하지 않음
     """
     shots = grouping.select_shots(findings)
     if not shots:
@@ -145,8 +143,7 @@ def capture_from_findings(
                 )
                 continue
 
-            # response shots replay as the specific account; request shots are account-
-            # independent (the probe body is identical), so replay anonymously.
+            # response shot은 특정 계정으로 재요청하고, request shot은 계정과 무관하므로 (프로브 본문이 동일) 익명으로 재요청
             if shot.kind == "response":
                 session, matched = capture.resolve_session_for_auth_mode(shot.account, {}, sessions)
             else:
@@ -239,7 +236,7 @@ def capture_from_findings(
 
 
 def run(ctx: DiagnosisContext, *, timeout: float = 15.0) -> ScreenshotRunResult:
-    """Standalone entry: read the saved 5-2 report from disk, then capture screenshots."""
+    """단독 실행 진입점: 저장된 5-2 리포트를 디스크에서 읽고 스크린샷을 캡처"""
     report = _load_section_report(ctx)
     if report is None:
         return ScreenshotRunResult(
@@ -250,7 +247,7 @@ def run(ctx: DiagnosisContext, *, timeout: float = 15.0) -> ScreenshotRunResult:
 
 
 def _build_standalone_context() -> DiagnosisContext:
-    """Context builder for running this module directly (mirrors app diagnosis_service._context)."""
+    """이 모듈을 직접 실행하기 위한 컨텍스트 빌더(app diagnosis_service._context와 동일)"""
     import os
 
     from app.config import BACKEND_ROOT, config_to_inventory_dict, load_config

@@ -1,7 +1,6 @@
-"""Render one 5-2 evidence frame (fake browser chrome + request/response panels) to PNG.
+"""5-2 증거 프레임 한 장을 PNG로 렌더링
 
-One screenshot = one (endpoint × account) exposure: every unmasked value the scanner
-flagged for that request/response is highlighted together in orange.
+스크린샷 1장 = (엔드포인트 × 계정) 노출 1건: 스캐너가 그 요청/응답에서 표시한 마스킹되지 않은 모든 값을 주황색으로 함께 강조
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ from pathlib import Path
 
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
-BODY_WINDOW = 4000  # chars kept per body; 1280x720 only shows the first screenful anyway
+BODY_WINDOW = 4000 
 
 _MASKED_HEADER_NAMES = frozenset({"authorization", "cookie", "set-cookie"})
 
@@ -65,7 +64,7 @@ def pretty_body(raw: str | bytes, content_type: str = "") -> str:
 
 
 def window_multi(text: str, needles: list[str], *, max_len: int = BODY_WINDOW) -> str:
-    """Trim `text` to `max_len`, anchored at the earliest highlighted value."""
+    """가장 먼저 강조된 값을 기준점으로 삼아 `text`를 `max_len`으로 자름"""
     if len(text) <= max_len:
         return text
     positions = [p for n in needles if n and (p := text.find(n)) != -1]
@@ -80,10 +79,9 @@ def window_multi(text: str, needles: list[str], *, max_len: int = BODY_WINDOW) -
 
 
 def escape_and_mark_multi(text: str, needles: list[str]) -> tuple[str, int]:
-    """HTML-escape `text`, wrapping every occurrence of each needle in <mark>.
-
-    Longer needles are tokenised first so a shorter value that is a substring of a
-    longer one never double-wraps. Returns (html, distinct_needles_marked).
+    """`text`를 HTML 이스케이프하고, 각 needle의 모든 등장 위치를 <mark>로 감쌈,
+    긴 needle을 먼저 토큰화하여, 긴 값의 부분 문자열인 짧은 값이 이중으로 감싸지지 않게 함,
+    (html, 표시된 고유 needle 수)를 반환
     """
     uniq = sorted({n for n in needles if n}, key=len, reverse=True)
     if not uniq:
@@ -292,7 +290,7 @@ def render_html(spec: ShotSpec) -> str:
 
 
 class ScreenshotBrowser:
-    """Reusable headless Chromium session — one launch for a whole capture batch."""
+    """재사용 가능한 헤드리스 Chromium 세션 — 캡처 배치 전체를 한 번의 실행으로 처리"""
 
     def __init__(self) -> None:
         self._pw = None
