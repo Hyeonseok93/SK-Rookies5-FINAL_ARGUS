@@ -1,31 +1,31 @@
 app_name: onde-pilot
-
 targets:
-  - name: user-api
-    base_url: "http://host.docker.internal:8080"
-  - name: admin-api
-    base_url: "http://host.docker.internal:8081"
-
+- name: api
+  base_url: http://host.docker.internal:8080
+- name: admin-api
+  base_url: http://host.docker.internal:8081
 inventory:
   markdown:
     enabled: true
-    path: "/workspace/2단계(정보 수집 및 자산 분석 - 엔드포인트 수집)_Onde_엔드포인트_구조_정의서_v2.md"
+    path: /workspace/2단계(정보 수집 및 자산 분석 - 엔드포인트 수집)_Onde_엔드포인트_구조_정의서_v2.md
     include_frontend_routes: true
-    frontend_base_url: "http://localhost:5173"
+    frontend_base_url: http://localhost:5173
   openapi:
     enabled: false
-    path: ""
-    base_url: "http://host.docker.internal:8080"
+    path: ''
+    base_url: http://host.docker.internal:8080
   url_list:
     enabled: false
-    path: "data/inventory-urls.json"
-
+    path: data/inventory-urls.json
+  base_urls:
+  - http://host.docker.internal:8080
+  - http://host.docker.internal:8081
+  - http://localhost:5173
 zap:
-  proxy: "http://zap:8090"
-  api_key: ""
+  proxy: http://zap:8090
+  api_key: ''
   auto_wait: true
   wait_seconds: 90
-
 discover:
   openapi_import: true
   seed_requestor: true
@@ -34,41 +34,12 @@ discover:
   spider_max_seconds: 120
   ajax_spider_enabled: true
   ajax_spider_max_seconds: 120
-
 auth:
-  # Login page URLs → Dashboard Base URLs. Field names for login POST body only.
   id_field: email
   pw_field: password
-  token_field: cookie.accessToken
-  delivery: cookie
+  token_field: data.accessToken
+  delivery: header
   cookie_name: accessToken
-  login_urls:
-    - "http://localhost:8080/api/v1/auth/login"
-    - "http://localhost:8080/api/v1/auth/admin/login"
-
-
-frontend:
-  cookies:
-    names:
-      access: "onde_access_token"
-      refresh: "onde_refresh_token"
-      member_id: "onde_member_id"
-      role: "onde_member_role"
-      username: "onde_username"
-      name: "onde_name"
-      nickname: "onde_nickname"
-    required: [access, member_id, role, username]
-  error_phrases:
-    - "길을 잃"
-    - "페이지를 찾을 수 없"
-    - "문제가 발생했습니다"
-  # 경로 휴리스틱이 못 잡는 API→프론트 매핑만 명시(예: 이름이 안 겹치는 /mypage).
-  # api_path 는 fnmatch 글롭 지원, front_base 생략 시 인벤토리 프론트 base 사용.
-  route_overrides:
-    - { api_path: "*/members/me/profile", front_path: "/mypage" }
-    - { api_path: "*/members/me", front_path: "/mypage" }
-    - { api_path: "*/user/profile", front_path: "/mypage" }
-
 diagnosis_1_3:
   min_score: 2
   max_candidates: 80
@@ -76,47 +47,23 @@ diagnosis_1_3:
   httpx_enabled: true
   scan_all_inventory: false
   llm_interpret_enabled: true
-  ollama_base_url: "http://host.docker.internal:11434"
-  ollama_model: "qwen2.5:7b"
-
+  ollama_base_url: http://host.docker.internal:11434
+  ollama_model: qwen2.5:7b
 diagnosis_1_5:
-  redirect_sink_base: "http://host.docker.internal:8001/argus-redirect-sink"
+  redirect_sink_base: http://host.docker.internal:8001/argus-redirect-sink
   probe_mode: full
   sample_size: 60
   max_phase_a_jobs: 5000
   max_phase_b_jobs: 10000
   zap_enabled: false
-
 diagnosis_1_6:
-  # Mirrors native config.yaml: 1-6 runs the requests-based fuzzer against the
-  # api-tree spec — no ZAP, spider, or Selenium/Chrome login+CDP capture (Step 3).
-  # Screenshot capture (Step 7) no longer depends on Selenium/Step 3 — it runs
-  # its own Playwright/Chromium session regardless of skip_selenium, so evidence
-  # screenshots are still produced here (Dockerfile runs `playwright install
-  # chromium`). Under Docker the engine rewrites localhost->host.docker.internal
-  # via ARGUS_PROBE_HOST, so these host-facing URLs are already correct.
-  #
-  # ui_target left unset on purpose: scanner.py falls back to
-  # inventory.markdown.frontend_base_url (above) when it's absent, so this
-  # follows whatever target is currently configured instead of a second
-  # hardcoded copy. Verified equal to the old explicit value
-  # (http://host.docker.internal:5173) before removing it.
-  # ui_target: "http://host.docker.internal:5173"
-  zap_host: "zap"
+  ui_target: http://host.docker.internal:5174
+  zap_host: zap
   skip_zap: true
   skip_spider: true
   skip_selenium: true
   timeout_sec: 36000
   max_report_findings: 50
-  # role_login_targets/role_login_paths left unset on purpose: scanner.py
-  # auto-discovers login endpoints per role from the uploaded api-tree
-  # (g16_auth.auto_role_login_targets) when these are absent. Verified to
-  # produce the exact same values as below before removing them:
-  # role_login_targets:
-  #   admin: "http://host.docker.internal:8080"
-  # role_login_paths:
-  #   admin: "/api/v1/auth/admin/login"
-
 diagnosis_4_1:
   probe_mode: sample
   sample_size: 40
@@ -132,12 +79,11 @@ diagnosis_4_1:
   partial_cross_tamper: true
   max_tamper_variants_per_session: 24
   auth_profiles:
-    - bearer
-    - cookie_access
-    - cookie_refresh
-    - dual
-    - browser_full
-
+  - bearer
+  - cookie_access
+  - cookie_refresh
+  - dual
+  - browser_full
 diagnosis_5_2:
   probe_mode: sample
   sample_size: 40
@@ -149,7 +95,6 @@ diagnosis_5_2:
   check_response_body: true
   check_http_plain: true
   enable_auth_modes: true
-
 diagnosis_6_1:
   probe_mode: sample
   sample_size: 40
@@ -157,7 +102,10 @@ diagnosis_6_1:
   max_requests: 8000
   timeout: 10.0
   interval_sec: 0.02
-  long_lengths: [256, 1000, 5000]
+  long_lengths:
+  - 256
+  - 1000
+  - 5000
   enable_param_fuzz: true
   enable_body_fuzz: true
   enable_path_fuzz: true
@@ -165,19 +113,18 @@ diagnosis_6_1:
   enable_header_fuzz: true
   enable_auth_modes: true
   httpx_enabled: true
-
 diagnosis_4_2:
   timeout: 10.0
   max_token_lifetime_minutes: 30
   min_token_length: 32
   min_entropy: 3.5
-  probe_path: "/api/v1/members/me"
+  probe_path: /api/v1/members/me
   relogin_enabled: true
   duplicate_login_enabled: true
   duplicate_login_ip_enabled: true
   probe_client_ips:
-    - "203.0.113.10"
-    - "198.51.100.20"
+  - 203.0.113.10
+  - 198.51.100.20
   logout_enabled: true
   logout_urls: []
   client_logout_enabled: true
