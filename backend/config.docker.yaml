@@ -19,6 +19,10 @@ inventory:
   url_list:
     enabled: false
     path: "data/inventory-urls.json"
+  base_urls:
+    - http://host.docker.internal:8080
+    - http://host.docker.internal:8081
+    - http://localhost:5173
 
 zap:
   proxy: "http://zap:8090"
