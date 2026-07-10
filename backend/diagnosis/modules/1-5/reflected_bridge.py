@@ -27,12 +27,20 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from diagnosis.exceptions import DiagnosisCancelled
 from diagnosis.result import DiagnosisFinding
 
 logger = logging.getLogger(__name__)
 
 _MODULE_DIR = Path(__file__).resolve().parent
-_MAX_WORKERS = 32
+_MAX_WORKERS = 8
+
+
+def _raise_if_cancelled() -> None:
+    from app.services import diagnosis_progress as dp
+
+    if dp.is_cancel_requested():
+        raise DiagnosisCancelled("User cancelled diagnosis")
 
 
 def _load_local(name: str):
@@ -211,13 +219,26 @@ def run_on_jobs(
             groups.setdefault(key, []).append(job)
 
         def _probe_group(group_jobs: list[dict[str, Any]]) -> list[tuple[dict[str, Any], list[Any]]]:
-            return [(job, _probe_one(job)) for job in group_jobs]
+            out = []
+            for job in group_jobs:
+                # 그룹 내부는 순차 처리라(위 주석 참고) job 하나가 최대 14회 요청을
+                # 쓸 수 있다 — 다음 job으로 넘어가기 전에 취소 여부를 확인해, 취소 후에도
+                # 같은 그룹의 나머지 job들을 죽은/느린 타겟에 계속 쏘는 걸 막는다.
+                _raise_if_cancelled()
+                out.append((job, _probe_one(job)))
+            return out
 
         with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
             futures = [pool.submit(_probe_group, group_jobs) for group_jobs in groups.values()]
+            cancelled = False
             for future in as_completed(futures):
                 try:
                     group_results = future.result()
+                except DiagnosisCancelled:
+                    cancelled = True
+                    for f in futures:
+                        f.cancel()
+                    break
                 except Exception as exc:
                     logger.warning(f"[1-5][reflected] 그룹 처리 실패: {exc}")
                     continue
@@ -229,6 +250,10 @@ def run_on_jobs(
                             stats["reflected_only"] += 1
                         findings.append(_to_diagnosis_finding(finding, rule_id="1-5-reflected-probe"))
                     _report(job)
+        if cancelled:
+            raise DiagnosisCancelled("User cancelled diagnosis")
+    except DiagnosisCancelled:
+        raise
     except Exception as exc:
         logger.warning(f"[1-5][reflected] run_on_jobs 실패 — 지금까지 모은 결과만 반환: {exc}")
         stats["error"] = str(exc)[:200]
@@ -346,13 +371,23 @@ def run_xss_on_jobs(
             groups.setdefault(key, []).append(job)
 
         def _probe_group(group_jobs: list[dict[str, Any]]) -> list[tuple[dict[str, Any], list[Any]]]:
-            return [(job, _probe_one(job)) for job in group_jobs]
+            out = []
+            for job in group_jobs:
+                _raise_if_cancelled()
+                out.append((job, _probe_one(job)))
+            return out
 
         with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
             futures = [pool.submit(_probe_group, group_jobs) for group_jobs in groups.values()]
+            cancelled = False
             for future in as_completed(futures):
                 try:
                     group_results = future.result()
+                except DiagnosisCancelled:
+                    cancelled = True
+                    for f in futures:
+                        f.cancel()
+                    break
                 except Exception as exc:
                     logger.warning(f"[1-5][xss] 그룹 처리 실패: {exc}")
                     continue
@@ -364,6 +399,10 @@ def run_xss_on_jobs(
                             stats["candidate"] += 1
                         findings.append(_to_xss_diagnosis_finding(finding))
                     _report(job)
+        if cancelled:
+            raise DiagnosisCancelled("User cancelled diagnosis")
+    except DiagnosisCancelled:
+        raise
     except Exception as exc:
         logger.warning(f"[1-5][xss] run_xss_on_jobs 실패 — 지금까지 모은 결과만 반환: {exc}")
         stats["error"] = str(exc)[:200]
@@ -402,6 +441,8 @@ def run_login_redirect_browser_check(
             candidates, payload_host=host, cookies=cookies, on_progress=on_progress,
         )
         findings = [_to_diagnosis_finding(f, rule_id="1-5-client-redirect-browser") for f in raw_findings]
+    except DiagnosisCancelled:
+        raise
     except Exception as exc:
         logger.warning(f"[1-5][reflected] 브라우저 리다이렉트 검증 실패 — 건너뜀: {exc}")
         stats["error"] = str(exc)[:200]

@@ -37,6 +37,14 @@ _GUIDE_REFERENCE = "SK Shieldus Web/API 개발보안 Guideline v3.0.0 항목 1-1
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH"})
 
 
+def _raise_if_cancelled() -> None:
+    from app.services import diagnosis_progress as dp
+    from diagnosis.exceptions import DiagnosisCancelled
+
+    if dp.is_cancel_requested():
+        raise DiagnosisCancelled("User cancelled diagnosis")
+
+
 def _load_local(name: str):
     path = _MODULE_DIR / f"{name}.py"
     mod_name = f"diag_g15_{name}"
@@ -109,6 +117,9 @@ def probe_candidate_xss(candidate: Any, *, marker: str, custom_header: str | Non
 
     findings: list[XssFinding] = []
     for payload_val, payload_desc in payloads:
+        # reflected_detector.probe_candidate()와 동일한 이유 — 페이로드/read-back마다
+        # 최대 TIMEOUT짜리 블로킹 요청이 나가므로 다음 요청 전에 취소 여부를 확인한다.
+        _raise_if_cancelled()
         test = _send(c, payload_val, custom_header)
         finding = _judge(c, payload_val, payload_desc, baseline, test)
         if finding is None and is_write and 200 <= test.get("status", -1) < 300:
