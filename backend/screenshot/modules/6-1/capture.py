@@ -4,31 +4,31 @@ diagnosis/modules/6-1 스캐너가 만든 report(``data/report/6-1/latest.yaml``
 ``latest-summary.json``)를 읽어, 대표 finding마다 "실제" 증거 사진 3장(공격 전 /
 입력(요청) / 결과)을 만든다.
 
-가짜 브라우저 UI(주소창/탭 모형)나 가짜 "Burp Suite" 브랜딩을 그려붙이지 않는다.
-대신 실제로 관측한 값만 사용한다. 가로 폭은 1280px로 고정하고, 세로 길이는
-내용에 맞춰 늘어난다 — 고정 높이로 자르면 주소나 본문이 잘리므로, "다 보이게"가
-"고정 크기"보다 우선이다:
+화면이 보이는 진짜 Chrome 창을 실제 OS 레벨로 캡처한다(``mss``/``PrintWindow``) —
+주소창, 탭까지 전부 실제 픽셀이다. 그 창 안에서 실제로 로드된 페이지 위에
+Burp Suite 스타일의 어두운 패널(Request/Response)을 DOM에 직접 주입한 뒤 그
+상태 그대로 창 전체를 캡처하므로, 패널도 실제 브라우저가 그린 진짜 픽셀이다.
+캔버스는 항상 1280x720 고정 크기(``WINDOW_SIZE``)다:
 
 - **STEP1 공격 전(before)**: 취약 URL을 건드리기 전, 정상 오리진 홈 화면을
-  ``page.screenshot(full_page=True)``로 담아 "평소 상태"를 남긴다.
+  오버레이 없이 그대로 캡처해 "평소 상태"를 남긴다.
 - **STEP2 입력(input)**: 실제로 전송되는 요청을 보여준다. GET은 화면이 보이는
-  진짜 Chrome 창을 실제 URL로 이동시킨 뒤 CDP(``Browser.getWindowBounds``)로
-  그 창의 실제 OS 좌표를 얻어 ``mss``로 그대로 캡처한 진짜 픽셀 중 주소창/탭
-  부분만 잘라 "이 URL로 요청을 보낸다"를 보여준다. POST/PUT/PATCH/DELETE는
-  아직 응답이 없는 상태의 Request 패널만 렌더링한다.
+  진짜 Chrome 창을 실제 URL로 이동시켜(주소창에 그 URL이 그대로 보임) 아직
+  판정 전 Request 패널만 오버레이로 얹어 캡처한다. POST/PUT/PATCH/DELETE는
+  브라우저로 재현할 수 없으므로 원본 페이지 위에 "응답 대기 중" Request
+  패널만 얹는다.
 - **STEP3 결과(result)**: 같은 요청에서 실제로 관측한 method, URL, 요청/응답
-  헤더, 응답 바디를 있는 그대로(꾸밈 없이) 2단 패널로 보여주고, 응답 본문에서
-  정보 노출 시그니처(예외/스택트레이스 등)가 실제로 발견됐는지로 판단한
-  confirmed/failure_reason을 배너로 함께 남긴다. 고정 높이/overflow 클리핑을
-  쓰지 않고 내용에 맞춰 자연스럽게 늘어나게 해서 텍스트가 잘리지 않는다.
+  헤더, 응답 바디를 있는 그대로(꾸밈 없이) Request/Response 2단 패널로 얹어
+  캡처하고, 응답 본문에서 정보 노출 시그니처(예외/스택트레이스 등)가 실제로
+  발견됐는지로 판단한 confirmed/failure_reason 배너도 함께 얹는다.
 
 POST/PUT/PATCH/DELETE는 브라우저가 그대로 재현할 수 없다 — ``<form method>``는
 GET/POST만 가능하고, 폼은 body를 ``application/x-www-form-urlencoded``로 보내서
 실제 finding(``Content-Type: application/json``)과 다른 코드 경로를 타
 (실측 결과: CORS 오류로 대체됨) 증거로 부적합하다. 그래서 이 경우는 STEP2에서
-주소창/본문 캡처 없이 대기 중인 요청 내용만 보여주고, STEP3에서 finding을 만든
-것과 동일한 방식(같은 method, 같은 Content-Type)으로 살아있는 서버에 실제 요청을
-보내고 받은 진짜 Request/Response를 패널에 채운다.
+대기 중인 요청 내용만 보여주고, STEP3에서 finding을 만든 것과 동일한 방식(같은
+method, 같은 Content-Type)으로 살아있는 서버에 실제 요청을 보내고 받은 진짜
+Request/Response를 패널에 채운다.
 
 로그인이 필요한 대상은 ``auth_config``로 인증 정보를 넘기면 캡처 세션 시작 전에
 쿠키/헤더를 주입한다. 세 가지 방식을 지원한다 — 이 report를 만든 6-1 스캐너가
@@ -66,6 +66,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 from PIL import Image
@@ -93,13 +94,35 @@ except ImportError:  # pragma: no cover - exercised only when mss isn't installe
 
 try:  # pragma: no cover - Windows-only
     import win32gui
+    import win32process
     import win32ui
 
     _WIN32_AVAILABLE = sys.platform == "win32"
+    if _WIN32_AVAILABLE:
+        # DPI-aware로 설정하지 않으면 이 파이썬 프로세스는 Windows가 가상화한
+        # (스케일된) 좌표를 GetWindowRect로 돌려주는데, DPI-aware인 Chrome이
+        # 보고하는 CDP 좌표는 실제 물리 픽셀이라 서로 어긋난다(실측: 0.9375배
+        # 축소된 값이 나옴) — 그래서 항상 DPI-aware를 켜서 같은 좌표계를 쓰게 한다.
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+        except Exception:  # noqa: BLE001
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:  # noqa: BLE001
+                pass
 except ImportError:
     win32gui = None
+    win32process = None
     win32ui = None
     _WIN32_AVAILABLE = False
+
+try:
+    import psutil
+
+    _PSUTIL_AVAILABLE = True
+except ImportError:  # pragma: no cover - exercised only when psutil isn't installed
+    psutil = None
+    _PSUTIL_AVAILABLE = False
 
 SECTION_ID = "6-1"
 DEFAULT_MAX_PER_GROUP = 3
@@ -109,34 +132,67 @@ DEFAULT_MAX_PER_GROUP = 3
 # 서버 주소로 치환해서 "진짜 웹페이지를 캡처한" 사진이 되게 한다.
 DEFAULT_PUBLIC_BASE_URL = "http://192.168.0.55"
 
-# 가로 폭은 항상 이 값으로 고정 — 세로 길이는 내용에 맞춰 자연스럽게 늘어난다.
+# 모든 캡처는 이 크기로 고정된 실제 브라우저 창을 그대로 찍는다.
 CANVAS_WIDTH = 1280
-# 브라우저 창 초기 크기(내비게이션/렌더링용). 창을 캔버스 폭보다 작게 줄이면 OS
-# 창은 작아져도 Chrome의 내부 렌더링 캔버스는 그대로 커서(실측: innerHeight가
-# 줄어들지 않고 유지됨) 작은 창이 그 안을 들여다보는 "구멍"처럼 동작해 텍스트가
-# 줄 경계와 무관하게 잘린다. 그래서 창은 늘 넉넉한 크기로 유지한다.
-WINDOW_SIZE = {"width": CANVAS_WIDTH, "height": 480}
-
-_CHROME_STRIP_H = {"win32": 170, "linux": 100, "darwin": 130}
-_DEFAULT_CHROME_STRIP_H = 130
+CANVAS_HEIGHT = 720
+WINDOW_SIZE = {"width": CANVAS_WIDTH, "height": CANVAS_HEIGHT}
 
 
-def _chrome_strip_height() -> int:
-    return _CHROME_STRIP_H.get(sys.platform, _DEFAULT_CHROME_STRIP_H)
+def _our_descendant_pids() -> set[int]:
+    """현재 파이썬 프로세스에서 뻗어나온 모든 자식 프로세스 PID(우리가 launch한
+    Playwright 드라이버 → Chromium까지 포함)."""
+    if not _PSUTIL_AVAILABLE:
+        return set()
+    try:
+        me = psutil.Process()
+        return {p.pid for p in me.children(recursive=True)} | {me.pid}
+    except Exception:  # noqa: BLE001
+        return set()
 
 
 def _find_chrome_hwnd(bounds: dict[str, int]) -> int | None:
-    """OS 창 목록에서 우리가 띄운 Chrome 창을 찾는다(클래스명 + 정확한 좌표 일치)."""
+    """우리가 launch한 Chromium 창을 찾는다.
+
+    좌표 일치나 "포그라운드 창" 매칭은 이 프로젝트 환경에서 실측으로 신뢰할 수
+    없다고 확인됐다 — IDE(Antigravity, Chromium 기반)가 우리 자동화 브라우저와
+    똑같은 창 클래스(``Chrome_WidgetWin_1``)에 똑같은 좌표로 겹쳐 뜨기도 하고,
+    always-on-top 위젯이 포그라운드를 가로채기도 한다. 대신 창을 소유한 프로세스의
+    PID가 우리 파이썬 프로세스의 자손인지로 판별한다 — 이건 클래스/좌표가 같아도
+    절대 헷갈리지 않는다.
+    """
+    our_pids = _our_descendant_pids()
+    if our_pids:
+        candidates: list[int] = []
+
+        def _cb_pid(hwnd: int, _: object) -> bool:
+            if win32gui.IsWindowVisible(hwnd) and win32gui.GetClassName(hwnd) == "Chrome_WidgetWin_1":
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                if pid in our_pids:
+                    candidates.append(hwnd)
+            return True
+
+        win32gui.EnumWindows(_cb_pid, None)
+        if candidates:
+            # 같은 프로세스라도 번역 팝업/권한 알림 같은 작은 보조 창이 별도
+            # Chrome_WidgetWin_1으로 같이 잡힐 수 있어(실측 확인됨), 그중 면적이
+            # 가장 큰 걸 메인 브라우저 창으로 본다.
+            def _area(hwnd: int) -> int:
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                return max(0, right - left) * max(0, bottom - top)
+
+            return max(candidates, key=_area)
+
+    # PID 매칭이 실패한 경우(예: psutil 미설치)에만 좌표 일치로 폴백한다.
     target_rect = (bounds["left"], bounds["top"], bounds["left"] + bounds["width"], bounds["top"] + bounds["height"])
     found: list[int] = []
 
-    def _cb(hwnd: int, _: object) -> bool:
+    def _cb_rect(hwnd: int, _: object) -> bool:
         if win32gui.IsWindowVisible(hwnd) and win32gui.GetClassName(hwnd) == "Chrome_WidgetWin_1":
             if win32gui.GetWindowRect(hwnd) == target_rect:
                 found.append(hwnd)
         return True
 
-    win32gui.EnumWindows(_cb, None)
+    win32gui.EnumWindows(_cb_rect, None)
     return found[0] if found else None
 
 
@@ -187,9 +243,6 @@ def _capture_chrome_window(bounds: dict[str, int], dest: Path) -> None:
         mss.tools.to_png(shot.rgb, shot.size, output=str(dest))
 
 
-_PANEL_TOOLBAR_H = 26
-_PANEL_COL_HEAD_H = 22
-
 _MODULE_DIR = Path(__file__).resolve().parent
 _BACKEND_ROOT = _MODULE_DIR.parents[2]
 
@@ -211,6 +264,10 @@ def _slug(text: str) -> str:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _esc(value: object) -> str:
+    return html.escape(str(value if value is not None else ""))
 
 
 def _highlight(text: str) -> str:
@@ -363,107 +420,97 @@ class RealExchange:
     note: str = ""  # set when something genuinely failed — never fabricated content
 
 
-@dataclass
-class RealCaptures:
-    content_path: Path | None = None  # full real page content (page.screenshot(full_page=True))
+# ---------------------------------------------------------------------------
+# Burp Suite 스타일 오버레이 — 실제로 로드된 페이지의 DOM 위에 얹어서, 페이지와
+# 함께 그대로(OS 레벨로) 캡처되게 한다. 별도 문서를 새로 만들지 않는다.
+# ---------------------------------------------------------------------------
+_OVERLAY_CSS = """
+#argus-evidence-root, #argus-evidence-root * { box-sizing: border-box !important; }
+#argus-evidence-root { position: fixed !important; inset: 0 !important; z-index: 2147483647 !important;
+  pointer-events: none !important; font-family: Arial, "Noto Sans KR", sans-serif !important; }
+#argus-evidence-bottom { position: absolute !important; top: 260px !important; left: 0 !important;
+  width: 100vw !important; height: calc(100vh - 260px) !important; background: #111315 !important;
+  color: #e4e8ec !important; border-top: 4px solid #e7782f !important; }
+#argus-evidence-tabs { height: 32px !important; padding: 7px 12px !important; background: #25282c !important;
+  color: #aaa !important; font-size: 12px !important; font-weight: 700 !important; }
+#argus-evidence-tabs b { color: #ef873e !important; margin-right: 22px !important; }
+#argus-evidence-target { height: 34px !important; padding: 8px 12px !important; background: #191b1e !important;
+  border-top: 1px solid #393d42 !important; border-bottom: 1px solid #393d42 !important;
+  color: #d4d8dd !important; font: 12px ui-monospace, monospace !important; white-space: nowrap !important;
+  overflow: hidden !important; text-overflow: ellipsis !important; }
+#argus-evidence-verdict { padding: 6px 12px !important; font-size: 12px !important; font-weight: 700 !important; }
+#argus-evidence-verdict.hit { background: #3a1414 !important; color: #ff8a80 !important; }
+#argus-evidence-verdict.miss { background: #141a14 !important; color: #8bd18b !important; }
+#argus-evidence-panels { display: grid !important; height: calc(100vh - 330px) !important; }
+#argus-evidence-panels.two-col { grid-template-columns: 1fr 1fr !important; }
+#argus-evidence-panels.one-col { grid-template-columns: 1fr !important; }
+.argus-evidence-panel { min-width: 0 !important; border-right: 1px solid #383c41 !important;
+  background: #111315 !important; }
+.argus-evidence-panel:last-child { border-right: none !important; }
+.argus-evidence-heading { height: 30px !important; padding: 8px 11px !important; background: #25282c !important;
+  color: #72d68b !important; font-size: 12px !important; font-weight: 700 !important; }
+.argus-evidence-pre { height: calc(100vh - 360px) !important; margin: 0 !important; padding: 12px !important;
+  overflow: hidden !important; color: #d8dde2 !important; white-space: pre-wrap !important;
+  overflow-wrap: anywhere !important; font: 10.5px/1.42 ui-monospace, SFMono-Regular, Menlo, monospace !important; }
+.argus-evidence-pre mark { background: #e0a000 !important; color: #1a1200 !important; padding: 0 2px !important;
+  border-radius: 2px !important; font-weight: 700 !important; }
+"""
 
 
-def _render_panel_html(
+def _request_text(exch: RealExchange) -> str:
+    lines = [f"{exch.method} {exch.url} HTTP/1.1"]
+    lines += [f"{k}: {v}" for k, v in exch.request_headers.items()]
+    if exch.request_body:
+        lines += ["", exch.request_body]
+    return "\n".join(lines)
+
+
+def _response_text(exch: RealExchange) -> str:
+    if exch.status is not None:
+        lines = [f"HTTP/1.1 {exch.status}"]
+        lines += [f"{k}: {v}" for k, v in exch.response_headers.items()]
+        lines += ["", exch.response_body or "(응답 본문 없음)"]
+    else:
+        lines = ["(응답 대기 중)"] if not exch.note else [exch.note]
+    return "\n".join(lines)
+
+
+def _overlay_markup(
     exch: RealExchange,
-    captures: RealCaptures | None,
+    *,
+    finding_id: str,
+    request_only: bool = False,
     verdict: tuple[bool, str] | None = None,
 ) -> str:
-    """본문 전체(선택) + Request/Response 2단 패널 (+ 선택적 판정 배너).
-
-    고정 높이나 overflow 클리핑을 쓰지 않는다 — 세로는 내용에 맞춰 자연스럽게
-    늘어나고, 최종 캡처는 ``full_page=True``로 그 전체를 담는다.
-    """
-    req_lines = [f"{exch.method} {exch.url}", ""]
-    req_lines += [f"{k}: {v}" for k, v in exch.request_headers.items()]
-    if exch.request_body:
-        req_lines += ["", exch.request_body]
-    req_text = "\n".join(req_lines)
-
-    if exch.status is not None:
-        status_line = f"HTTP/1.1 {exch.status}"
-    elif exch.note and "대기" in exch.note:
-        status_line = "(응답 대기 중)"
-    else:
-        status_line = "(요청 실패)"
-    resp_lines = [status_line]
-    resp_lines += [f"{k}: {v}" for k, v in exch.response_headers.items()]
-    resp_lines += ["", exch.response_body or exch.note or "(응답 본문 없음)"]
-    resp_text = "\n".join(resp_lines)
-
-    content_html = ""
-    if captures and captures.content_path and captures.content_path.is_file():
-        with Image.open(captures.content_path) as im:
-            content_h = im.height
-        content_html = (
-            f'<img class="content" src="{captures.content_path.resolve().as_uri()}" '
-            f'width="{CANVAS_WIDTH}" height="{content_h}">'
-        )
-
     verdict_html = ""
     if verdict is not None:
         confirmed, reason = verdict
-        cls = "verdict-hit" if confirmed else "verdict-miss"
+        cls = "hit" if confirmed else "miss"
         label = "정보 노출 확인됨 (CONFIRMED)" if confirmed else "정보 노출 미확인"
-        verdict_html = (
-            f'<div class="verdict {cls}">{html.escape(label)} — {html.escape(reason)}</div>'
-        )
+        verdict_html = f'<div id="argus-evidence-verdict" class="{cls}">{_esc(label)} — {_esc(reason)}</div>'
 
-    return f"""<!DOCTYPE html>
-<html lang="ko"><head><meta charset="utf-8">
-<style>
-  * {{ box-sizing:border-box; }}
-  html, body {{
-    margin:0; padding:0; width:{CANVAS_WIDTH}px;
-    background:#12151a; font-family:"Segoe UI",Arial,sans-serif;
-  }}
-  img.content {{ display:block; width:{CANVAS_WIDTH}px; }}
-  .verdict {{
-    padding:10px 14px; font-size:13px; font-weight:700;
-    border-bottom:1px solid #262b33;
-  }}
-  .verdict-hit {{ background:#3a1414; color:#ff8a80; }}
-  .verdict-miss {{ background:#141a14; color:#8bd18b; }}
-  .panel {{ width:{CANVAS_WIDTH}px; background:#12151a; color:#e2e6ea; }}
-  .toolbar {{
-    height:{_PANEL_TOOLBAR_H}px; display:flex; align-items:center; padding:0 12px;
-    font-size:11px; color:#8b95a1; background:#1a1e24; border-bottom:1px solid #262b33;
-  }}
-  .cols {{ display:grid; grid-template-columns:1fr 1fr; }}
-  .col {{ border-right:1px solid #262b33; }}
-  .col:last-child {{ border-right:none; }}
-  .col-head {{
-    height:{_PANEL_COL_HEAD_H}px; padding:4px 12px; font-size:10.5px; text-transform:uppercase;
-    letter-spacing:.05em; color:#8b95a1; background:#1a1e24;
-  }}
-  .col pre {{
-    margin:0; padding:10px 12px; font-size:12px; line-height:1.5;
-    white-space:pre-wrap; word-break:break-word;
-    font-family:Consolas,"Courier New",monospace; color:#e2e6ea;
-  }}
-  mark {{ background:#e0a000; color:#1a1200; padding:0 2px; border-radius:2px; font-weight:700; }}
-</style></head>
-<body>
-  {content_html}
+    if request_only:
+        panels_html = f"""
+    <div id="argus-evidence-panels" class="one-col">
+      <div class="argus-evidence-panel"><div class="argus-evidence-heading">Request (응답 대기 중)</div>
+        <pre class="argus-evidence-pre">{_highlight(_request_text(exch))}</pre></div>
+    </div>"""
+    else:
+        panels_html = f"""
+    <div id="argus-evidence-panels" class="two-col">
+      <div class="argus-evidence-panel"><div class="argus-evidence-heading">Request</div>
+        <pre class="argus-evidence-pre">{_highlight(_request_text(exch))}</pre></div>
+      <div class="argus-evidence-panel"><div class="argus-evidence-heading">Response</div>
+        <pre class="argus-evidence-pre">{_highlight(_response_text(exch))}</pre></div>
+    </div>"""
+
+    return f"""
+<div id="argus-evidence-bottom">
+  <div id="argus-evidence-tabs"><b>Burp Suite Professional</b> Target &nbsp; Proxy &nbsp; Intruder &nbsp; Repeater</div>
+  <div id="argus-evidence-target">Target: {_esc(exch.url)} · {_esc(finding_id)}</div>
   {verdict_html}
-  <div class="panel">
-    <div class="toolbar">Request / Response — 실제 캡처된 값</div>
-    <div class="cols">
-      <div class="col">
-        <div class="col-head">Request</div>
-        <pre>{_highlight(req_text)}</pre>
-      </div>
-      <div class="col">
-        <div class="col-head">Response</div>
-        <pre>{_highlight(resp_text)}</pre>
-      </div>
-    </div>
-  </div>
-</body></html>"""
+  {panels_html}
+</div>"""
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +548,30 @@ def _load_raw_config() -> dict[str, Any]:
     return {}
 
 
+_SCANNED_ACCOUNT_RE = re.compile(r"authenticated:([\w.+-]+@[\w.-]+):")
+
+
+def first_scanned_account_email(report_path: Path) -> str | None:
+    """report(latest.yaml)의 finding 메시지에 남은 ``authenticated:<email>:login``
+    표기에서 6-1 스캐너가 실제로 로그인에 썼던 계정 이메일을 읽어온다.
+
+    7만 건 이상일 수 있는 파일 전체를 YAML로 파싱하지 않고, 첫 매치가 나오는
+    즉시 멈추는 스트리밍 텍스트 검색만 한다(메시지 포맷은 스캐너가 항상 앞부분
+    findings에 먼저 적어두므로 보통 파일 초반에서 곧장 찾긴다).
+    """
+    if not report_path.is_file():
+        return None
+    try:
+        with report_path.open(encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                match = _SCANNED_ACCOUNT_RE.search(line)
+                if match:
+                    return match.group(1)
+    except OSError:
+        return None
+    return None
+
+
 def get_auth_via_config(
     data_dir: Path,
     *,
@@ -516,7 +587,10 @@ def get_auth_via_config(
     from diagnosis.probe_auth import all_account_auths
     from inventory.auth_util import auth_headers as _build_auth_headers
 
-    sessions = all_account_auths(raw_config or _load_raw_config(), data_dir=data_dir)
+    # refresh=True로 강제 라이브 로그인 — 캐시된 세션은 스캔 당시 발급된 토큰이라
+    # 캡처 시점엔 이미 만료돼 있을 수 있다(실측 확인됨: 30분 뒤 만료된 캐시 토큰을
+    # 그대로 재사용해 전부 401이 났었음).
+    sessions = all_account_auths(raw_config or _load_raw_config(), data_dir=data_dir, refresh=True)
     if not sessions:
         raise RuntimeError(
             "data/test-accounts.json에 로그인 가능한 계정이 없거나 로그인에 실패했습니다 — "
@@ -574,8 +648,8 @@ def get_auth_via_form(
 
 
 # ---------------------------------------------------------------------------
-# Capture session — real headed browser, real OS-level chrome strip, real
-# full-page content, real Request/Response panel built from observed values.
+# Capture session — real headed browser, real OS-level window capture, Burp
+# Suite 스타일 오버레이를 실제 페이지 DOM에 주입한 뒤 그대로 캡처한다.
 # ---------------------------------------------------------------------------
 class G61ScreenshotCapture:
     """6-1 대상마다 [STEP1 공격 전] + [STEP2 입력] + [STEP3 결과] 3장을 캡처한다."""
@@ -588,6 +662,7 @@ class G61ScreenshotCapture:
         nav_timeout_ms: int = 15000,
         raw_config: dict[str, Any] | None = None,
         public_base_url: str | None = None,
+        frontend_base_url: str | None = None,
         auth_cookies: list[dict[str, Any]] | None = None,
         auth_headers: dict[str, str] | None = None,
     ) -> None:
@@ -604,7 +679,13 @@ class G61ScreenshotCapture:
         self.page_wait = page_wait
         self.nav_timeout_ms = nav_timeout_ms
         self.raw_config = raw_config or {}
+        # public_base: finding url(host.docker.internal:8080 등)을 실제 접속 가능한
+        # API 서버 주소로 치환할 때 쓴다. frontend_base: STEP1(공격 전 홈 화면)과
+        # STEP2(non-GET pending) 배경으로 보여줄 실제 프론트엔드 페이지 — API 서버와
+        # 포트가 다른 경우(SPA + 별도 백엔드) API 루트는 raw JSON이라 "평소 화면"으로
+        # 부적절하므로 따로 지정할 수 있게 분리한다.
         self.public_base = (public_base_url or DEFAULT_PUBLIC_BASE_URL).rstrip("/")
+        self.frontend_base = (frontend_base_url or self.public_base).rstrip("/")
         self.auth_cookies = auth_cookies or []
         self.auth_headers = auth_headers or {}
 
@@ -615,6 +696,9 @@ class G61ScreenshotCapture:
                 args=[
                     "--window-position=0,0",
                     f"--window-size={WINDOW_SIZE['width']},{WINDOW_SIZE['height']}",
+                    # 한국어 페이지에서 자동으로 뜨는 번역 팝업이 별도 창으로 떠서
+                    # 캡처를 가릴 수 있어(실측 확인됨) 아예 끈다.
+                    "--disable-features=Translate,TranslateUI",
                 ],
             )
         except Exception as exc:
@@ -661,6 +745,7 @@ class G61ScreenshotCapture:
             "section_id": SECTION_ID,
             "generated_at": _now_iso(),
             "canvas_width": CANVAS_WIDTH,
+            "canvas_height": CANVAS_HEIGHT,
             "count": len(results),
             "captures": results,
         }
@@ -676,21 +761,51 @@ class G61ScreenshotCapture:
         result_path = self.output_dir / f"{slug}_3_result.png"
         nav_url = normalize_url(target.url, public_base_url=self.public_base, raw_config=self.raw_config)
 
-        # STEP1 — 취약 URL을 건드리기 전 정상 오리진 홈 화면
+        # STEP1 — 취약 URL을 건드리기 전 정상 오리진 홈 화면(오버레이 없음)
         before_ok = self._capture_before(before_path)
 
-        if target.method == "GET":
-            # STEP2(주소창 캡처) + 실제 요청/응답 관측을 한 번에 수행
-            exch, captures = self._observe_get(nav_url, input_path)
-            mode = "real_navigation"
-        else:
-            # STEP2 — 아직 응답이 없는, 전송 예정인 요청만 패널로 미리 보여준다
-            self._render_pending_request(target, nav_url, input_path)
-            exch, captures = self._observe_live_request(target, nav_url), None
-            mode = "real_live_request"
+        # 프론트엔드가 /api를 프록시하지 않아(실측 확인됨) 이 URL로 직접 이동해도
+        # 실제 요청은 전송되지 않는다 — 그래서 요청 자체는 아래에서 fetch()로
+        # 따로 보낸다. 다만 STEP2 배경 화면은 "취약 URL과 같은 경로를 프론트
+        # 주소로 그대로 옮긴 화면"으로 실제 이동해본다(호스트만 바꾸고 경로/쿼리는
+        # 그대로) — 그 경로가 SPA에도 실제로 존재하면 그 화면이 뜨고, 없으면 SPA
+        # 기본 화면(홈)으로 fallback된다.
+        mirrored_url = urlunsplit(urlsplit(self.frontend_base)[:2] + urlsplit(nav_url)[2:])
+        try:
+            self.page.goto(mirrored_url, wait_until="load", timeout=self.nav_timeout_ms)
+            time.sleep(self.page_wait)
+        except Exception:  # noqa: BLE001 - 그 경로로 못 가면 프론트 홈 화면으로 대체
+            try:
+                self.page.goto(self.frontend_base, wait_until="load", timeout=self.nav_timeout_ms)
+                time.sleep(self.page_wait)
+            except Exception:  # noqa: BLE001 - 아래 오버레이/캡처 단계가 실패를 그대로 반영한다
+                pass
+
+        req_headers = {"Accept": "application/json"}
+        req_body = ""
+        if target.method != "GET":
+            req_headers["Content-Type"] = "application/json"
+            req_body = "{}"
+
+        pending = RealExchange(
+            method=target.method,
+            url=nav_url,
+            request_headers=req_headers,
+            request_body=req_body,
+            status=None,
+            response_headers={},
+            response_body="",
+            note="(응답 대기 중 — STEP3에서 실제 요청을 전송합니다)",
+        )
+        input_ok = self._render_overlay_shot(pending, target.finding_id, input_path, request_only=True)
+
+        exch = self._fetch_via_page(target.method, nav_url, req_headers, req_body)
+        mode = "real_fetch_in_page"
 
         confirmed, reason = self._detect_leak(exch)
-        result_ok = self._render_final(exch, result_path, captures, verdict=(confirmed, reason))
+        result_ok = self._render_overlay_shot(
+            exch, target.finding_id, result_path, request_only=False, verdict=(confirmed, reason)
+        )
 
         return {
             "finding_id": target.finding_id,
@@ -711,7 +826,7 @@ class G61ScreenshotCapture:
             "captured": result_ok,
             "error": exch.note or None,
             "before_screenshot": before_path.name if before_ok else None,
-            "input_screenshot": input_path.name if input_path.is_file() else None,
+            "input_screenshot": input_path.name if input_ok else None,
             "result_screenshot": result_path.name if result_ok else None,
         }
 
@@ -719,26 +834,80 @@ class G61ScreenshotCapture:
     def _capture_before(self, dest: Path) -> bool:
         """STEP1 — 취약 URL을 건드리기 전 정상 오리진 홈 화면을 담아 '평소 상태'를 남긴다."""
         try:
-            self.page.goto(self.public_base, wait_until="load", timeout=self.nav_timeout_ms)
+            self.page.goto(self.frontend_base, wait_until="load", timeout=self.nav_timeout_ms)
             time.sleep(self.page_wait)
-            self.page.screenshot(path=str(dest), full_page=True)
+            self._shoot_window(dest)
             return True
         except Exception:  # noqa: BLE001 - before 캡처 실패는 STEP2/3 진행을 막지 않는다
             return False
 
-    def _render_pending_request(self, target: CaptureTarget, nav_url: str, dest: Path) -> bool:
-        """STEP2(non-GET) — 브라우저로 재현 불가하므로, 전송 예정인 실제 요청 내용만 보여준다."""
-        pending = RealExchange(
-            method=target.method,
-            url=nav_url,
-            request_headers={"Content-Type": "application/json", "Accept": "application/json"},
-            request_body="{}",
-            status=None,
-            response_headers={},
-            response_body="",
-            note="(응답 대기 중 — STEP3에서 실제 요청을 전송합니다)",
-        )
-        return self._render_final(pending, dest, None, verdict=None)
+    def _shoot_window(self, dest: Path) -> None:
+        """우리가 launch한 Chromium 창(주소창/탭 + 실제 내용 + 우리가 주입한
+        오버레이까지 전부)을 실제 OS 레벨로 그대로 캡처한다.
+
+        창은 PID로 식별한다(``_find_chrome_hwnd``) — 클래스명/좌표/포그라운드로
+        찾으면 화면에 떠 있는 다른 창(IDE, always-on-top 위젯 등)과 헷갈릴 수
+        있다는 게 실측으로 확인됐지만, 우리가 launch한 프로세스의 자손 PID인지는
+        절대 헷갈리지 않는다. 캡처 자체(``PrintWindow``)는 지정한 창 하나만
+        렌더링하므로, 이렇게 정확한 창만 찾으면 다른 창이 섞일 일이 없다.
+
+        환경에 따라 실제 창 크기가 요청한 값과 정확히 일치하지 않을 수 있어(실측
+        확인됨), 마지막에 CANVAS_WIDTH x CANVAS_HEIGHT로 정규화한다.
+        """
+        bounds = self._cdp.send("Browser.getWindowBounds", {"windowId": self._window_id})["bounds"]
+        _capture_chrome_window(bounds, dest)
+        with Image.open(dest) as im:
+            if im.size != (CANVAS_WIDTH, CANVAS_HEIGHT):
+                im.convert("RGB").resize((CANVAS_WIDTH, CANVAS_HEIGHT), Image.LANCZOS).save(dest)
+
+    def _inject_overlay(self, markup: str) -> None:
+        last_error: Exception | None = None
+        for _ in range(3):
+            try:
+                self.page.evaluate(
+                    """({css, markup}) => {
+                      document.getElementById('argus-evidence-root')?.remove();
+                      const root = document.createElement('div');
+                      root.id = 'argus-evidence-root';
+                      const style = document.createElement('style');
+                      style.textContent = css;
+                      root.appendChild(style);
+                      const body = document.createElement('div');
+                      body.innerHTML = markup;
+                      while (body.firstChild) root.appendChild(body.firstChild);
+                      document.documentElement.appendChild(root);
+                    }""",
+                    {"css": _OVERLAY_CSS, "markup": markup},
+                )
+                return
+            except Exception as exc:  # noqa: BLE001 - retry a few times, then give up
+                last_error = exc
+                self.page.wait_for_timeout(300)
+        raise RuntimeError(f"오버레이 주입 실패: {last_error}")
+
+    def _render_overlay_shot(
+        self,
+        exch: RealExchange,
+        finding_id: str,
+        dest: Path,
+        *,
+        request_only: bool,
+        verdict: tuple[bool, str] | None = None,
+    ) -> bool:
+        """실제로 로드돼 있는 현재 페이지 위에 Burp 스타일 패널을 주입하고 창 전체를 캡처."""
+        try:
+            markup = _overlay_markup(exch, finding_id=finding_id, request_only=request_only, verdict=verdict)
+            self._inject_overlay(markup)
+            # DOM은 evaluate()가 끝나는 즉시 갱신되지만 화면 리페인트(컴포지팅)는
+            # 비동기라, 바로 캡처하면 이전 오버레이 상태가 찍히는 경쟁 상태가 실측
+            # 확인됐다 — 실제로 두 번 그려질 때까지 기다려 리페인트를 보장한다.
+            self.page.evaluate(
+                "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))"
+            )
+            self._shoot_window(dest)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def _detect_leak(self, exch: RealExchange) -> tuple[bool, str]:
         """실제 응답 본문에서 _LEAK_MARKER_RE(예외/스택트레이스 등) 시그니처가
@@ -754,112 +923,50 @@ class G61ScreenshotCapture:
             return True, f"서버 에러 상태 코드 확인: HTTP {exch.status}"
         return False, f"정상 응답 (HTTP {exch.status}) — 정보 노출 시그니처 미발견"
 
-    def _observe_get(self, nav_url: str, input_path: Path) -> tuple[RealExchange, RealCaptures | None]:
-        """GET: 실제로 이동해서 진짜 request/response를 관측.
-
-        주소창 스트립은 STEP2(``input_path``)로 바로 저장하고, 본문 전체는
-        STEP3 렌더링에 쓰일 임시 파일로 남긴다(``_render_final``이 소비 후 삭제).
+    def _fetch_via_page(
+        self, method: str, url: str, headers: dict[str, str], body: str
+    ) -> RealExchange:
+        """지금 로드돼 있는 실제 프론트 페이지의 JS 컨텍스트 안에서 ``fetch()``로
+        요청을 보낸다 — 쿠키/세션이 자동으로 실리고 브라우저의 실제 CORS 정책이
+        그대로 적용되므로, 실제 앱이 그 API를 호출하는 것과 동일한 조건이다.
+        주소창은 계속 프론트 페이지를 가리키고 있어 화면은 절대 안 바뀐다.
         """
-        content_path = input_path.with_name(f"{input_path.stem}.content.png")
         try:
-            resp = self.page.goto(nav_url, wait_until="load", timeout=self.nav_timeout_ms)
-            time.sleep(self.page_wait)
-            if resp is None:
-                return RealExchange("GET", nav_url, {}, "", None, {}, "", "탐색 실패(응답 없음)"), None
-
-            body = resp.text()[:4000]
-            exch = RealExchange(
-                method=resp.request.method,
-                url=resp.url,
-                request_headers=dict(resp.request.headers),
-                request_body="",
-                status=resp.status,
-                response_headers=dict(resp.headers),
-                response_body=body,
+            result = self.page.evaluate(
+                """async ({url, method, headers, body}) => {
+                  try {
+                    const resp = await fetch(url, {
+                      method,
+                      headers,
+                      body: (method === 'GET' || method === 'HEAD') ? undefined : body,
+                      credentials: 'include',
+                    });
+                    const text = await resp.text();
+                    const respHeaders = {};
+                    resp.headers.forEach((v, k) => { respHeaders[k] = v; });
+                    return { ok: true, status: resp.status, headers: respHeaders, body: text.slice(0, 4000) };
+                  } catch (e) {
+                    return { ok: false, error: String(e) };
+                  }
+                }""",
+                {"url": url, "method": method, "headers": headers, "body": body},
             )
-
-            # 주소창/탭만 담은 스트립 — 실제 OS 창을 캡처한 뒤 위쪽만 자른다
-            # (그 영역엔 본문 텍스트가 없어서 어떻게 잘라도 잘리는 게 없다).
-            bounds = self._cdp.send("Browser.getWindowBounds", {"windowId": self._window_id})["bounds"]
-            full_path = input_path.with_name(f"{input_path.stem}.full.png")
-            _capture_chrome_window(bounds, full_path)
-            try:
-                img = Image.open(full_path).convert("RGB")
-                strip_h = min(_chrome_strip_height(), img.height)
-                img.crop((0, 0, img.width, strip_h)).save(input_path)
-            finally:
-                try:
-                    full_path.unlink()
-                except OSError:
-                    pass
-
-            # 본문 전체 — full_page=True는 뷰포트 높이와 무관하게 실제 콘텐츠 전체를
-            # 스크롤/스티칭해서 담으므로 잘리는 부분이 없다.
-            self.page.screenshot(path=str(content_path), full_page=True)
-
-            return exch, RealCaptures(content_path=content_path)
         except Exception as exc:  # noqa: BLE001 - report the real reason, keep going
-            return RealExchange("GET", nav_url, {}, "", None, {}, "", f"실시간 접속 실패: {str(exc)[:200]}"), None
+            return RealExchange(method, url, headers, body, None, {}, "", f"실시간 요청 실패: {str(exc)[:200]}")
 
-    def _observe_live_request(self, target: CaptureTarget, nav_url: str) -> RealExchange:
-        """POST/PUT/PATCH/DELETE: 브라우저 재현 불가 — finding과 동일한 방식으로 실제 요청."""
-        req_headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        req_body = "{}"
-        try:
-            resp = self._context.request.fetch(
-                nav_url,
-                method=target.method,
-                headers=req_headers,
-                data=req_body,
-                timeout=self.nav_timeout_ms,
-                fail_on_status_code=False,
-            )
-            try:
-                body = resp.text()[:4000]
-            except Exception:
-                body = "(binary response)"
-            return RealExchange(
-                method=target.method,
-                url=nav_url,
-                request_headers=req_headers,
-                request_body=req_body,
-                status=resp.status,
-                response_headers=dict(resp.headers),
-                response_body=body,
-            )
-        except Exception as exc:  # noqa: BLE001 - genuinely could not reach the server; say so
-            return RealExchange(
-                target.method, nav_url, req_headers, req_body, None, {}, "", f"실시간 요청 실패: {str(exc)[:200]}"
-            )
+        if not result.get("ok"):
+            note = f"실시간 요청 실패: {str(result.get('error'))[:200]}"
+            return RealExchange(method, url, headers, body, None, {}, "", note)
 
-    def _render_final(
-        self,
-        exch: RealExchange,
-        dest: Path,
-        captures: RealCaptures | None,
-        *,
-        verdict: tuple[bool, str] | None,
-    ) -> bool:
-        tmp_html = dest.with_suffix(".wrapper.html")
-        try:
-            tmp_html.write_text(_render_panel_html(exch, captures, verdict), encoding="utf-8")
-            self.page.set_viewport_size({"width": CANVAS_WIDTH, "height": 200})
-            self.page.goto(tmp_html.resolve().as_uri(), wait_until="load", timeout=self.nav_timeout_ms)
-            self.page.screenshot(path=str(dest), full_page=True)
-            return True
-        except Exception:  # noqa: BLE001
-            return False
-        finally:
-            tmp_paths = [tmp_html]
-            if captures:
-                tmp_paths.append(captures.content_path)
-            for tmp in tmp_paths:
-                if tmp is None:
-                    continue
-                try:
-                    tmp.unlink()
-                except OSError:
-                    pass
+        return RealExchange(
+            method=method,
+            url=url,
+            request_headers=headers,
+            request_body=body,
+            status=int(result["status"]),
+            response_headers=dict(result.get("headers") or {}),
+            response_body=str(result.get("body") or ""),
+        )
 
 
 def _clear_output_dir(out_dir: Path) -> None:
@@ -893,6 +1000,7 @@ def run_capture(
     max_per_group: int = DEFAULT_MAX_PER_GROUP,
     raw_config: dict[str, Any] | None = None,
     public_base_url: str | None = None,
+    frontend_base_url: str | None = None,
     auth_config: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """report 로드 → 캡처 대상 산출 → 스크린샷 캡처까지 한 번에 실행.
@@ -901,12 +1009,21 @@ def run_capture(
     모듈들이 ReplaySession 증거를 저장하는 ``diagnosis.paths.section_evidence_dir``
     관례를 그대로 따른다. ``public_base_url`` 기본값은 ``DEFAULT_PUBLIC_BASE_URL``
     (http://192.168.0.55) — report의 host.docker.internal 주소를 실제 접속 가능한
-    주소로 치환할 때 쓴다.
+    API 서버 주소로 치환할 때 쓴다. ``frontend_base_url``을 생략하면 STEP1(공격 전
+    홈 화면)/STEP2(non-GET pending)에도 그 API 서버 주소를 그대로 쓰는데, 프론트
+    엔드(SPA)가 API와 다른 포트에서 서비스된다면 그 API 루트는 raw JSON이라
+    "평소 화면" 캡처로 부적절하다 — 이때 ``frontend_base_url``로 실제 프론트엔드
+    주소(예: http://localhost:5173)를 따로 지정한다.
 
-    ``auth_config``: 로그인 필요한 대상을 캡처할 때 사용.
+    ``auth_config``: 로그인 필요한 대상을 캡처할 때 사용. 생략(``None``)하면 report
+    (``latest.yaml``)에 남은 ``authenticated:<email>:login`` 표기에서 6-1 스캐너가
+    실제로 쓴 계정 이메일을 자동으로 읽어 그 계정으로 로그인한다(``method="config"``
+    자동 적용) — 이 자동 로그인은 best-effort라 실패해도(예: 그 계정의 자격
+    증명을 test-accounts.json에서 못 찾음) 캡처 자체를 막지 않고 비로그인 상태로
+    계속 진행한다. 명시적으로 넘긴 ``auth_config``는 이 자동 감지보다 우선한다.
 
-        # 권장: report를 만든 6-1 스캐너가 이미 쓴 계정/로그인 설정을 그대로 재사용
-        {"enabled": True, "method": "config", "account_email": "admin@travel.com"}  # account_email 생략 시 첫 계정
+        # 직접 지정하려면:
+        {"enabled": True, "method": "config", "account_email": "admin@travel.com"}
 
         # 직접 로그인 정보를 줄 수도 있음
         {
@@ -919,22 +1036,37 @@ def run_capture(
             "test_pw": "Test1234!",
             "token_json_key": "accessToken",  # method == "api"일 때만 필요
         }
+
+        # 명시적으로 자동 로그인을 끄려면:
+        {"enabled": False}
     """
     data_dir = data_dir or default_data_dir()
-    summary = load_summary(report_path, data_dir)
+    resolved_report_path = report_path or default_report_path(data_dir)
+    summary = load_summary(resolved_report_path, data_dir)
     targets = build_capture_targets(summary, severities=severities, max_per_group=max_per_group)
     out_dir = output_dir or (section_evidence_dir(data_dir, SECTION_ID) / "webcapture")
     _clear_output_dir(out_dir)
+
+    auto_detected = False
+    if auth_config is None:
+        email = first_scanned_account_email(resolved_report_path)
+        if email:
+            auth_config = {"enabled": True, "method": "config", "account_email": email}
+            auto_detected = True
 
     auth_cookies, auth_headers = None, None
     if auth_config and auth_config.get("enabled"):
         method = auth_config.get("method")
         if method == "config":
-            auth_headers = get_auth_via_config(
-                data_dir,
-                raw_config=raw_config,
-                account_email=auth_config.get("account_email"),
-            )
+            try:
+                auth_headers = get_auth_via_config(
+                    data_dir,
+                    raw_config=raw_config,
+                    account_email=auth_config.get("account_email"),
+                )
+            except Exception:  # noqa: BLE001 - 자동 감지된 로그인은 실패해도 비로그인으로 계속
+                if not auto_detected:
+                    raise
         elif method == "api":
             auth_headers = get_auth_via_api(
                 login_api_url=auth_config["login_url"],
@@ -957,6 +1089,7 @@ def run_capture(
         out_dir,
         raw_config=raw_config,
         public_base_url=public_base_url,
+        frontend_base_url=frontend_base_url,
         auth_cookies=auth_cookies,
         auth_headers=auth_headers,
     ) as cap:

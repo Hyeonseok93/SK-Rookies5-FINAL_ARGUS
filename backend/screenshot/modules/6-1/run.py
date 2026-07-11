@@ -11,9 +11,10 @@ Usage:
     python screenshot/modules/6-1/run.py
     python screenshot/modules/6-1/run.py --severities high,medium --max-per-group 2
     python screenshot/modules/6-1/run.py --base-url http://192.168.0.55
-    # 로그인이 필요한 대상: 스캐너가 이미 쓴 계정(data/test-accounts.json)을 그대로 재사용
-    python screenshot/modules/6-1/run.py --auth-method config
-    python screenshot/modules/6-1/run.py --auth-method config --auth-account admin@travel.com
+    # 아무 인증 옵션도 안 주면 report(latest.yaml)에서 스캐너가 실제로 쓴 계정을
+    # 자동으로 읽어 그 계정으로 로그인한다. 다른 계정을 쓰거나 로그인을 끄려면:
+    python screenshot/modules/6-1/run.py --auth-account admin@travel.com
+    python screenshot/modules/6-1/run.py --no-auth
 """
 
 from __future__ import annotations
@@ -57,15 +58,22 @@ def main() -> int:
     parser.add_argument("--max-per-group", type=int, default=3, help="captures per rule group (default: 3)")
     parser.add_argument(
         "--base-url",
-        help="report의 host.docker.internal 주소를 치환할 실제 접속 가능한 주소 (기본: http://192.168.0.55)",
+        help="report의 host.docker.internal 주소를 치환할 실제 접속 가능한 API 서버 주소 (기본: http://192.168.0.55)",
+    )
+    parser.add_argument(
+        "--frontend-url",
+        help="STEP1(공격 전 홈 화면)/STEP2(non-GET 대기 화면)에 띄울 실제 프론트엔드 주소 "
+        "(생략 시 --base-url과 동일 — API 서버와 프론트가 다른 포트일 때 지정, 예: http://localhost:5173)",
     )
 
-    # 인증 옵션 (선택 입력) — 로그인 후에만 볼 수 있는 대상을 캡처할 때 사용.
-    # "config"(권장)는 report를 만든 6-1 스캐너가 이미 쓴 계정/로그인 설정
-    # (data/test-accounts.json, data/login-endpoints.json, config.yaml의 auth: 블록)을
-    # 그대로 재사용하므로 --login-url/--test-id/--test-pw를 다시 줄 필요가 없다.
+    # 인증 옵션 — 아무것도 지정하지 않으면 report(latest.yaml)에 남은
+    # "authenticated:<email>:login" 표기에서 스캐너가 실제로 쓴 계정 이메일을 자동으로
+    # 읽어 그 계정으로 로그인한다(data/test-accounts.json + data/login-endpoints.json +
+    # config.yaml의 auth: 블록 재사용, method="config"와 동일). 다른 계정/방식을 쓰려면
+    # 아래 옵션으로 직접 지정하고, 로그인 자체를 끄려면 --no-auth를 준다.
     parser.add_argument("--auth-method", choices=["config", "api", "form"], default=None)
-    parser.add_argument("--auth-account", help="method=config일 때 사용할 계정 이메일 (생략 시 첫 로그인 성공 계정)")
+    parser.add_argument("--auth-account", help="method=config일 때 사용할 계정 이메일 (생략 시 report에서 자동 감지)")
+    parser.add_argument("--no-auth", action="store_true", help="로그인 자동 감지를 끄고 비로그인 상태로 캡처")
     parser.add_argument("--login-url", help="method=api/form일 때 필요")
     parser.add_argument("--id-field", default="username")
     parser.add_argument("--pw-field", default="password")
@@ -79,7 +87,9 @@ def main() -> int:
     severities = {s.strip().lower() for s in args.severities.split(",") if s.strip()} if args.severities else None
 
     auth_config = None
-    if args.auth_method == "config":
+    if args.no_auth:
+        auth_config = {"enabled": False}
+    elif args.auth_method == "config" or (args.auth_method is None and args.auth_account):
         auth_config = {"enabled": True, "method": "config", "account_email": args.auth_account}
     elif args.auth_method:
         auth_config = {
@@ -100,6 +110,7 @@ def main() -> int:
         severities=severities,
         max_per_group=args.max_per_group,
         public_base_url=args.base_url,
+        frontend_base_url=args.frontend_url,
         auth_config=auth_config,
     )
     print(json.dumps({"count": len(results), "captures": results}, ensure_ascii=False, indent=2))
