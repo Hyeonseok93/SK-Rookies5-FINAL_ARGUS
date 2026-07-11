@@ -57,12 +57,13 @@ def _load_capture_context(config_path: Path, data_dir: Path) -> dict[str, Any]:
             "or provide frontend endpoints in data/api-tree.json."
         )
 
-    frontend_origin = urlsplit(display_url(frontend_base_url)).netloc
+    # frontend-kind routes are always navigated against frontend_base_url, so
+    # their stored base_url (often the API port, e.g. :8080) is irrelevant —
+    # take the path from every frontend row, dropping only API paths.
     routes = []
     for row in frontend_rows:
-        row_origin = urlsplit(display_url(str(row.get("base_url") or ""))).netloc
         path = str(row.get("path") or "/")
-        if row_origin == frontend_origin and "/api/" not in path.lower():
+        if "/api/" not in path.lower():
             routes.append(path if path.startswith("/") else f"/{path}")
     routes = list(dict.fromkeys(routes))
     routes.sort(key=lambda path: (path == "/", path.count("/"), path))
