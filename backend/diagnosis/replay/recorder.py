@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any
@@ -281,6 +282,22 @@ class ReplaySession:
         self.raw_config = raw_config or {}
         self.account_auth = account_auth
         artifacts_root.mkdir(parents=True, exist_ok=True)
+        self._clear_stale_recordings()
+
+    def _clear_stale_recordings(self) -> None:
+        """스캔 시작 시 이 섹션의 이전 회차 replay 기록 폴더(<section>-*)를 비운다.
+
+        finding_id에 랜덤 uuid가 섞여 회차마다 새 폴더가 생기고 옛것은 덮이지 않으므로,
+        세션 생성(기록 시작 전) 시점에 옛 폴더를 지워 재진단마다 replay 증거를 최신 회차로
+        리셋한다. 현재 회차 recorder는 아직 생성 전이라 삭제되지 않고, 최상위 파일
+        (스크린샷 png·manifest 등)은 건드리지 않는다.
+        """
+        prefix = f"{self.section_id.replace('/', '-')}-"
+        if not self.artifacts_root.is_dir():
+            return
+        for child in self.artifacts_root.iterdir():
+            if child.is_dir() and child.name.startswith(prefix):
+                shutil.rmtree(child, ignore_errors=True)
 
     def recorder(
         self,
