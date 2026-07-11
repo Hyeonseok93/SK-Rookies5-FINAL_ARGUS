@@ -99,6 +99,22 @@ def _load_section_report(ctx: DiagnosisContext) -> SectionReport | None:
     return SectionReport.from_dict(raw)
 
 
+def _clear_stale_evidence(evidence_dir: Path) -> None:
+    """이 모듈이 만든 최상위 증거(png + manifest)만 삭제해 항상 최신 회차만 남긴다.
+
+    파일명이 회차마다 달라져(seq/경로 기준) 옛 스크린샷이 orphan으로 쌓이는 걸 막는다.
+    하위 폴더는 건드리지 않는다(다른 파이프라인의 산출물 보존).
+    """
+    if not evidence_dir.is_dir():
+        return
+    for p in evidence_dir.iterdir():
+        if p.is_file() and (p.suffix.lower() == ".png" or p.name == "evidence_manifest.json"):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+
 def capture_from_findings(
     ctx: DiagnosisContext,
     findings: list[Any],
@@ -111,6 +127,11 @@ def capture_from_findings(
     (엔드포인트 × 계정) 노출당 스크린샷 1장 — 해당 계정이 그 엔드포인트에서 흘리는 모든 값을 함께 강조,
     `sessions`로 이미 인증된 진단 세션을 넘겨주면 로그인을 다시 수행하지 않음
     """
+    # 회차 시작 시 옛 증거를 먼저 비운다 → 재진단 시 항상 최신 회차만 남김(0건이어도 정리됨).
+    evidence_dir = section_evidence_dir(ctx.data_dir, "5-2")
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    _clear_stale_evidence(evidence_dir)
+
     shots = grouping.select_shots(findings)
     if not shots:
         return ScreenshotRunResult(ok=False, message="5-2 report has no PII findings to screenshot.")
@@ -122,9 +143,6 @@ def capture_from_findings(
     if sessions is None:
         auth_pool = DiagnosisAuthPool(ctx.raw_config, data_dir=ctx.data_dir)
         sessions = auth_pool.sessions()
-
-    evidence_dir = section_evidence_dir(ctx.data_dir, "5-2")
-    evidence_dir.mkdir(parents=True, exist_ok=True)
 
     # 프론트 화면 캡처(보조 증거) — 인벤토리에 프론트 라우트가 있을 때만 활성화.
     # 프론트 라우트는 verify가 떨궈낼 수 있어 전체(ready) 트리 기준으로 읽는다.

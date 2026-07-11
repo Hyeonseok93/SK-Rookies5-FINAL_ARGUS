@@ -220,11 +220,12 @@ def run_g52_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     collapsed, collapse_stats = probes_mod.collapse_findings(raw_findings)
 
-    screenshot_stats: dict[str, Any] = {"enabled": False, "reason": "no_findings"}
     if collapsed:
         dp.update(phase="screenshot", message=f"[5-2] 증거 스크린샷 캡처 중 ({len(collapsed)} case)")
         auth_pool.ensure_valid()
-        screenshot_stats = _run_screenshot_capture(ctx, collapsed, auth_pool.sessions())
+    # collapsed가 비어도 호출한다 → 재진단으로 취약점이 사라진 경우 옛 증거를 비운다
+    # (capture_from_findings가 회차 시작 시 evidence를 정리함).
+    screenshot_stats = _run_screenshot_capture(ctx, collapsed, auth_pool.sessions())
 
     by_category: dict[str, int] = {}
     by_direction: dict[str, int] = {}
