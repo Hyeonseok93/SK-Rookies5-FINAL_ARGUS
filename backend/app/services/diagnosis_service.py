@@ -543,7 +543,6 @@ def run_section(
     g16_options: dict | None = None,
     g41_options: dict | None = None,
     g42_options: dict | None = None,
-    g21_options: dict | None = None,
     g45_options: dict | None = None,
     **kwargs: Any,
 ) -> SectionReport:
