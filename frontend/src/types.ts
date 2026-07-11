@@ -528,14 +528,6 @@ export interface DiagnosisG45RunOptionsPayload {
   max_endpoints?: number;
 }
 
-export interface DiagnosisG21RunOptionsPayload {
-  seller_email?: string;
-  seller_password?: string;
-  user_email?: string;
-  user_password?: string;
-  timeout?: number;
-}
-
 export interface DiagnosisG41RunOptionsPayload {
   probe_mode?: "base_only" | "sample" | "full";
   sample_size?: number;

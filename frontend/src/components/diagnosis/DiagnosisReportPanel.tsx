@@ -476,8 +476,10 @@ function CollapsibleFindingsSection({
 /** 오탐 후보(baseline 업로드 거부) 전용 섹션 */
 function FpCandidateSection({
   findings,
+  sectionId,
 }: {
   findings: { severity: string; message: string; evidence?: Record<string, unknown> }[];
+  sectionId: string;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -498,9 +500,13 @@ function FpCandidateSection({
       {open ? (
         <ul className="space-y-2 border-t border-amber-500/20 px-3 py-2">
           {findings.map((f, i) => (
-            <FindingListItem key={`fpc-${i}`} f={f} />
+            <FindingListItem key={`fpc-${i}`} f={f} sectionId={sectionId} />
           ))}
         </ul>
+      ) : null}
+    </div>
+  );
+}
 
 function Gradle74Guide() {
   const [open, setOpen] = useState(false);
@@ -573,8 +579,10 @@ const ROLE_LABELS: Record<string, string> = {
 
 function GroupedG21FindingsPanel({
   findings,
+  sectionId,
 }: {
   findings: { severity: string; message: string; evidence?: Record<string, unknown> }[];
+  sectionId: string;
 }) {
   if (findings.length === 0) {
     return <p className="text-xs text-cyber-muted">finding 없음</p>;
@@ -602,7 +610,7 @@ function GroupedG21FindingsPanel({
     <>
       {/* 오탐 후보 섹션 — 엔드포인트 설정을 먼저 검증해야 함을 강조 */}
       {fpCandidates.length > 0 ? (
-        <FpCandidateSection findings={fpCandidates} />
+        <FpCandidateSection findings={fpCandidates} sectionId={sectionId} />
       ) : null}
 
       {/* 정탐 섹션 — 역할별 그룹 */}
@@ -619,6 +627,7 @@ function GroupedG21FindingsPanel({
             count={roleFindings.length}
             defaultOpen
             findings={roleFindings}
+            sectionId={sectionId}
           />
         );
       })}
@@ -632,9 +641,12 @@ function GroupedG21FindingsPanel({
             count={items.length}
             defaultOpen={false}
             findings={items}
+            sectionId={sectionId}
           />
         ))}
     </>
+  );
+}
 
 function GuideCommandBlock({
   label,
@@ -691,7 +703,8 @@ function GroupedFindingsPanel({
 
 
   if (sectionId === "2-1") {
-    return <GroupedG21FindingsPanel findings={findings} />;
+    return <GroupedG21FindingsPanel findings={findings} sectionId={sectionId} />;
+  }
 
   if (sectionId === "1-2") {
     const info = findings.filter((f) => findingBucket(f) === "info");
