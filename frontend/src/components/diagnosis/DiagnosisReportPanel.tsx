@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, Terminal, Copy } from "lucide-react"; // 💡 Terminal, Copy 추가
+import { AlertTriangle, ChevronDown, Terminal, Copy } from "lucide-react";
 import type { DiagnosisSectionReport } from "../../types";
 import { G15FindingsPanel } from "./G15FindingsPanel";
 import { G22FindingsPanel } from "./G22FindingsPanel";
@@ -109,6 +109,11 @@ function FindingEvidence({
   }
 
   add("Classification", "classification");
+  add("Assessment", "assessment");
+  add("Finding type", "finding_type");
+  add("Business role", "business_role");
+  add("Feature", "feature_label");
+  add("Feature key", "feature_key");
   if (sectionId === "1-2" && evidence.rule_id === "G12_INJECTION") {
     add("Confidence", "confidence");
     add("ARGUS risk", "argus_risk");
@@ -167,6 +172,7 @@ function FindingEvidence({
   add("Header", "header");
   add("Header value", "header_value");
   add("Affected count", "affected_count");
+  add("Affected methods", "affected_methods");
   add("ZAP plugin", "plugin_id");
 
   const patterns = evidence.matched_patterns;
@@ -182,6 +188,13 @@ function FindingEvidence({
     rows.push({
       label: "Affected URLs",
       value: affected.length > 8 ? `${preview}, … (+${affected.length - 8})` : preview,
+    });
+  }
+  const affectedExts = evidence.affected_extensions;
+  if (Array.isArray(affectedExts) && affectedExts.length > 1) {
+    rows.push({
+      label: "Affected extensions",
+      value: affectedExts.map((e) => `.${e}`).join(", "),
     });
   }
 
@@ -334,14 +347,33 @@ function FindingListItem({
   f: { severity: string; message: string; evidence?: Record<string, unknown> };
   sectionId: string;
 }) {
+  const findingType = f.evidence?.finding_type as string | undefined;
+  const isFpCandidate = findingType === "false_positive_candidate";
+  const isTruePositive = findingType === "true_positive";
   return (
-    <li className="rounded border border-cyber-border/30 bg-cyber-panel/30 px-3 py-2">
-      <div className="flex items-start gap-2">
+    <li
+      className={`rounded border px-3 py-2 ${
+        isFpCandidate
+          ? "border-amber-500/40 bg-amber-500/5"
+          : "border-cyber-border/30 bg-cyber-panel/30"
+      }`}
+    >
+      <div className="flex flex-wrap items-start gap-2">
         <span
           className={`shrink-0 font-mono text-[10px] uppercase ${SEVERITY_STYLES[f.severity] ?? SEVERITY_STYLES.info}`}
         >
           {f.severity}
         </span>
+        {isFpCandidate ? (
+          <span className="flex items-center gap-1 rounded border border-amber-400/40 bg-amber-500/15 px-1.5 py-0.5 font-mono text-[9px] text-amber-300">
+            <AlertTriangle className="h-2.5 w-2.5" />
+            오탐 후보
+          </span>
+        ) : isTruePositive ? (
+          <span className="rounded border border-rose-400/40 bg-rose-500/15 px-1.5 py-0.5 font-mono text-[9px] text-rose-300">
+            정탐
+          </span>
+        ) : null}
         {sectionId === "1-2" ? <G12InjectionSignalBadge evidence={f.evidence} /> : null}
         <span className="text-xs text-white/90">{f.message}</span>
       </div>
@@ -440,6 +472,36 @@ function CollapsibleFindingsSection({
   );
 }
 
+
+/** 오탐 후보(baseline 업로드 거부) 전용 섹션 */
+function FpCandidateSection({
+  findings,
+}: {
+  findings: { severity: string; message: string; evidence?: Record<string, unknown> }[];
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="mb-3 overflow-hidden rounded-lg border border-amber-500/40 bg-amber-500/5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition hover:bg-amber-500/10"
+      >
+        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+        <span className="text-xs font-semibold text-amber-300">엔드포인트 설정 확인 필요</span>
+        <span className="font-mono text-[10px] text-amber-400/80">{findings.length}</span>
+        <span className="ml-auto text-[10px] text-amber-500/70">
+          baseline(정상 이미지)가 거부됨 — 필드명·인증·extra_fields 검증 후 재진단 권장
+        </span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-amber-400/60 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open ? (
+        <ul className="space-y-2 border-t border-amber-500/20 px-3 py-2">
+          {findings.map((f, i) => (
+            <FindingListItem key={`fpc-${i}`} f={f} />
+          ))}
+        </ul>
+
 function Gradle74Guide() {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState<"unix" | "windows" | null>(null);
@@ -495,10 +557,84 @@ function Gradle74Guide() {
             파일을 업로드하면 자동으로 취약점 진단이 진행됩니다.
           </p>
         </div>
+
       ) : null}
     </div>
   );
 }
+
+
+const ROLE_LABELS: Record<string, string> = {
+
+  user: "일반사용자",
+  seller: "판매자",
+  admin: "관리자",
+};
+
+function GroupedG21FindingsPanel({
+  findings,
+}: {
+  findings: { severity: string; message: string; evidence?: Record<string, unknown> }[];
+}) {
+  if (findings.length === 0) {
+    return <p className="text-xs text-cyber-muted">finding 없음</p>;
+  }
+
+  // 오탐 후보(baseline 거부)와 정탐을 분리
+  const fpCandidates = findings.filter(
+    (f) => f.evidence?.finding_type === "false_positive_candidate",
+  );
+  const trueFindings = findings.filter(
+    (f) => f.evidence?.finding_type !== "false_positive_candidate",
+  );
+
+  const roles = ["user", "seller", "admin"];
+  const groups = new Map<string, typeof trueFindings>();
+  trueFindings.forEach((finding) => {
+    const ev = finding.evidence ?? {};
+    const role = String(ev.business_role ?? "user");
+    const feature = String(ev.feature_key ?? ev.endpoint_id ?? "file_upload");
+    const key = `${role}::${feature}`;
+    groups.set(key, [...(groups.get(key) ?? []), finding]);
+  });
+
+  return (
+    <>
+      {/* 오탐 후보 섹션 — 엔드포인트 설정을 먼저 검증해야 함을 강조 */}
+      {fpCandidates.length > 0 ? (
+        <FpCandidateSection findings={fpCandidates} />
+      ) : null}
+
+      {/* 정탐 섹션 — 역할별 그룹 */}
+      {roles.map((role) => {
+        const roleFindings = Array.from(groups.entries())
+          .filter(([key]) => key.startsWith(`${role}::`))
+          .flatMap(([, items]) => items);
+        if (roleFindings.length === 0) return null;
+        return (
+          <CollapsibleFindingsSection
+            key={role}
+            title={ROLE_LABELS[role] ?? role}
+            subtitle="2-1 정탐 findings"
+            count={roleFindings.length}
+            defaultOpen
+            findings={roleFindings}
+          />
+        );
+      })}
+      {Array.from(groups.entries())
+        .filter(([key]) => !roles.some((role) => key.startsWith(`${role}::`)))
+        .map(([key, items]) => (
+          <CollapsibleFindingsSection
+            key={key}
+            title={String(items[0]?.evidence?.feature_label ?? key)}
+            subtitle="2-1 정탐 findings"
+            count={items.length}
+            defaultOpen={false}
+            findings={items}
+          />
+        ))}
+    </>
 
 function GuideCommandBlock({
   label,
@@ -528,6 +664,7 @@ function GuideCommandBlock({
         </button>
       </div>
     </div>
+
   );
 }
 
@@ -551,6 +688,10 @@ function GroupedFindingsPanel({
   if (findings.length === 0) {
     return <p className="text-xs text-cyber-muted">finding 없음</p>;
   }
+
+
+  if (sectionId === "2-1") {
+    return <GroupedG21FindingsPanel findings={findings} />;
 
   if (sectionId === "1-2") {
     const info = findings.filter((f) => findingBucket(f) === "info");
@@ -594,6 +735,7 @@ function GroupedFindingsPanel({
         />
       </>
     );
+
   }
 
   const httpxSubtitle =
@@ -725,6 +867,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const statsMessages = new Set([
     "1-2 scan statistics",
     "1-5 scan statistics",
+    "2-1 scan statistics",
     "4-1 scan statistics",
     "4-2 scan statistics",
     "2-2 scan statistics",
@@ -745,6 +888,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const stats = statsFinding?.evidence?.stats as Record<string, unknown> | undefined;
   const isG12Stats = statsFinding?.message === "1-2 scan statistics";
   const isG15Stats = statsFinding?.message === "1-5 scan statistics";
+  const isG21Stats = statsFinding?.message === "2-1 scan statistics";
   const isG41Stats = statsFinding?.message === "4-1 scan statistics";
   const isG42Stats = statsFinding?.message === "4-2 scan statistics";
   const isG45Stats = statsFinding?.message === "4-5 scan statistics";
@@ -831,6 +975,46 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                   {" "}
                   · CORS {(stats.cors as { issues?: number }).issues}
                 </span>
+              ) : null}
+            </>
+          ) : null}
+          {isG21Stats ? (
+            <>
+              <span className="font-mono text-cyan-300/90">{String(stats.source ?? "inventory")}</span>
+              {" · 대상 "}
+              <span className="font-mono text-cyan-300/90">
+                {String(stats.targets_probed ?? stats.targets ?? "—")}
+              </span>
+              {typeof stats.upload_endpoints_found === "number" ? (
+                <span> / api-tree 탐지 {stats.upload_endpoints_found}</span>
+              ) : null}
+              {stats.truncated_to ? (
+                <span className="text-amber-300/80"> · max {String(stats.truncated_to)}로 제한</span>
+              ) : null}
+              {typeof (stats.httpx as { findings?: number })?.findings === "number" ? (
+                <span> · httpx finding {(stats.httpx as { findings?: number }).findings}</span>
+              ) : null}
+              <ZapStatsLine zap={stats.zap} />
+              {typeof stats.collapsed_issues === "number" ? (
+                <span className={stats.collapsed_issues > 0 ? "text-rose-300/90" : "text-emerald-300/90"}>
+                  {" "}
+                  · unique issue {stats.collapsed_issues}
+                </span>
+              ) : null}
+              {typeof stats.raw_issues === "number" && typeof stats.collapsed_issues === "number" &&
+              stats.raw_issues > stats.collapsed_issues ? (
+                <span className="text-cyber-muted"> (raw {stats.raw_issues} → deduped)</span>
+              ) : null}
+              {stats.auth_configured === false ? (
+                <span className="text-amber-300/90"> · auth skip</span>
+              ) : typeof stats.auth_sessions === "number" && stats.auth_sessions > 0 ? (
+                <span className="text-cyan-300/80">
+                  {" "}
+                  · {1 + stats.auth_sessions} passes ({stats.auth_sessions} auth)
+                </span>
+              ) : null}
+              {stats.budget_exhausted ? (
+                <span className="text-amber-400/90"> · 요청 한도 초과 — 결과 불완전할 수 있음</span>
               ) : null}
             </>
           ) : null}

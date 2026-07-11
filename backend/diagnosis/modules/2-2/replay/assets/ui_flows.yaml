@@ -1,0 +1,26 @@
+# UI navigation flows for 2-2 evidence replay (Playwright).
+# Match API endpoints to browser steps users take before the vulnerable action.
+
+flows:
+  - id: mypage-report-download
+    match:
+      method: POST
+      path: /api/v1/report/integrated
+    label: "마이페이지 → 통합 정산서 PDF 다운로드"
+    steps:
+      - action: navigate
+        label: "메인 페이지"
+        path: /
+        capture: [screenshot]
+      - action: navigate
+        label: "마이페이지"
+        path: /mypage
+        capture: [screenshot]
+      - action: scroll
+        label: "정산서 발급 위젯"
+        selector: "#reportTemplate"
+        capture: [screenshot]
+      - action: click
+        label: "통합 정산서 PDF 다운로드 버튼"
+        selector: "button:has-text('통합 정산서 PDF 다운로드')"
+        capture: [screenshot]

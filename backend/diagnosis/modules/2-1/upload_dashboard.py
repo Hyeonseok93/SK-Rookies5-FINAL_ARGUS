@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import importlib.util
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -11,11 +11,12 @@ from urllib.parse import urlparse
 import httpx
 
 from app.services.transfer_endpoints_service import dashboard_transfer_entries
+from security_rules import get_upload_payloads
 
 _MODULE_DIR = Path(__file__).resolve().parent
 
-
 def _judge():
+    import importlib.util
     name = "diag_g21_upload_judge_dashboard"
     if name not in sys.modules:
         spec = importlib.util.spec_from_file_location(name, _MODULE_DIR / "upload_judge.py")
@@ -26,48 +27,62 @@ def _judge():
         spec.loader.exec_module(mod)
     return sys.modules[name]
 
-
-def run_dashboard_upload_probes(ctx: Any, raw_config: dict[str, Any]) -> list:
+def run_dashboard_upload_probes(base_url: str, auth_headers: dict[str, str], timeout: float, raw_config: dict[str, Any]) -> list:
     rows = dashboard_transfer_entries("upload", raw_config)
     if not rows:
         return []
 
     judge = _judge()
     results: list = []
-    for row in rows:
-        url = row["url"]
-        method = str(row.get("method") or "POST").upper()
-        path = row.get("path") or urlparse(url).path or "/"
-        files = {"file": ("probe.jpg", b"<?php echo 'ARGUS'; ?>", "application/x-php")}
+    
+    upload_payloads = get_upload_payloads()
+    futures = []
+
+    def _probe_dashboard(client, method, url, path, filename, content, content_type, desc):
+        files = {"file": (filename, content, content_type)}
         try:
             if method == "POST":
-                response = ctx.client.post(url, files=files, headers=ctx.headers)
+                response = client.post(url, files=files)
             elif method == "PUT":
-                response = ctx.client.put(url, files=files, headers=ctx.headers)
+                response = client.put(url, files=files)
             elif method == "PATCH":
-                response = ctx.client.patch(url, files=files, headers=ctx.headers)
+                response = client.patch(url, files=files)
             else:
-                continue
-            results.append(
-                judge.judge_upload_response(
-                    suite="dashboard_upload",
-                    method=method,
-                    endpoint=path,
-                    filename="probe.jpg",
-                    attack_desc="dashboard endpoint Content-Type 변조",
-                    response=response,
-                )
+                return None
+            return judge.judge_upload_response(
+                suite="dashboard_upload",
+                method=method,
+                endpoint=path,
+                filename=filename,
+                attack_desc=desc,
+                response=response,
             )
         except httpx.HTTPError as exc:
-            results.append(
-                judge.judge_upload_response(
-                    suite="dashboard_upload",
-                    method=method,
-                    endpoint=path,
-                    filename="probe.jpg",
-                    attack_desc="dashboard endpoint Content-Type 변조",
-                    response=None,
-                    error=str(exc),
-                )
+            return judge.judge_upload_response(
+                suite="dashboard_upload",
+                method=method,
+                endpoint=path,
+                filename=filename,
+                attack_desc=desc,
+                response=None,
+                error=str(exc),
             )
+
+    with httpx.Client(headers=auth_headers, timeout=timeout, verify=False) as client:
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            for row in rows:
+                url = row["url"]
+                if not url.startswith("http"):
+                    url = f"{base_url.rstrip('/')}{url}"
+                method = str(row.get("method") or "POST").upper()
+                path = row.get("path") or urlparse(url).path or "/"
+                
+                for filename, content, content_type, desc in upload_payloads:
+                    futures.append(executor.submit(_probe_dashboard, client, method, url, path, filename, content, content_type, desc))
+                    
+            for future in as_completed(futures):
+                res = future.result()
+                if res:
+                    results.append(res)
+                    
     return results

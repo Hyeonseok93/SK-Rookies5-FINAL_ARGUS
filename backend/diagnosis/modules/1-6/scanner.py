@@ -6,6 +6,7 @@ import json
 import asyncio
 import importlib.util
 import logging
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +61,21 @@ def _load_json(path: Path, default: Any) -> Any:
     if not path.is_file():
         return default
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _prune_old_runs(output_dir: Path, keep_dir: Path) -> None:
+    """Delete sibling W16_* run directories once a new run has completed
+    successfully, so evidence/w16/ only ever holds the latest report instead
+    of accumulating one folder per scan forever. Runs after success so a
+    crashed/incomplete run never wipes the last good report."""
+    keep_resolved = keep_dir.resolve()
+    for candidate in output_dir.glob("W16_*"):
+        if not candidate.is_dir() or candidate.resolve() == keep_resolved:
+            continue
+        try:
+            shutil.rmtree(candidate)
+        except OSError as exc:
+            logger.warning(f"[1-6] failed to prune old run dir {candidate}: {exc}")
 
 
 def _relativize_screenshots(raw_findings: list[Any], evidence_dir: Path) -> None:
@@ -246,6 +262,10 @@ def run_g16_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     )
     screenshot_stats = _run_screenshot_capture(ctx, cfg, run_dir)
     stats["screenshots"] = screenshot_stats
+    refreshed_findings = _load_json(run_dir / "raw_findings.json", raw_findings)
+    if isinstance(refreshed_findings, list):
+        raw_findings = refreshed_findings
+        _relativize_screenshots(raw_findings, evidence_dir)
 
     limit = max(0, int(cfg.get("max_report_findings", 50)))
     findings = convert_findings(raw_findings, limit)
@@ -254,4 +274,7 @@ def run_g16_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         f"1-6 W16 scan completed: {len(raw_findings)} raw finding(s), "
         f"{len(findings)} reported finding(s)"
     )
+
+    _prune_old_runs(output_dir, run_dir)
+
     return ScanResult(findings=findings, stats=stats, status=status, message=message)

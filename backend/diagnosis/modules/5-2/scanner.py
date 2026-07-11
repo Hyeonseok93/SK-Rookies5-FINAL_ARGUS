@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -14,9 +16,54 @@ from diagnosis.probe_transport import HttpxTransport
 from diagnosis.result import DiagnosisFinding
 from inventory.schema import Endpoint
 
+logger = logging.getLogger(__name__)
+
 _MODULE_DIR = Path(__file__).resolve().parent
 
 ProbeMode = Literal["sample", "full"]
+
+
+def _run_screenshot_capture(
+    ctx: DiagnosisContext,
+    findings: list[DiagnosisFinding],
+    sessions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Capture evidence screenshots right after the 5-2 scan (1-6 integration pattern).
+
+    Loads screenshot/modules/5-2/module.py by path (the dir name isn't a valid Python
+    identifier) and hands it the in-memory findings + already-authenticated sessions so
+    it doesn't re-login. Any failure here is reported but never breaks the diagnosis.
+    """
+    cfg = ctx.raw_config.get("diagnosis_5_2") or ctx.raw_config.get("scan_5_2") or {}
+    if cfg.get("screenshot_enabled") is False:
+        return {"enabled": False, "reason": "disabled_by_config"}
+
+    screenshot_dir = ctx.data_dir.parent / "screenshot" / "modules" / "5-2"
+    module_path = screenshot_dir / "module.py"
+    if not module_path.is_file():
+        return {"enabled": False, "reason": "module_missing", "module": str(module_path)}
+
+    try:
+        spec = importlib.util.spec_from_file_location("screenshot_g52_module", module_path)
+        if spec is None or spec.loader is None:
+            return {"enabled": False, "reason": "module_load_failed"}
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["screenshot_g52_module"] = mod
+        spec.loader.exec_module(mod)
+
+        result = mod.capture_from_findings(ctx, findings, sessions=sessions)
+        return {
+            "enabled": True,
+            "ok": bool(result.ok),
+            "message": result.message,
+            "cases_total": result.cases_total,
+            "screenshots_total": result.screenshots_total,
+            "evidence_dir": result.evidence_dir,
+            "manifest": result.manifest_path,
+        }
+    except Exception as exc:  # never let screenshot failure break diagnosis
+        logger.exception("5-2 screenshot capture failed")
+        return {"enabled": True, "ok": False, "error": str(exc)[:300]}
 
 
 def _load_local(name: str):
@@ -173,6 +220,12 @@ def run_g52_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     collapsed, collapse_stats = probes_mod.collapse_findings(raw_findings)
 
+    screenshot_stats: dict[str, Any] = {"enabled": False, "reason": "no_findings"}
+    if collapsed:
+        dp.update(phase="screenshot", message=f"[5-2] 증거 스크린샷 캡처 중 ({len(collapsed)} case)")
+        auth_pool.ensure_valid()
+        screenshot_stats = _run_screenshot_capture(ctx, collapsed, auth_pool.sessions())
+
     by_category: dict[str, int] = {}
     by_direction: dict[str, int] = {}
     for f in collapsed:
@@ -196,6 +249,7 @@ def run_g52_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         "coverage": coverage,
         "by_category": by_category,
         "by_direction": by_direction,
+        "screenshots": screenshot_stats,
         **collapse_stats,
         "raw_findings": probes_mod.serialize_raw_findings(raw_findings),
         "checks": {

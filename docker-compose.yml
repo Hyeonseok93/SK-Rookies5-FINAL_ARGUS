@@ -46,8 +46,15 @@ services:
       - ..:/workspace:ro
       # 빌드·진단 산출물 유지 (uploads, report, api-tree 등)
       - ./backend/data:/app/data
+      # 대시보드에서 저장한 base/login 설정이 호스트 config 파일에 즉시 반영되도록 동기화
+      - ./backend/config.yaml:/app/config.yaml
+      - ./backend/config.docker.yaml:/app/config.docker.yaml
+      # FastAPI 앱 코드도 개발 중에는 호스트와 동기화
+      - ./backend/app:/app/app
       # 진단 패키지 전체 → 호스트와 동기화 (modules 외 auth_session_pool 등 포함)
       - ./backend/diagnosis:/app/diagnosis
+      # 증거 스크린샷 코드 → 호스트와 동기화
+      - ./backend/screenshot:/app/screenshot
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

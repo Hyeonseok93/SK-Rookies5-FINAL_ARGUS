@@ -49,6 +49,76 @@ def configured_login_entries(auth_cfg: dict[str, Any] | None = None) -> list[dic
     return resolve_login_entries(cfg, raw_config)
 
 
+_COOKIE_TOKEN_NAMES = ("accessToken", "access_token", "token", "jwt")
+_BODY_TOKEN_PATHS = (
+    "accessToken",
+    "token",
+    "access_token",
+    "jwt",
+    "data.accessToken",
+    "data.token",
+    "data.access_token",
+    "data.jwt",
+    "result.accessToken",
+    "result.token",
+)
+
+
+def _dig(data: Any, dotted: str) -> Any:
+    node = data
+    for key in dotted.split("."):
+        if not isinstance(node, dict) or key not in node:
+            return None
+        node = node[key]
+    return node
+
+
+def _detect_auth_token(
+    resp: httpx.Response,
+    *,
+    configured_token_field: str = "",
+    configured_cookie_name: str = "accessToken",
+    configured_delivery: str = "cookie",
+) -> tuple[str | None, str, str]:
+    """Detect the session the target actually issued on a successful login.
+
+    Reads only what the server returned — a Set-Cookie it issued, or a token in
+    the response body. Returns ``(token, delivery, cookie_name)``. ``token`` is
+    ``None`` when the server issued nothing (login failed); the caller then
+    treats the account as unauthenticated rather than forging a session.
+    """
+    field = str(configured_token_field or "")
+
+    # 1) Cookie the server set (config hint first, then common auth-cookie names).
+    cookie_names: list[str] = []
+    if field.startswith("cookie."):
+        cookie_names.append(field.split(".", 1)[1])
+    if configured_cookie_name:
+        cookie_names.append(configured_cookie_name)
+    cookie_names.extend(_COOKIE_TOKEN_NAMES)
+    for cname in cookie_names:
+        value = resp.cookies.get(cname)
+        if value:
+            return str(value), "cookie", cname
+
+    # 2) Token in the JSON body (config hint first, then common paths).
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+    if isinstance(data, dict):
+        paths: list[str] = []
+        if field and not field.startswith("cookie."):
+            paths.append(field)
+        paths.extend(_BODY_TOKEN_PATHS)
+        for path in paths:
+            node = _dig(data, path)
+            if node:
+                return str(node), "header", configured_cookie_name or "accessToken"
+
+    return None, configured_delivery, configured_cookie_name
+
+
 def login_account_at(
     auth_cfg: dict[str, Any],
     account: dict[str, str],
@@ -77,39 +147,23 @@ def login_account_at(
 
         from inventory.auth_surfaces import enrich_auth_session
 
-        if str(token_field).startswith("cookie."):
-            cname = token_field.split(".", 1)[1]
-            token = resp.cookies.get(cname)
-            if not token:
-                raise ValueError(f"Cookie '{cname}' not found after login")
-            session = {
-                "account_id": account.get("id", ""),
-                "email": account["email"],
-                "token": str(token),
-                "delivery": "cookie",
-                "cookie_name": cname,
-                "login_url": login_url,
-                "login_label": login_label_from_url(login_url),
-                "set_cookie_lines": resp.headers.get_list("set-cookie"),
-            }
-            return enrich_auth_session(session, resp, auth_cfg=auth_cfg)
-
-        data = resp.json()
-        keys = str(token_field).split(".")
-        node: Any = data
-        for key in keys:
-            if not isinstance(node, dict):
-                node = None
-                break
-            node = node.get(key)
-        if not node:
-            raise ValueError(f"Token field '{token_field}' not found")
+        # Detect how the target actually issued the session from the real login
+        # response (config values are only hints). Nothing is fabricated: if the
+        # server issued no token/cookie, the login is treated as failed.
+        token, detected_delivery, detected_cookie = _detect_auth_token(
+            resp,
+            configured_token_field=str(token_field),
+            configured_cookie_name=str(cookie_name),
+            configured_delivery=str(delivery),
+        )
+        if not token:
+            raise ValueError("No auth token/cookie issued by target after login")
         session = {
             "account_id": account.get("id", ""),
             "email": account["email"],
-            "token": str(node),
-            "delivery": delivery,
-            "cookie_name": cookie_name,
+            "token": str(token),
+            "delivery": detected_delivery,
+            "cookie_name": detected_cookie,
             "login_url": login_url,
             "login_label": login_label_from_url(login_url),
             "set_cookie_lines": resp.headers.get_list("set-cookie"),

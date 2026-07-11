@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,7 +16,51 @@ from diagnosis.progress_reporter import endpoint_progress, prepare
 from diagnosis.replay.recorder import ReplaySession
 from diagnosis.result import DiagnosisFinding
 
+logger = logging.getLogger(__name__)
+
 _DIR = Path(__file__).resolve().parent
+
+
+def _run_screenshot_capture(
+    ctx: DiagnosisContext,
+    findings: list[DiagnosisFinding],
+    sessions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Capture evidence screenshots right after the 4-4 scan (5-2 integration pattern).
+
+    Loads screenshot/modules/4-4/module.py by path (the dir name isn't a valid Python
+    identifier) and hands it the in-memory findings + already-authenticated sessions so
+    it doesn't re-login. Any failure here is reported but never breaks the diagnosis.
+    """
+    cfg = ctx.raw_config.get("diagnosis_4_4") or {}
+    if cfg.get("screenshot_enabled") is False:
+        return {"enabled": False, "reason": "disabled_by_config"}
+
+    module_path = ctx.data_dir.parent / "screenshot" / "modules" / "4-4" / "module.py"
+    if not module_path.is_file():
+        return {"enabled": False, "reason": "module_missing", "module": str(module_path)}
+
+    try:
+        spec = importlib.util.spec_from_file_location("screenshot_g44_module", module_path)
+        if spec is None or spec.loader is None:
+            return {"enabled": False, "reason": "module_load_failed"}
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["screenshot_g44_module"] = mod
+        spec.loader.exec_module(mod)
+
+        result = mod.capture_from_findings(ctx, findings, sessions=sessions)
+        return {
+            "enabled": True,
+            "ok": bool(result.ok),
+            "message": result.message,
+            "cases_total": result.cases_total,
+            "screenshots_total": result.screenshots_total,
+            "evidence_dir": result.evidence_dir,
+            "manifest": result.manifest_path,
+        }
+    except Exception as exc:  # never let screenshot failure break diagnosis
+        logger.exception("4-4 screenshot capture failed")
+        return {"enabled": True, "ok": False, "error": str(exc)[:300]}
 
 
 def _load_local(name: str):
@@ -82,9 +127,15 @@ def run_g44_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     medium = sum(f.severity == "medium" for f in findings)
     status = "fail" if high else "warn" if medium else "pass"
     message = f"4-4 진단 완료: HIGH {high}건, MEDIUM {medium}건 (후보 {len(candidates)}개)"
+
+    screenshot_stats: dict[str, Any] = {"enabled": False, "reason": "no_findings"}
+    if findings:
+        screenshot_stats = _run_screenshot_capture(ctx, findings, sessions)
+
     stats = {
         "inventory_endpoints": len(tree.endpoints), "scoped_endpoints": len(scoped),
         "candidates": len(candidates), "bases": bases, "httpx": probe_stats,
         "auth_refresh_count": pool.refresh_count, "auth_source": pool.meta.get("source"),
+        "screenshots": screenshot_stats,
     }
     return ScanResult(findings=findings, stats=stats, status=status, message=message)

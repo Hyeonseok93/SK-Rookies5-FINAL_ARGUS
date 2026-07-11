@@ -68,7 +68,11 @@ def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
             raw["auth"]["accounts"] = test_accs
 
     if raw_overrides:
-        if "diagnosis_2_2" in raw_overrides:
+        if "diagnosis_2_1" in raw_overrides:
+            base_g21 = dict(raw.get("diagnosis_2_1") or {})
+            base_g21.update(raw_overrides["diagnosis_2_1"])
+            raw = {**raw, "diagnosis_2_1": base_g21}
+        elif "diagnosis_2_2" in raw_overrides:
             base_g22 = dict(raw.get("diagnosis_2_2") or {})
             base_g22.update(raw_overrides["diagnosis_2_2"])
             raw = {**raw, "diagnosis_2_2": base_g22}
@@ -426,6 +430,21 @@ def _run_module(mod: Any, ctx: DiagnosisContext, section_id: str) -> SectionRepo
     except DiagnosisCancelled as exc:
         dp.cancel_finish(f"{section_id}: cancelled")
         raise RuntimeError(str(exc) or "Diagnosis cancelled") from exc
+    if section_id in {"1-2", "2-2", "7-4"} and report.status != "cancelled":
+        from app.services.evidence_capture_service import capture_after_diagnosis
+
+        dp.update(
+            phase="evidence",
+            message=f"{section_id}: 증거 스크린샷 생성 중…",
+            percent=99,
+        )
+        capture_result = capture_after_diagnosis(section_id, ctx.data_dir)
+        if not capture_result.get("ok"):
+            dp.update(
+                phase="evidence",
+                message=f"{section_id}: 스크린샷 생성 실패 — 진단 결과는 저장됨",
+                percent=99,
+            )
     _finish_progress(section_id, report)
     return report
 
@@ -506,6 +525,7 @@ def start_section_run_background(
 def run_section(
     section_id: str,
     *,
+    g21_options: dict | None = None,
     g22_options: dict | None = None,
     g71_options: dict | None = None,
     g73_options: dict | None = None,
@@ -523,7 +543,6 @@ def run_section(
     g16_options: dict | None = None,
     g41_options: dict | None = None,
     g42_options: dict | None = None,
-    g21_options: dict | None = None,
     g45_options: dict | None = None,
     **kwargs: Any,
 ) -> SectionReport:
@@ -604,4 +623,3 @@ def run_replay(section_id: str, *, finding_id: str | None = None, use_playwright
         raw_config=raw,
         use_playwright=use_playwright,
     )
-

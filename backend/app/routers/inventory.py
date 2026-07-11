@@ -586,12 +586,12 @@ def _build_verify_response(
         hint = ""
         if no_status == len(payload["results"]):
             hint = (
-                " No HTTP responses recorded — is Onde running? "
+                " No HTTP responses recorded — are target services running? "
                 f"(Docker probes via {os.environ.get('ARGUS_PROBE_HOST', 'host.docker.internal')})."
             )
         elif unreachable == len(payload["results"]):
             hint = (
-                " All targets were unreachable — is Onde running? "
+                " All targets were unreachable — are target services running? "
                 f"(Docker probes via {os.environ.get('ARGUS_PROBE_HOST', 'host.docker.internal')})."
             )
         return VerifyInventoryResponse(
