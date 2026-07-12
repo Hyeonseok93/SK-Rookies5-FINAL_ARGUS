@@ -1,15 +1,17 @@
-app_name: onde-pilot
+app_name: ''
 targets:
 - name: api
   base_url: http://localhost:8080
+- name: target-2
+  base_url: http://localhost:5173
 - name: admin-api
   base_url: http://localhost:8081
 inventory:
   markdown:
-    enabled: true
-    path: ../../2단계(정보 수집 및 자산 분석 - 엔드포인트 수집)_Onde_엔드포인트_구조_정의서_v2.md
-    include_frontend_routes: true
-    frontend_base_url: http://localhost:5173
+    enabled: false
+    path: ''
+    include_frontend_routes: false
+    frontend_base_url: ''
   openapi:
     enabled: false
     path: ''
@@ -19,8 +21,8 @@ inventory:
     path: data/inventory-urls.json
   base_urls:
   - http://localhost:8080
-  - http://localhost:8081
   - http://localhost:5173
+  - http://localhost:8081
 zap:
   proxy: http://127.0.0.1:8090
   api_key: ''

@@ -11,7 +11,7 @@ ZAP_ROOT = BACKEND_ROOT.parent.parent
 
 
 class MarkdownSourceConfig(BaseModel):
-    enabled: bool = True
+    enabled: bool = False
     path: str = ""
     include_frontend_routes: bool = False
     frontend_base_url: str | None = None
@@ -25,7 +25,7 @@ class OpenApiSourceConfig(BaseModel):
 
 class UrlListSourceConfig(BaseModel):
     enabled: bool = False
-    path: str = "data/inventory-urls.json"
+    path: str = ""
 
 
 class InventoryConfig(BaseModel):

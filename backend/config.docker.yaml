@@ -1,15 +1,17 @@
-app_name: onde-pilot
+app_name: ''
 targets:
 - name: api
   base_url: http://host.docker.internal:8080
+- name: target-2
+  base_url: http://host.docker.internal:5173
 - name: admin-api
   base_url: http://host.docker.internal:8081
 inventory:
   markdown:
-    enabled: true
-    path: /workspace/2단계(정보 수집 및 자산 분석 - 엔드포인트 수집)_Onde_엔드포인트_구조_정의서_v2.md
-    include_frontend_routes: true
-    frontend_base_url: http://localhost:5173
+    enabled: false
+    path: ''
+    include_frontend_routes: false
+    frontend_base_url: ''
   openapi:
     enabled: false
     path: ''
@@ -19,8 +21,8 @@ inventory:
     path: data/inventory-urls.json
   base_urls:
   - http://host.docker.internal:8080
+  - http://host.docker.internal:5173
   - http://host.docker.internal:8081
-  - http://localhost:5173
 zap:
   proxy: http://zap:8090
   api_key: ''
@@ -49,6 +51,20 @@ diagnosis_1_3:
   llm_interpret_enabled: true
   ollama_base_url: http://host.docker.internal:11434
   ollama_model: qwen2.5:7b
+diagnosis_2_1:
+  timeout: 15.0
+  max_targets: 20
+  httpx_enabled: true
+  zap_enabled: false
+  zap_passive_wait_seconds: 60
+  interval_sec: 0.05
+  enable_auth_modes: true
+  allowed_extensions:
+  - jpg
+  - jpeg
+  - png
+  - gif
+  - webp
 diagnosis_1_5:
   redirect_sink_base: http://host.docker.internal:8001/argus-redirect-sink
   probe_mode: full

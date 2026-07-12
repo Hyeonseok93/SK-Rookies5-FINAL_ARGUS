@@ -440,6 +440,40 @@ function CollapsibleFindingsSection({
   );
 }
 
+
+/** 오탐 후보(baseline 업로드 거부) 전용 섹션 */
+function FpCandidateSection({
+  findings,
+}: {
+  findings: { severity: string; message: string; evidence?: Record<string, unknown> }[];
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="mb-3 overflow-hidden rounded-lg border border-amber-500/40 bg-amber-500/5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition hover:bg-amber-500/10"
+      >
+        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+        <span className="text-xs font-semibold text-amber-300">엔드포인트 설정 확인 필요</span>
+        <span className="font-mono text-[10px] text-amber-400/80">{findings.length}</span>
+        <span className="ml-auto text-[10px] text-amber-500/70">
+          baseline(정상 이미지)가 거부됨 — 필드명·인증·extra_fields 검증 후 재진단 권장
+        </span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-amber-400/60 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open ? (
+        <ul className="space-y-2 border-t border-amber-500/20 px-3 py-2">
+          {findings.map((f, i) => (
+            <FindingListItem key={`fpc-${i}`} f={f} sectionId="2-1" />
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function Gradle74Guide() {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState<"unix" | "windows" | null>(null);
@@ -500,6 +534,83 @@ function Gradle74Guide() {
   );
 }
 
+
+const ROLE_LABELS: Record<string, string> = {
+
+  user: "일반사용자",
+  seller: "판매자",
+  admin: "관리자",
+};
+
+function GroupedG21FindingsPanel({
+  findings,
+}: {
+  findings: { severity: string; message: string; evidence?: Record<string, unknown> }[];
+}) {
+  if (findings.length === 0) {
+    return <p className="text-xs text-cyber-muted">finding 없음</p>;
+  }
+
+  // 오탐 후보(baseline 거부)와 정탐을 분리
+  const fpCandidates = findings.filter(
+    (f) => f.evidence?.finding_type === "false_positive_candidate",
+  );
+  const trueFindings = findings.filter(
+    (f) => f.evidence?.finding_type !== "false_positive_candidate",
+  );
+
+  const roles = ["user", "seller", "admin"];
+  const groups = new Map<string, typeof trueFindings>();
+  trueFindings.forEach((finding) => {
+    const ev = finding.evidence ?? {};
+    const role = String(ev.business_role ?? "user");
+    const feature = String(ev.feature_key ?? ev.endpoint_id ?? "file_upload");
+    const key = `${role}::${feature}`;
+    groups.set(key, [...(groups.get(key) ?? []), finding]);
+  });
+
+  return (
+    <>
+      {/* 오탐 후보 섹션 — 엔드포인트 설정을 먼저 검증해야 함을 강조 */}
+      {fpCandidates.length > 0 ? (
+        <FpCandidateSection findings={fpCandidates} />
+      ) : null}
+
+      {/* 정탐 섹션 — 역할별 그룹 */}
+      {roles.map((role) => {
+        const roleFindings = Array.from(groups.entries())
+          .filter(([key]) => key.startsWith(`${role}::`))
+          .flatMap(([, items]) => items);
+        if (roleFindings.length === 0) return null;
+        return (
+          <CollapsibleFindingsSection
+            key={role}
+            title={ROLE_LABELS[role] ?? role}
+            subtitle="2-1 정탐 findings"
+            count={roleFindings.length}
+            defaultOpen
+            findings={roleFindings}
+            sectionId="2-1"
+          />
+        );
+      })}
+      {Array.from(groups.entries())
+        .filter(([key]) => !roles.some((role) => key.startsWith(`${role}::`)))
+        .map(([key, items]) => (
+          <CollapsibleFindingsSection
+            key={key}
+            title={String(items[0]?.evidence?.feature_label ?? key)}
+            subtitle="2-1 정탐 findings"
+            count={items.length}
+            defaultOpen={false}
+            findings={items}
+            sectionId="2-1"
+          />
+        ))}
+    </>
+  );
+}
+
 function GuideCommandBlock({
   label,
   command,
@@ -550,6 +661,11 @@ function GroupedFindingsPanel({
 
   if (findings.length === 0) {
     return <p className="text-xs text-cyber-muted">finding 없음</p>;
+  }
+
+
+  if (sectionId === "2-1") {
+    return <GroupedG21FindingsPanel findings={findings} />;
   }
 
   if (sectionId === "1-2") {

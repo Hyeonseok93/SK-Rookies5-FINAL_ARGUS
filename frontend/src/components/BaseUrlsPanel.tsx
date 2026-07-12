@@ -4,7 +4,7 @@ import type { BaseUrlEntry } from "../types";
 
 
 
-export type SavedBaseUrlsSnapshot = Record<string, { url: string }>;
+export type SavedBaseUrlsSnapshot = Record<string, { url: string; kind: BaseUrlEntry["kind"] }>;
 
 
 
@@ -15,6 +15,8 @@ export function createEmptyBaseUrl(): BaseUrlEntry {
     id: crypto.randomUUID(),
 
     url: "",
+
+    kind: "api",
 
   };
 
@@ -33,6 +35,8 @@ export function buildSavedBaseUrlsSnapshot(urls: BaseUrlEntry[]): SavedBaseUrlsS
       snap[entry.id] = {
 
         url: normalizeUrl(entry.url),
+
+        kind: entry.kind,
 
       };
 
@@ -72,7 +76,7 @@ export function isBaseUrlSaved(entry: BaseUrlEntry, snapshot: SavedBaseUrlsSnaps
 
   if (!entry.url.trim()) return false;
 
-  return saved.url === normalizeUrl(entry.url);
+  return saved.url === normalizeUrl(entry.url) && saved.kind === entry.kind;
 
 }
 
@@ -92,7 +96,7 @@ interface BaseUrlsPanelProps {
 
   onAdd: () => void;
 
-  onChange: (id: string, value: string) => void;
+  onChange: (id: string, patch: Partial<Pick<BaseUrlEntry, "url" | "kind">>) => void;
 
   onRemove: (id: string) => void;
 
@@ -224,7 +228,7 @@ export function BaseUrlsPanel({
 
                       key={entry.id}
 
-                      className={`grid gap-2 rounded-lg border p-3 transition-all duration-200 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center sm:gap-3 ${
+                      className={`grid gap-2 rounded-lg border p-3 transition-all duration-200 sm:grid-cols-[auto_minmax(0,1fr)_10rem_auto] sm:items-center sm:gap-3 ${
 
                         saved
 
@@ -290,7 +294,7 @@ export function BaseUrlsPanel({
 
                           value={entry.url}
 
-                          onChange={(e) => onChange(entry.id, e.target.value)}
+                          onChange={(e) => onChange(entry.id, { url: e.target.value })}
 
                           className={`w-full rounded border px-3 py-2 text-xs text-white placeholder:text-cyber-muted focus:outline-none ${
 
@@ -304,6 +308,27 @@ export function BaseUrlsPanel({
 
                         />
 
+                      </div>
+
+                      <div>
+                        {index === 0 && (
+                          <label className="mb-1 block text-[10px] uppercase tracking-wider text-cyber-muted">
+                            Role
+                          </label>
+                        )}
+                        <select
+                          value={entry.kind}
+                          onChange={(e) =>
+                            onChange(entry.id, {
+                              kind: e.target.value as BaseUrlEntry["kind"],
+                            })
+                          }
+                          className="w-full rounded border border-cyber-border bg-cyber-panel px-3 py-2 text-xs text-white focus:border-sky-400/50 focus:outline-none"
+                        >
+                          <option value="api">API</option>
+                          <option value="frontend">Frontend</option>
+                          <option value="api-and-frontend">API + Frontend</option>
+                        </select>
                       </div>
 
                       <button
@@ -401,4 +426,3 @@ export function BaseUrlsPanel({
   );
 
 }
-

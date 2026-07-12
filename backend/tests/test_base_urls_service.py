@@ -29,14 +29,14 @@ def test_save_base_urls_syncs_config_files(tmp_path, monkeypatch):
 
     saved = svc.save_base_urls(
         [
-            {"id": "api", "url": "http://localhost:8080"},
-            {"id": "front", "url": "http://localhost:5173/"},
+            {"id": "api", "url": "http://localhost:8080", "kind": "api"},
+            {"id": "front", "url": "http://localhost:5173/", "kind": "frontend"},
         ]
     )
 
     assert saved["urls"] == [
-        {"id": "api", "url": "http://localhost:8080"},
-        {"id": "front", "url": "http://localhost:5173"},
+        {"id": "api", "url": "http://localhost:8080", "kind": "api"},
+        {"id": "front", "url": "http://localhost:5173", "kind": "frontend"},
     ]
     assert json.loads((data_dir / "base-urls.json").read_text(encoding="utf-8")) == saved
 
@@ -52,3 +52,26 @@ def test_save_base_urls_syncs_config_files(tmp_path, monkeypatch):
     ]
     assert docker["inventory"]["markdown"]["frontend_base_url"] == "http://localhost:5173"
     assert docker["inventory"]["openapi"]["base_url"] == "http://host.docker.internal:8080"
+
+
+def test_base_url_roles_do_not_depend_on_port_numbers(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        yaml.safe_dump({"targets": [], "inventory": {"markdown": {}, "openapi": {}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(svc, "DATA_DIR", data_dir)
+    monkeypatch.setattr(svc, "BASE_URLS_PATH", data_dir / "base-urls.json")
+    monkeypatch.setattr(svc, "CONFIG_PATHS", (config,))
+
+    svc.save_base_urls(
+        [
+            {"id": "front", "url": "http://example.test:8080", "kind": "frontend"},
+            {"id": "api", "url": "http://api.test:3000", "kind": "api"},
+        ]
+    )
+
+    api, frontend = svc.resolved_base_urls_by_kind()
+    assert api == ["http://api.test:3000"]
+    assert frontend == ["http://example.test:8080"]

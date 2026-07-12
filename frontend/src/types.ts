@@ -216,6 +216,7 @@ export interface SaveTestAccountsResponse {
 export interface BaseUrlEntry {
   id: string;
   url: string;
+  kind: "api" | "frontend" | "api-and-frontend";
 }
 
 export interface BaseUrlsResponse {
