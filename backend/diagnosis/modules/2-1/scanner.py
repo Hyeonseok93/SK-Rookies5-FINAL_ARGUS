@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import sys
 import time
 from dataclasses import dataclass, field
@@ -19,6 +20,8 @@ from diagnosis.probe_auth import (
     session_probe_tag,
 )
 from diagnosis.result import DiagnosisFinding
+
+logger = logging.getLogger(__name__)
 
 _MODULE_DIR = Path(__file__).resolve().parent
 
@@ -254,7 +257,11 @@ def _run_phase(
         if budget and budget.exhausted():
             break
 
-    return findings, {"passes": per_pass_stats, "requested_urls": sorted(requested_urls)}
+    return findings, {
+        "passes": per_pass_stats,
+        "requested_urls": sorted(requested_urls),
+        "processed": phase_done,
+    }
 
 
 def run_g21_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
@@ -302,6 +309,10 @@ def run_g21_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     payloads_per_pass = sum(len(p) for p in payloads_by_target.values())
     phase_count = (1 if opts.httpx_enabled else 0) + (1 if opts.zap_enabled else 0)
     grand_total = payloads_per_pass * len(passes) * max(phase_count, 1)
+    if opts.max_requests > 0:
+        # max_requests caps the shared RequestBudget across both phases, so the
+        # progress bar shouldn't advertise more probes than can actually run.
+        grand_total = min(grand_total, opts.max_requests)
 
     dp.update(
         phase="preparing",
@@ -347,7 +358,7 @@ def run_g21_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                 budget=budget,
             )
         findings.extend(httpx_findings)
-        progress_offset += payloads_per_pass * len(passes)
+        progress_offset += httpx_phase_stats.get("processed", payloads_per_pass * len(passes))
         stats["httpx"] = httpx_phase_stats
         stats["httpx"]["findings"] = len(httpx_findings)
 
@@ -356,6 +367,9 @@ def run_g21_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         zap_scan_mod = _load_local("zap_scan")
         # ZAP Replacer에 적용할 대표 인증 세션 (첫 번째 계정)
         primary_auth = primary_account_auth(ctx.raw_config, data_dir=ctx.data_dir)
+        zap = None
+        reset_before = False
+        reset_after = False
         try:
             dp.update(phase="zap", message="ZAP Phase — upload probe via ZAP proxy")
             zap, zap_transport, proxy = zap_scan_mod.open_zap_transport(
@@ -382,7 +396,6 @@ def run_g21_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                 zap, set(zap_phase_stats.get("requested_urls") or [])
             )
             zap_findings.extend(supplemental)
-            reset_after = zap_scan_mod.reset_workspace(zap, session_name="argus-g21-done")
 
             findings.extend(zap_findings)
             stats["zap"] = {
@@ -392,13 +405,24 @@ def run_g21_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                 "supplemental_findings": len(supplemental),
                 "passive_records_pending": pending,
                 "workspace_reset_before": reset_before,
-                "workspace_reset_after": reset_after,
             }
             zap_ran = True
         except ZapNotAvailableError as exc:
-            stats["zap"] = {"error": str(exc)}
-        except Exception as exc:  # pragma: no cover - ZAP is an optional external dep
-            stats["zap"] = {"error": str(exc)}
+            stats["zap"] = {"error": str(exc), "workspace_reset_before": reset_before}
+        except Exception as exc:  # ZAP is an optional external dep, but a real bug here shouldn't vanish silently
+            logger.exception("2-1 ZAP phase failed unexpectedly")
+            stats["zap"] = {
+                "error": str(exc),
+                "unexpected": True,
+                "workspace_reset_before": reset_before,
+            }
+        finally:
+            if zap is not None and reset_before:
+                try:
+                    reset_after = zap_scan_mod.reset_workspace(zap, session_name="argus-g21-done")
+                except Exception:
+                    logger.exception("2-1 ZAP workspace reset-after failed")
+                stats["zap"]["workspace_reset_after"] = reset_after
 
     findings, collapse_stats = _collapse_findings_by_role_feature(findings)
 

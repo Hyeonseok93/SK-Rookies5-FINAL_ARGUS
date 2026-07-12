@@ -116,7 +116,6 @@ def run_module(
     g41_opts = None
     g42_opts = None
     g45_opts = None
-    g21_opts = None
     if body and body.g12 is not None:
         g12_opts = body.g12.model_dump(exclude_none=True)
     if body and body.g15 is not None:
