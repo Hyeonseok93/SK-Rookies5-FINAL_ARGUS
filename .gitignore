@@ -25,5 +25,7 @@ logs/
 # Local documentation (not committed)
 docs/
 
+__pycache__/
+*.pyc
 # Diagnosis run artifacts (large generated output)
 backend/diagnosis/modules/6-1/latest.yaml
