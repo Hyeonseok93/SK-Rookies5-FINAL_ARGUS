@@ -42,12 +42,6 @@ import {
   type G15DiagnosisOptions,
 } from "../lib/g15DiagnosisOptions";
 import {
-  DEFAULT_G21_OPTIONS,
-  g21OptionsSummary,
-  g21OptionsToPayload,
-  type G21DiagnosisOptions,
-} from "../lib/g21DiagnosisOptions";
-import {
   DEFAULT_G41_OPTIONS,
   g41OptionsSummary,
   g41OptionsToPayload,
