@@ -1,3 +1,4 @@
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, ChevronDown, Loader2, Stethoscope } from "lucide-react";
 import { G12DiagnosisStartDialog } from "./G12DiagnosisStartDialog";
@@ -819,13 +820,19 @@ export function DiagnosisPage() {
                               <G45SectionInfoPopover />
                             </span>
                           ) : section.id === "7-4" ? (
-                          ) : section.id === "4-4" ? (
                             <span
                               className="shrink-0"
                               onClick={(e) => e.stopPropagation()}
                               onMouseDown={(e) => e.stopPropagation()}
                             >
                               <G74SectionInfoPopover />
+                            </span>
+                          ) : section.id === "4-4" ? (
+                            <span
+                              className="shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
                               <G44SectionInfoPopover />
                             </span>
                           ) : section.id === "5-2" ? (

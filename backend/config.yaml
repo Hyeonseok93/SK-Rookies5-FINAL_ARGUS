@@ -62,7 +62,7 @@ diagnosis_1_6:
   skip_spider: true
   skip_selenium: true
   timeout_sec: 36000
-  max_report_findings: 50
+  max_report_findings: 0
   role_login_targets:
     admin: http://host.docker.internal:8080
   role_login_paths:
