@@ -381,6 +381,15 @@ export interface DiagnosisG15RunOptionsPayload {
   max_phase_b_jobs?: number;
 }
 
+export interface DiagnosisG21RunOptionsPayload {
+  httpx_enabled?: boolean;
+  zap_enabled?: boolean;
+  max_targets?: number;
+  zap_passive_wait_seconds?: number;
+  timeout?: number;
+  allowed_extensions?: string[];
+}
+
 export interface DiagnosisG12RunOptionsPayload {
   max_targets?: number;
   scan_all_inventory?: boolean;
@@ -393,6 +402,7 @@ export interface DiagnosisG12RunOptionsPayload {
   include_unsafe_methods?: boolean;
   keep_all_results?: boolean;
 }
+
 
 export interface DiagnosisG22RunOptionsPayload {
   httpx_enabled?: boolean;
@@ -522,7 +532,6 @@ export interface DiagnosisG45RunOptionsPayload {
 export interface DiagnosisG21RunOptionsPayload {
   seller_email?: string;
   seller_password?: string;
-  seller_id?: number;
   user_email?: string;
   user_password?: string;
   timeout?: number;

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Literal
 
@@ -601,6 +601,20 @@ class DiagnosisG34RunOptions(BaseModel):
     inventory_scope: Literal["login_only", "full"] | None = None
 
 
+class DiagnosisG21RunOptions(BaseModel):
+    """Per-run overrides for guideline 2-1 malicious upload scan."""
+
+    httpx_enabled: bool | None = None
+    zap_enabled: bool | None = None
+    max_targets: int | None = Field(default=None, ge=1, le=200)
+    zap_passive_wait_seconds: int | None = Field(default=None, ge=0, le=300)
+    timeout: float | None = Field(default=None, ge=1.0, le=60.0)
+    allowed_extensions: list[str] | None = None
+    interval_sec: float | None = Field(default=None, ge=0.0, le=5.0)
+    enable_auth_modes: bool | None = None
+    max_requests: int | None = Field(default=None, ge=0)
+
+
 class DiagnosisG42RunOptions(BaseModel):
     """Per-run overrides for guideline 4-2 token/session safety scan."""
 
@@ -627,7 +641,6 @@ class DiagnosisG21RunOptions(BaseModel):
 
     seller_email: str = ""
     seller_password: str = ""
-    seller_id: int = Field(default=0, ge=0)
     user_email: str = ""
     user_password: str = ""
     timeout: float | None = Field(default=None, ge=3.0, le=60.0)

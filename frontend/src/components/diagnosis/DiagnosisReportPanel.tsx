@@ -109,6 +109,11 @@ function FindingEvidence({
   }
 
   add("Classification", "classification");
+  add("Assessment", "assessment");
+  add("Finding type", "finding_type");
+  add("Business role", "business_role");
+  add("Feature", "feature_label");
+  add("Feature key", "feature_key");
   if (sectionId === "1-2" && evidence.rule_id === "G12_INJECTION") {
     add("Confidence", "confidence");
     add("ARGUS risk", "argus_risk");
@@ -167,6 +172,7 @@ function FindingEvidence({
   add("Header", "header");
   add("Header value", "header_value");
   add("Affected count", "affected_count");
+  add("Affected methods", "affected_methods");
   add("ZAP plugin", "plugin_id");
 
   const patterns = evidence.matched_patterns;
@@ -182,6 +188,13 @@ function FindingEvidence({
     rows.push({
       label: "Affected URLs",
       value: affected.length > 8 ? `${preview}, … (+${affected.length - 8})` : preview,
+    });
+  }
+  const affectedExts = evidence.affected_extensions;
+  if (Array.isArray(affectedExts) && affectedExts.length > 1) {
+    rows.push({
+      label: "Affected extensions",
+      value: affectedExts.map((e) => `.${e}`).join(", "),
     });
   }
 
@@ -334,14 +347,33 @@ function FindingListItem({
   f: { severity: string; message: string; evidence?: Record<string, unknown> };
   sectionId: string;
 }) {
+  const findingType = f.evidence?.finding_type as string | undefined;
+  const isFpCandidate = findingType === "false_positive_candidate";
+  const isTruePositive = findingType === "true_positive";
   return (
-    <li className="rounded border border-cyber-border/30 bg-cyber-panel/30 px-3 py-2">
-      <div className="flex items-start gap-2">
+    <li
+      className={`rounded border px-3 py-2 ${
+        isFpCandidate
+          ? "border-amber-500/40 bg-amber-500/5"
+          : "border-cyber-border/30 bg-cyber-panel/30"
+      }`}
+    >
+      <div className="flex flex-wrap items-start gap-2">
         <span
           className={`shrink-0 font-mono text-[10px] uppercase ${SEVERITY_STYLES[f.severity] ?? SEVERITY_STYLES.info}`}
         >
           {f.severity}
         </span>
+        {isFpCandidate ? (
+          <span className="flex items-center gap-1 rounded border border-amber-400/40 bg-amber-500/15 px-1.5 py-0.5 font-mono text-[9px] text-amber-300">
+            <AlertTriangle className="h-2.5 w-2.5" />
+            오탐 후보
+          </span>
+        ) : isTruePositive ? (
+          <span className="rounded border border-rose-400/40 bg-rose-500/15 px-1.5 py-0.5 font-mono text-[9px] text-rose-300">
+            정탐
+          </span>
+        ) : null}
         {sectionId === "1-2" ? <G12InjectionSignalBadge evidence={f.evidence} /> : null}
         <span className="text-xs text-white/90">{f.message}</span>
       </div>
@@ -529,6 +561,7 @@ function Gradle74Guide() {
             파일을 업로드하면 자동으로 취약점 진단이 진행됩니다.
           </p>
         </div>
+
       ) : null}
     </div>
   );
@@ -639,6 +672,7 @@ function GuideCommandBlock({
         </button>
       </div>
     </div>
+
   );
 }
 
@@ -710,6 +744,7 @@ function GroupedFindingsPanel({
         />
       </>
     );
+
   }
 
   const httpxSubtitle =
@@ -841,6 +876,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const statsMessages = new Set([
     "1-2 scan statistics",
     "1-5 scan statistics",
+    "2-1 scan statistics",
     "4-1 scan statistics",
     "4-2 scan statistics",
     "2-2 scan statistics",
@@ -861,6 +897,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const stats = statsFinding?.evidence?.stats as Record<string, unknown> | undefined;
   const isG12Stats = statsFinding?.message === "1-2 scan statistics";
   const isG15Stats = statsFinding?.message === "1-5 scan statistics";
+  const isG21Stats = statsFinding?.message === "2-1 scan statistics";
   const isG41Stats = statsFinding?.message === "4-1 scan statistics";
   const isG42Stats = statsFinding?.message === "4-2 scan statistics";
   const isG45Stats = statsFinding?.message === "4-5 scan statistics";
@@ -947,6 +984,46 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                   {" "}
                   · CORS {(stats.cors as { issues?: number }).issues}
                 </span>
+              ) : null}
+            </>
+          ) : null}
+          {isG21Stats ? (
+            <>
+              <span className="font-mono text-cyan-300/90">{String(stats.source ?? "inventory")}</span>
+              {" · 대상 "}
+              <span className="font-mono text-cyan-300/90">
+                {String(stats.targets_probed ?? stats.targets ?? "—")}
+              </span>
+              {typeof stats.upload_endpoints_found === "number" ? (
+                <span> / api-tree 탐지 {stats.upload_endpoints_found}</span>
+              ) : null}
+              {stats.truncated_to ? (
+                <span className="text-amber-300/80"> · max {String(stats.truncated_to)}로 제한</span>
+              ) : null}
+              {typeof (stats.httpx as { findings?: number })?.findings === "number" ? (
+                <span> · httpx finding {(stats.httpx as { findings?: number }).findings}</span>
+              ) : null}
+              <ZapStatsLine zap={stats.zap} />
+              {typeof stats.collapsed_issues === "number" ? (
+                <span className={stats.collapsed_issues > 0 ? "text-rose-300/90" : "text-emerald-300/90"}>
+                  {" "}
+                  · unique issue {stats.collapsed_issues}
+                </span>
+              ) : null}
+              {typeof stats.raw_issues === "number" && typeof stats.collapsed_issues === "number" &&
+              stats.raw_issues > stats.collapsed_issues ? (
+                <span className="text-cyber-muted"> (raw {stats.raw_issues} → deduped)</span>
+              ) : null}
+              {stats.auth_configured === false ? (
+                <span className="text-amber-300/90"> · auth skip</span>
+              ) : typeof stats.auth_sessions === "number" && stats.auth_sessions > 0 ? (
+                <span className="text-cyan-300/80">
+                  {" "}
+                  · {1 + stats.auth_sessions} passes ({stats.auth_sessions} auth)
+                </span>
+              ) : null}
+              {stats.budget_exhausted ? (
+                <span className="text-amber-400/90"> · 요청 한도 초과 — 결과 불완전할 수 있음</span>
               ) : null}
             </>
           ) : null}

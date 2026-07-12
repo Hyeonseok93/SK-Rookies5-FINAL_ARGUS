@@ -110,6 +110,22 @@ def _load_section_report(ctx: DiagnosisContext) -> SectionReport | None:
     return SectionReport.from_dict(raw)
 
 
+def _clear_stale_evidence(evidence_dir: Path) -> None:
+    """이 모듈이 만든 최상위 증거(png + manifest)만 삭제해 항상 최신 회차만 남긴다.
+
+    파일명이 회차마다 달라져 옛 스크린샷이 orphan으로 쌓이는 걸 막는다. 하위 폴더
+    (진단 replay가 만든 4-4-<hash>/ 등)는 건드리지 않는다.
+    """
+    if not evidence_dir.is_dir():
+        return
+    for p in evidence_dir.iterdir():
+        if p.is_file() and (p.suffix.lower() == ".png" or p.name == "evidence_manifest.json"):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+
 def _normal_spec(
     shot: Any, session: dict[str, Any] | None, result: Any, sid: str
 ) -> Any:
@@ -208,6 +224,11 @@ def capture_from_findings(
     sessions: list[dict[str, Any]] | None = None,
     timeout: float = 15.0,
 ) -> ScreenshotRunResult:
+    # 회차 시작 시 옛 증거를 먼저 비운다 → 재진단 시 항상 최신 회차만 남김(0건이어도 정리됨).
+    evidence_dir = section_evidence_dir(ctx.data_dir, "4-4")
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    _clear_stale_evidence(evidence_dir)
+
     shots = grouping.select_shots(findings)
     if not shots:
         return ScreenshotRunResult(ok=False, message="4-4 report has no page-access findings to screenshot.")
@@ -220,9 +241,6 @@ def capture_from_findings(
         pool = DiagnosisAuthPool(ctx.raw_config, data_dir=ctx.data_dir)
         pool.ensure_valid()
         sessions = pool.sessions()
-
-    evidence_dir = section_evidence_dir(ctx.data_dir, "4-4")
-    evidence_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_shots: list[dict[str, Any]] = []
     shots_captured = 0

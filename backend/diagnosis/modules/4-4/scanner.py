@@ -128,9 +128,9 @@ def run_g44_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     status = "fail" if high else "warn" if medium else "pass"
     message = f"4-4 진단 완료: HIGH {high}건, MEDIUM {medium}건 (후보 {len(candidates)}개)"
 
-    screenshot_stats: dict[str, Any] = {"enabled": False, "reason": "no_findings"}
-    if findings:
-        screenshot_stats = _run_screenshot_capture(ctx, findings, sessions)
+    # findings가 비어도 호출한다 → 재진단으로 취약점이 사라진 경우 옛 증거를 비운다
+    # (capture_from_findings가 회차 시작 시 evidence를 정리함).
+    screenshot_stats = _run_screenshot_capture(ctx, findings, sessions)
 
     stats = {
         "inventory_endpoints": len(tree.endpoints), "scoped_endpoints": len(scoped),

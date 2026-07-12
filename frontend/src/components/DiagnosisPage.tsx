@@ -7,16 +7,21 @@ import { G35DiagnosisStartDialog } from "./G35DiagnosisStartDialog";
 import { G36DiagnosisStartDialog } from "./G36DiagnosisStartDialog";
 import { G42DiagnosisStartDialog } from "./G42DiagnosisStartDialog";
 import { G15DiagnosisStartDialog } from "./G15DiagnosisStartDialog";
+import { G21DiagnosisStartDialog } from "./G21DiagnosisStartDialog";
 import { G41DiagnosisStartDialog } from "./G41DiagnosisStartDialog";
 import { G52DiagnosisStartDialog } from "./G52DiagnosisStartDialog";
 import { G61DiagnosisStartDialog } from "./G61DiagnosisStartDialog";
 import { G62DiagnosisStartDialog } from "./G62DiagnosisStartDialog";
 import { G71DiagnosisStartDialog } from "./G71DiagnosisStartDialog";
+
 import { G22DiagnosisStartDialog } from "./G22DiagnosisStartDialog";
 import { G22SectionInfoPopover } from "./diagnosis/G22SectionInfoPopover";
+import { G32SectionInfoPopover } from "./diagnosis/G32SectionInfoPopover";
+import { G44SectionInfoPopover } from "./diagnosis/G44SectionInfoPopover";
 import { G45SectionInfoPopover } from "./diagnosis/G45SectionInfoPopover";
 import { G12SectionInfoPopover } from "./diagnosis/G12SectionInfoPopover";
 import { G74SectionInfoPopover } from "./diagnosis/G74SectionInfoPopover";
+import { G52SectionInfoPopover } from "./diagnosis/G52SectionInfoPopover";
 import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
 import { G74DiagnosisStartDialog } from "./G74DiagnosisStartDialog";
@@ -33,6 +38,12 @@ import {
   g15OptionsToPayload,
   type G15DiagnosisOptions,
 } from "../lib/g15DiagnosisOptions";
+import {
+  DEFAULT_G21_OPTIONS,
+  g21OptionsSummary,
+  g21OptionsToPayload,
+  type G21DiagnosisOptions,
+} from "../lib/g21DiagnosisOptions";
 import {
   DEFAULT_G41_OPTIONS,
   g41OptionsSummary,
@@ -266,8 +277,11 @@ export function DiagnosisPage() {
   const [g12Options, setG12Options] = useState<G12DiagnosisOptions>(DEFAULT_G12_OPTIONS);
   const [g15DialogOpen, setG15DialogOpen] = useState(false);
   const [g15Options, setG15Options] = useState<G15DiagnosisOptions>(DEFAULT_G15_OPTIONS);
+  const [g21DialogOpen, setG21DialogOpen] = useState(false);
+  const [g21Options, setG21Options] = useState<G21DiagnosisOptions>(DEFAULT_G21_OPTIONS);
   const [g41DialogOpen, setG41DialogOpen] = useState(false);
   const [g41Options, setG41Options] = useState<G41DiagnosisOptions>(DEFAULT_G41_OPTIONS);
+
   const [g22DialogOpen, setG22DialogOpen] = useState(false);
   const [g22Options, setG22Options] = useState<G22DiagnosisOptions>(DEFAULT_G22_OPTIONS);
   const [g72DialogOpen, setG72DialogOpen] = useState(false);
@@ -355,7 +369,7 @@ export function DiagnosisPage() {
   const handleRun = useCallback(
     async (
       sectionId: string,
-      options?: G12DiagnosisOptions | G15DiagnosisOptions | G41DiagnosisOptions | G42DiagnosisOptions | G22DiagnosisOptions | G32DiagnosisOptions | G34DiagnosisOptions | G35DiagnosisOptions | G36DiagnosisOptions | G52DiagnosisOptions | G61DiagnosisOptions | G62DiagnosisOptions | G71DiagnosisOptions | G72DiagnosisOptions | G73DiagnosisOptions | G74DiagnosisOptions,
+      options?: G12DiagnosisOptions | G15DiagnosisOptions | G21DiagnosisOptions | G41DiagnosisOptions | G42DiagnosisOptions | G22DiagnosisOptions | G32DiagnosisOptions | G34DiagnosisOptions | G35DiagnosisOptions | G36DiagnosisOptions | G52DiagnosisOptions | G61DiagnosisOptions | G62DiagnosisOptions | G71DiagnosisOptions | G72DiagnosisOptions | G73DiagnosisOptions | G74DiagnosisOptions,
     ) => {
       const mod = catalogById[sectionId];
       if (!mod?.diagnosable || !mod?.implemented) return;
@@ -367,10 +381,14 @@ export function DiagnosisPage() {
         setRunningSummary(g12OptionsSummary(options as G12DiagnosisOptions));
       } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
         setRunningSummary(g15OptionsSummary(options as G15DiagnosisOptions));
+      } else if (sectionId === "2-1" && options && "sellerEmail" in options) {
+        setRunningSummary(g21OptionsSummary(options as G21DiagnosisOptions));
       } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
         setRunningSummary(g41OptionsSummary(options as G41DiagnosisOptions));
       } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
         setRunningSummary(g42OptionsSummary(options as G42DiagnosisOptions));
+      } else if (sectionId === "2-1" && options && "maxTargets" in options) {
+        setRunningSummary(g21OptionsSummary(options as G21DiagnosisOptions));
       } else if (sectionId === "2-2" && options && "useHttpx" in options) {
         setRunningSummary(g22OptionsSummary(options as G22DiagnosisOptions));
       } else if (sectionId === "7-1" && options && "strictRisky" in options) {
@@ -407,10 +425,14 @@ export function DiagnosisPage() {
           body = g12OptionsToPayload(options as G12DiagnosisOptions);
         } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
           body = g15OptionsToPayload(options as G15DiagnosisOptions);
+        } else if (sectionId === "2-1" && options && "sellerEmail" in options) {
+          body = g21OptionsToPayload(options as G21DiagnosisOptions);
         } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
           body = g41OptionsToPayload(options as G41DiagnosisOptions);
         } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
           body = g42OptionsToPayload(options as G42DiagnosisOptions);
+        } else if (sectionId === "2-1" && options && "maxTargets" in options) {
+          body = g21OptionsToPayload(options as G21DiagnosisOptions);
         } else if (sectionId === "2-2" && options && "useHttpx" in options) {
           body = g22OptionsToPayload(options as G22DiagnosisOptions);
         } else if (sectionId === "7-1" && options && "strictRisky" in options) {
@@ -466,12 +488,20 @@ export function DiagnosisPage() {
         setG15DialogOpen(true);
         return;
       }
+      if (sectionId === "2-1") {
+        setG21DialogOpen(true);
+        return;
+      }
       if (sectionId === "4-1") {
         setG41DialogOpen(true);
         return;
       }
       if (sectionId === "4-2") {
         setG42DialogOpen(true);
+        return;
+      }
+      if (sectionId === "2-1") {
+        setG21DialogOpen(true);
         return;
       }
       if (sectionId === "2-2") {
@@ -541,6 +571,15 @@ export function DiagnosisPage() {
       setG15Options(options);
       setG15DialogOpen(false);
       void handleRun("1-5", options);
+    },
+    [handleRun],
+  );
+
+  const handleG21Start = useCallback(
+    (options: G21DiagnosisOptions) => {
+      setG21Options(options);
+      setG21DialogOpen(false);
+      void handleRun("2-1", options);
     },
     [handleRun],
   );
@@ -745,6 +784,14 @@ export function DiagnosisPage() {
                             >
                               <G22SectionInfoPopover />
                             </span>
+                          ) : section.id === "3-2" ? (
+                            <span
+                              className="shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              <G32SectionInfoPopover />
+                            </span>
                           ) : section.id === "4-5" ? (
                             <span
                               className="shrink-0"
@@ -754,12 +801,22 @@ export function DiagnosisPage() {
                               <G45SectionInfoPopover />
                             </span>
                           ) : section.id === "7-4" ? (
+                          ) : section.id === "4-4" ? (
                             <span
                               className="shrink-0"
                               onClick={(e) => e.stopPropagation()}
                               onMouseDown={(e) => e.stopPropagation()}
                             >
                               <G74SectionInfoPopover />
+                              <G44SectionInfoPopover />
+                            </span>
+                          ) : section.id === "5-2" ? (
+                            <span
+                              className="shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              <G52SectionInfoPopover />
                             </span>
                           ) : section.description ? (
                             <div className="group relative flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -886,6 +943,12 @@ export function DiagnosisPage() {
         onClose={() => setG15DialogOpen(false)}
         onStart={handleG15Start}
       />
+      <G21DiagnosisStartDialog
+        open={g21DialogOpen && !runningId}
+        initialOptions={g21Options}
+        onClose={() => setG21DialogOpen(false)}
+        onStart={handleG21Start}
+      />
       <G41DiagnosisStartDialog
         open={g41DialogOpen && !runningId}
         initialOptions={g41Options}
@@ -897,6 +960,12 @@ export function DiagnosisPage() {
         initialOptions={g42Options}
         onClose={() => setG42DialogOpen(false)}
         onStart={handleG42Start}
+      />
+      <G21DiagnosisStartDialog
+        open={g21DialogOpen && !runningId}
+        initialOptions={g21Options}
+        onClose={() => setG21DialogOpen(false)}
+        onStart={handleG21Start}
       />
       <G22DiagnosisStartDialog
         open={g22DialogOpen && !runningId}

@@ -97,6 +97,7 @@ def run_module(
     section_id: str,
     body: DiagnosisRunSectionRequest | None = None,
 ) -> DiagnosisRunSectionResponse:
+    g21_opts = None
     g22_opts = None
     g71_opts = None
     g72_opts = None
@@ -175,7 +176,7 @@ def run_module(
         g16_options=g16_opts,
         g21_options=g21_opts,
     )
-    if section_id == "6-1":
+    if section_id in ("6-1", "2-1"):
         try:
             diagnosis_service.start_section_run_background(section_id, **run_kwargs)
         except KeyError as exc:

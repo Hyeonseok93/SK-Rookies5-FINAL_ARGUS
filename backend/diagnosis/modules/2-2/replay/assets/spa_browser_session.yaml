@@ -1,0 +1,43 @@
+# 2-2 screenshot / browser replay — SPA session cookie mapping.
+# Kept inside the 2-2 module (not global config.yaml) so target apps can
+# override via auth.spa_browser_session or frontend.cookies without touching
+# shared diagnosis config.
+#
+# Resolution order (see spa_browser_session.py):
+#   1) config auth.spa_browser_session (optional override)
+#   2) config frontend.cookies (shared with 5-2 front_capture)
+#   3) this file — used by 2-2 capture/login (prefer_module_asset)
+#      and when app_name / inventory path looks like Onde
+#   4) infer from login JSON field names (best-effort, at cookie build time)
+
+enabled: true
+
+# Browser cookie names (Playwright / SPA RequireAuth).
+cookies:
+  access: onde_access_token
+  refresh: onde_refresh_token
+  member_id: onde_member_id
+  role: onde_member_role
+  username: onde_username
+  name: onde_name
+  nickname: onde_nickname
+
+# Login API JSON fields → cookie values. "@email" = use account email.
+login_fields:
+  access: accessToken
+  refresh: refreshToken
+  member_id: memberId
+  role: role
+  username: "@email"
+  name: name
+  nickname: nickname
+
+# Fields that must be present to treat the SPA session as logged-in.
+required:
+  - access
+  - member_id
+  - role
+  - username
+
+api_access_cookie: accessToken
+api_refresh_cookie: refreshToken

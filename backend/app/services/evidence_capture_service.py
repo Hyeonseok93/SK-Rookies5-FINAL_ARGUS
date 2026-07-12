@@ -12,7 +12,7 @@ from typing import Any
 from app.config import BACKEND_ROOT
 from diagnosis.paths import section_evidence_dir, section_report_path
 
-_AUTO_CAPTURE_SECTIONS = frozenset({"1-2", "7-4"})
+_AUTO_CAPTURE_SECTIONS = frozenset({"1-2", "2-2", "7-4"})
 _CAPTURE_TIMEOUT_SECONDS = 300
 
 

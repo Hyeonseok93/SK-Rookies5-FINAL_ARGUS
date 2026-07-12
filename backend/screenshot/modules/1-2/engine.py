@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import socket
 import subprocess
 from pathlib import Path
@@ -107,11 +108,45 @@ def _route_attack_api(page, case: EvidenceCase) -> None:
     page.route("**/*", handler)
 
 
+_VERSION_SEG_RE = re.compile(r"^v\d+$")
+
+
+def _resource_segments(path: str) -> list[str]:
+    """Meaningful resource segments of an API/route path: drops `api`, version
+    (`v1`), path params (`{id}`) and numeric ids so POST/nested paths still map
+    to the page that touches the same resource (e.g. `posts`, `feed`)."""
+    segments: list[str] = []
+    for raw in path.strip("/").split("/"):
+        seg = raw.split("?")[0].lower()
+        if not seg or seg == "api" or _VERSION_SEG_RE.match(seg):
+            continue
+        if seg.startswith("{") or seg.isdigit():
+            continue
+        segments.append(seg)
+    return segments
+
+
+def _relatedness(target_segments: list[str], other_path: str) -> int:
+    """How many leading resource segments a request/route path shares with the
+    injection target — method-agnostic, so a POST target still matches a page
+    that only GETs the same resource on load."""
+    other = _resource_segments(other_path)
+    shared = 0
+    for a, b in zip(target_segments, other):
+        if a != b:
+            break
+        shared += 1
+    return shared
+
+
 def _discover_related_page(context, case: EvidenceCase) -> str:
     frontend_base = str(case.metadata.get("ui_url") or "")
     routes = list(case.metadata.get("frontend_routes") or ["/"])
     target_path = urlsplit(case.baseline.url).path.rstrip("/")
+    target_segments = _resource_segments(target_path)
     probe = context.new_page()
+    best_candidate = frontend_base
+    best_score = 0
     try:
         for route_path in routes:
             requested_paths: set[str] = set()
@@ -128,26 +163,110 @@ def _discover_related_page(context, case: EvidenceCase) -> str:
                 probe.remove_listener("request", remember_request)
                 continue
             probe.remove_listener("request", remember_request)
+            # Exact hit (page fires the target path on load) — best possible.
             if target_path in requested_paths:
                 return candidate
+            # Otherwise rank by shared resource segments, considering both the
+            # requests the page fires AND the route path itself. This lets a
+            # POST/nested target land on /feed, /posts/... instead of main.
+            score = max(
+                (_relatedness(target_segments, rp) for rp in requested_paths),
+                default=0,
+            )
+            score = max(score, _relatedness(target_segments, route_path))
+            if score > best_score:
+                best_score = score
+                best_candidate = candidate
     finally:
         probe.close()
-    return frontend_base
+    return best_candidate if best_score > 0 else frontend_base
 
 
-def _focus_page_content(page) -> None:
+_ARGUS_MARKER_RE = re.compile(r"ARGUS_[A-Za-z0-9_]+|argus-probe")
+# Distinctive data-field values from a JSON response, extracted from the raw
+# text so it still works when the stored body is truncated.
+_FIELD_VALUE_RE = re.compile(
+    r'"(?:title|name|authorName|nickname|username|email|content|message|description)"'
+    r'\s*:\s*"((?:[^"\\]|\\.){2,80})"'
+)
+
+
+def _response_anchors(case: EvidenceCase) -> list[str]:
+    """Distinctive text values from the target API's own baseline response, used
+    to scroll the page to where that data is actually rendered — no layout
+    assumptions. ARGUS probe/injection markers first (unique & reflected), then
+    other short data values (e.g. record titles/author names)."""
+    body = str(getattr(case.baseline, "response_body", "") or "")
+    anchors: list[str] = []
+
+    def add(token: str) -> None:
+        token = (token or "").strip()
+        if token and token not in anchors:
+            anchors.append(token)
+
+    for marker in _ARGUS_MARKER_RE.findall(body):
+        add(marker)
+    for value in _FIELD_VALUE_RE.findall(body):
+        if "://" in value or value.count("/") >= 2:
+            continue
+        add(value)
+    return anchors[:25]
+
+
+def _focus_page_content(page, anchors: list[str] | None = None) -> None:
     page.evaluate(
-        """() => {
-          const main = document.querySelector('main');
-          if (!main) return;
-          const children = Array.from(main.children)
-            .filter((element) => element.getBoundingClientRect().height > 20);
-          const target = children.length > 1 ? children[1] : main;
-          const top = target.getBoundingClientRect().top + window.scrollY;
-          if (top > 120) {
-            window.scrollTo({top: Math.max(0, top - 90), behavior: 'instant'});
+        """({anchors}) => {
+          const headerH =
+            (document.querySelector('header')?.getBoundingClientRect().height) || 80;
+          const scrollToEl = (el, pad) => {
+            const top = el.getBoundingClientRect().top + window.scrollY;
+            window.scrollTo({top: Math.max(0, top - headerH - pad), behavior: 'instant'});
+          };
+
+          // 1) Anchor directly to where the target API's data is rendered.
+          for (const a of anchors || []) {
+            if (!a) continue;
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            let node;
+            while ((node = walker.nextNode())) {
+              if (node.nodeValue && node.nodeValue.indexOf(a) !== -1 && node.parentElement) {
+                const r = node.parentElement.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) {
+                  scrollToEl(node.parentElement, 40);
+                  return;
+                }
+              }
+            }
           }
-        }"""
+
+          // 2) Fallback: repeated-card grid/list (structural heuristic).
+          const root = document.querySelector('main') || document.body;
+          const listScore = (el) => {
+            const kids = Array.from(el.children).filter((c) => {
+              const r = c.getBoundingClientRect();
+              return r.width > 80 && r.height > 60;
+            });
+            if (kids.length < 3) return 0;
+            const hs = kids.map((k) => k.getBoundingClientRect().height).sort((a, b) => a - b);
+            const med = hs[Math.floor(hs.length / 2)] || 1;
+            const similar = hs.filter((h) => Math.abs(h - med) <= med * 0.6).length;
+            return similar >= 3 ? similar : 0;
+          };
+          let best = null;
+          let bestScore = 0;
+          root.querySelectorAll('*').forEach((el) => {
+            const s = listScore(el);
+            if (s > bestScore) { bestScore = s; best = el; }
+          });
+          if (best) { scrollToEl(best, 12); return; }
+
+          // 3) Fallback: skip a tall hero that fills the first screen.
+          const first = root.children[0] && root.children[0].getBoundingClientRect();
+          if (first && first.height > window.innerHeight * 0.6) {
+            window.scrollTo({top: Math.max(0, first.height - headerH), behavior: 'instant'});
+          }
+        }""",
+        {"anchors": anchors or []},
     )
     page.wait_for_timeout(400)
 
@@ -186,6 +305,7 @@ def capture_case(case: EvidenceCase, output_dir: Path) -> list[CaptureArtifact]:
         case.metadata["ui_url"] = ui_url
         case.metadata["ui_display_url"] = ui_url.replace("host.docker.internal", "localhost")
         case.metadata["ui_route_source"] = "network-discovery"
+        content_anchors = _response_anchors(case)
         for kind, filename in CAPTURES:
             page = context.new_page()
             if kind in {"attack_site", "attack_evidence"}:
@@ -196,7 +316,7 @@ def capture_case(case: EvidenceCase, output_dir: Path) -> list[CaptureArtifact]:
                 page.wait_for_load_state("networkidle", timeout=5_000)
             except Exception:
                 pass
-            _focus_page_content(page)
+            _focus_page_content(page, content_anchors)
             if kind == "baseline_evidence":
                 css, markup = render_evidence_overlay(case, "baseline")
                 _inject_overlay(page, css, markup)

@@ -4,14 +4,22 @@ WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+RUN rm -rf /var/lib/apt/lists/* \
+    && apt-get update -o Acquire::Retries=5 \
+    && apt-get install -y --no-install-recommends --fix-missing \
+        -o Acquire::Retries=5 \
+        fonts-noto-cjk \
+        scrot \
+        xauth \
+        xvfb \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install --with-deps chromium
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends scrot xauth \
-    && rm -rf /var/lib/apt/lists/*
 
 COPY app ./app
 COPY diagnosis ./diagnosis
