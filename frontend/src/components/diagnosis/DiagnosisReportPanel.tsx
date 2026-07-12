@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, ChevronDown, Terminal, Copy } from "lucide-react";
+import { ChevronDown, Terminal, Copy, AlertTriangle } from "lucide-react";
 import type { DiagnosisSectionReport } from "../../types";
 import { G15FindingsPanel } from "./G15FindingsPanel";
 import { G16FindingsPanel } from "./G16FindingsPanel";

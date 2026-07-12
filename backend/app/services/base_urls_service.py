@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 BACKEND_ROOT = DATA_DIR.parent
 BASE_URLS_PATH = DATA_DIR / "base-urls.json"
 CONFIG_PATHS = (BACKEND_ROOT / "config.yaml", BACKEND_ROOT / "config.docker.yaml")
-FRONTEND_PORTS = frozenset({3000, 4173, 5173, 5174})
+BASE_URL_KINDS = frozenset({"api", "frontend", "api-and-frontend"})
 
 
 def _normalize_entry(raw: dict[str, Any]) -> dict[str, Any] | None:
@@ -22,14 +23,10 @@ def _normalize_entry(raw: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if not url.startswith("http://") and not url.startswith("https://"):
         url = f"http://{url}"
-    return {"id": entry_id, "url": url}
-
-
-def _is_frontend_url(url: str) -> bool:
-    parsed = urlparse(url)
-    if parsed.port in FRONTEND_PORTS:
-        return True
-    return "frontend" in (parsed.hostname or "").lower()
+    kind = str(raw.get("kind") or "api").strip().lower()
+    if kind not in BASE_URL_KINDS:
+        kind = "api"
+    return {"id": entry_id, "url": url, "kind": kind}
 
 
 def _docker_host_url(url: str) -> str:
@@ -43,6 +40,10 @@ def _docker_host_url(url: str) -> str:
     return urlunparse(parsed._replace(netloc=netloc))
 
 
+def _runtime_url(url: str) -> str:
+    return _docker_host_url(url) if os.path.exists("/.dockerenv") else url
+
+
 def _target_name(url: str, index: int) -> str:
     parsed = urlparse(url)
     port = parsed.port
@@ -53,16 +54,25 @@ def _target_name(url: str, index: int) -> str:
     return f"target-{index + 1}"
 
 
-def _patch_config_payload(raw: dict[str, Any], urls: list[str], *, docker: bool) -> dict[str, Any]:
+def _patch_config_payload(
+    raw: dict[str, Any], entries: list[dict[str, Any]], *, docker: bool
+) -> dict[str, Any]:
     payload = dict(raw)
     inventory = dict(payload.get("inventory") or {})
     markdown = dict(inventory.get("markdown") or {})
     openapi = dict(inventory.get("openapi") or {})
 
-    frontend_url = next((url for url in urls if _is_frontend_url(url)), "")
-    backend_urls = [url for url in urls if url != frontend_url]
-    if not backend_urls and urls:
-        backend_urls = [urls[0]]
+    frontend_urls = [
+        str(entry["url"])
+        for entry in entries
+        if entry.get("kind") in {"frontend", "api-and-frontend"}
+    ]
+    backend_urls = [
+        str(entry["url"])
+        for entry in entries
+        if entry.get("kind") in {"api", "api-and-frontend"}
+    ]
+    frontend_url = frontend_urls[0] if frontend_urls else ""
 
     target_urls = [_docker_host_url(url) if docker else url for url in backend_urls]
     payload["targets"] = [
@@ -73,27 +83,30 @@ def _patch_config_payload(raw: dict[str, Any], urls: list[str], *, docker: bool)
     if frontend_url:
         markdown["frontend_base_url"] = frontend_url
         markdown["include_frontend_routes"] = True
+    else:
+        markdown["frontend_base_url"] = ""
+        markdown["include_frontend_routes"] = False
 
     if target_urls:
         openapi["base_url"] = target_urls[0]
+    else:
+        openapi["base_url"] = ""
 
     inventory["markdown"] = markdown
     inventory["openapi"] = openapi
-    inventory["base_urls"] = target_urls + ([frontend_url] if frontend_url else [])
+    inventory["base_urls"] = list(dict.fromkeys(target_urls + frontend_urls))
     payload["inventory"] = inventory
     return payload
 
 
 def sync_config_files(urls: list[dict[str, Any]]) -> None:
-    strings = [str(item["url"]).rstrip("/") for item in urls if item.get("url")]
-    if not strings:
-        return
+    entries = [item for item in urls if item.get("url")]
 
     for path in CONFIG_PATHS:
         if not path.is_file():
             continue
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        patched = _patch_config_payload(raw, strings, docker=path.name == "config.docker.yaml")
+        patched = _patch_config_payload(raw, entries, docker=path.name == "config.docker.yaml")
         path.write_text(
             yaml.safe_dump(patched, allow_unicode=True, sort_keys=False),
             encoding="utf-8",
@@ -126,3 +139,17 @@ def save_base_urls(urls: list[dict[str, Any]]) -> dict[str, Any]:
 
 def resolved_base_url_strings() -> list[str]:
     return [u["url"] for u in load_base_urls()["urls"]]
+
+
+def resolved_base_urls_by_kind() -> tuple[list[str], list[str]]:
+    """Return (api bases, frontend bases) without guessing from ports or names."""
+    api: list[str] = []
+    frontend: list[str] = []
+    for entry in load_base_urls()["urls"]:
+        url = _runtime_url(str(entry["url"]))
+        kind = entry.get("kind") or "api"
+        if kind in {"api", "api-and-frontend"} and url not in api:
+            api.append(url)
+        if kind in {"frontend", "api-and-frontend"} and url not in frontend:
+            frontend.append(url)
+    return api, frontend

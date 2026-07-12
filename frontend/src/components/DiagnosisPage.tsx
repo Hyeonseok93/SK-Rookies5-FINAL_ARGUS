@@ -20,6 +20,8 @@ import { G22SectionInfoPopover } from "./diagnosis/G22SectionInfoPopover";
 import { G32SectionInfoPopover } from "./diagnosis/G32SectionInfoPopover";
 import { G44SectionInfoPopover } from "./diagnosis/G44SectionInfoPopover";
 import { G45SectionInfoPopover } from "./diagnosis/G45SectionInfoPopover";
+import { G12SectionInfoPopover } from "./diagnosis/G12SectionInfoPopover";
+import { G74SectionInfoPopover } from "./diagnosis/G74SectionInfoPopover";
 import { G52SectionInfoPopover } from "./diagnosis/G52SectionInfoPopover";
 import { G61SectionInfoPopover } from "./diagnosis/G61SectionInfoPopover";
 import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
@@ -768,7 +770,15 @@ export function DiagnosisPage() {
                         </span>
                         <span className="flex min-w-0 flex-1 items-center gap-1.5">
                           <span className="text-sm text-white">{section.title}</span>
-                          {section.id === "1-6" ? (
+                          {section.id === "1-2" ? (
+                            <span
+                              className="shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              <G12SectionInfoPopover />
+                            </span>
+                          ) : section.id === "1-6" ? (
                             <span
                               className="shrink-0"
                               onClick={(e) => e.stopPropagation()}
@@ -808,12 +818,14 @@ export function DiagnosisPage() {
                             >
                               <G45SectionInfoPopover />
                             </span>
+                          ) : section.id === "7-4" ? (
                           ) : section.id === "4-4" ? (
                             <span
                               className="shrink-0"
                               onClick={(e) => e.stopPropagation()}
                               onMouseDown={(e) => e.stopPropagation()}
                             >
+                              <G74SectionInfoPopover />
                               <G44SectionInfoPopover />
                             </span>
                           ) : section.id === "5-2" ? (

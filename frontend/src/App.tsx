@@ -362,9 +362,12 @@ function App() {
     setBaseUrls((prev) => [...prev, createEmptyBaseUrl()]);
   };
 
-  const handleBaseUrlChange = (id: string, value: string) => {
+  const handleBaseUrlChange = (
+    id: string,
+    patch: Partial<Pick<BaseUrlEntry, "url" | "kind">>,
+  ) => {
     setBaseUrlSaveError("");
-    setBaseUrls((prev) => prev.map((u) => (u.id === id ? { ...u, url: value } : u)));
+    setBaseUrls((prev) => prev.map((u) => (u.id === id ? { ...u, ...patch } : u)));
   };
 
   const handleRemoveBaseUrl = (id: string) => {
