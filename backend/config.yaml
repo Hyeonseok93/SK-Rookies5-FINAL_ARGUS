@@ -2,16 +2,14 @@ app_name: ''
 targets:
 - name: api
   base_url: http://localhost:8080
-- name: target-2
-  base_url: http://localhost:5173
 - name: admin-api
   base_url: http://localhost:8081
 inventory:
   markdown:
     enabled: false
     path: ''
-    include_frontend_routes: false
-    frontend_base_url: ''
+    include_frontend_routes: true
+    frontend_base_url: http://localhost:5173
   openapi:
     enabled: false
     path: ''
@@ -21,8 +19,8 @@ inventory:
     path: data/inventory-urls.json
   base_urls:
   - http://localhost:8080
-  - http://localhost:5173
   - http://localhost:8081
+  - http://localhost:5173
 zap:
   proxy: http://127.0.0.1:8090
   api_key: ''

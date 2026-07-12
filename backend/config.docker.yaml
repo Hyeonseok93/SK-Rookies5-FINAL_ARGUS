@@ -2,16 +2,14 @@ app_name: ''
 targets:
 - name: api
   base_url: http://host.docker.internal:8080
-- name: target-2
-  base_url: http://host.docker.internal:5173
 - name: admin-api
   base_url: http://host.docker.internal:8081
 inventory:
   markdown:
     enabled: false
     path: ''
-    include_frontend_routes: false
-    frontend_base_url: ''
+    include_frontend_routes: true
+    frontend_base_url: http://localhost:5173
   openapi:
     enabled: false
     path: ''
@@ -21,8 +19,8 @@ inventory:
     path: data/inventory-urls.json
   base_urls:
   - http://host.docker.internal:8080
-  - http://host.docker.internal:5173
   - http://host.docker.internal:8081
+  - http://localhost:5173
 zap:
   proxy: http://zap:8090
   api_key: ''
@@ -137,11 +135,4 @@ diagnosis_4_2:
   probe_path: /api/v1/members/me
   relogin_enabled: true
   duplicate_login_enabled: true
-  duplicate_login_ip_enabled: true
-  probe_client_ips:
-  - 203.0.113.10
-  - 198.51.100.20
-  logout_enabled: true
-  logout_urls: []
-  client_logout_enabled: true
-  no_server_logout_finding: true
+  duplicate_login_ip_enabled: null

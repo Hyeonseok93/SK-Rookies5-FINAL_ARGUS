@@ -24,3 +24,6 @@ logs/
 
 # Local documentation (not committed)
 docs/
+
+__pycache__/
+*.pyc
