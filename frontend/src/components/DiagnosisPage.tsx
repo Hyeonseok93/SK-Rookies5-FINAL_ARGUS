@@ -15,11 +15,13 @@ import { G62DiagnosisStartDialog } from "./G62DiagnosisStartDialog";
 import { G71DiagnosisStartDialog } from "./G71DiagnosisStartDialog";
 
 import { G22DiagnosisStartDialog } from "./G22DiagnosisStartDialog";
+import { G16SectionInfoPopover } from "./diagnosis/G16SectionInfoPopover";
 import { G22SectionInfoPopover } from "./diagnosis/G22SectionInfoPopover";
 import { G32SectionInfoPopover } from "./diagnosis/G32SectionInfoPopover";
 import { G44SectionInfoPopover } from "./diagnosis/G44SectionInfoPopover";
 import { G45SectionInfoPopover } from "./diagnosis/G45SectionInfoPopover";
 import { G52SectionInfoPopover } from "./diagnosis/G52SectionInfoPopover";
+import { G61SectionInfoPopover } from "./diagnosis/G61SectionInfoPopover";
 import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
 import { G74DiagnosisStartDialog } from "./G74DiagnosisStartDialog";
@@ -766,7 +768,23 @@ export function DiagnosisPage() {
                         </span>
                         <span className="flex min-w-0 flex-1 items-center gap-1.5">
                           <span className="text-sm text-white">{section.title}</span>
-                          {section.id === "2-2" ? (
+                          {section.id === "1-6" ? (
+                            <span
+                              className="shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              <G16SectionInfoPopover />
+                            </span>
+                          ) : section.id === "6-1" ? (
+                            <span
+                              className="shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              <G61SectionInfoPopover />
+                            </span>
+                          ) : section.id === "2-2" ? (
                             <span
                               className="shrink-0"
                               onClick={(e) => e.stopPropagation()}

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AlertTriangle, ChevronDown, Terminal, Copy } from "lucide-react";
 import type { DiagnosisSectionReport } from "../../types";
 import { G15FindingsPanel } from "./G15FindingsPanel";
+import { G16FindingsPanel } from "./G16FindingsPanel";
 import { G22FindingsPanel } from "./G22FindingsPanel";
 import { G32FindingsPanel } from "./G32FindingsPanel";
 import { G34FindingsPanel } from "./G34FindingsPanel";
@@ -45,7 +46,7 @@ export function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
-function FindingEvidence({
+export function FindingEvidence({
   evidence,
   sectionId,
 }: {
@@ -876,6 +877,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const statsMessages = new Set([
     "1-2 scan statistics",
     "1-5 scan statistics",
+    "1-6 scan statistics",
     "2-1 scan statistics",
     "4-1 scan statistics",
     "4-2 scan statistics",
@@ -897,6 +899,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const stats = statsFinding?.evidence?.stats as Record<string, unknown> | undefined;
   const isG12Stats = statsFinding?.message === "1-2 scan statistics";
   const isG15Stats = statsFinding?.message === "1-5 scan statistics";
+  const isG16Stats = statsFinding?.message === "1-6 scan statistics";
   const isG21Stats = statsFinding?.message === "2-1 scan statistics";
   const isG41Stats = statsFinding?.message === "4-1 scan statistics";
   const isG42Stats = statsFinding?.message === "4-2 scan statistics";
@@ -985,6 +988,27 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                   · CORS {(stats.cors as { issues?: number }).issues}
                 </span>
               ) : null}
+            </>
+          ) : null}
+          {isG16Stats ? (
+            <>
+              payload sources{" "}
+              <span className="font-mono text-cyan-300/90">
+                {Array.isArray(stats.payload_sources) ? stats.payload_sources.length : "—"}
+              </span>
+              {typeof stats.raw_findings_count === "number" ? (
+                <span> · raw findings {stats.raw_findings_count}</span>
+              ) : null}
+              {(() => {
+                const shots = stats.screenshots as
+                  | { enabled?: boolean; status?: string; stats?: { selected?: number; succeeded?: number } }
+                  | undefined;
+                if (!shots?.enabled) return <span className="text-amber-300/80"> · 스크린샷 비활성</span>;
+                if (shots.status === "error") return <span className="text-amber-300/80"> · 스크린샷 실패</span>;
+                const sel = shots.stats?.selected ?? 0;
+                const ok = shots.stats?.succeeded ?? 0;
+                return <span> · 스크린샷 {ok}/{sel}</span>;
+              })()}
             </>
           ) : null}
           {isG21Stats ? (
@@ -1563,7 +1587,11 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
         </div>
       ) : null}
 
-      {findings.length === 0 ? (
+      {report.section_id === "6-1" && report.g61_summary ? (
+        <G61FindingsPanel summary={report.g61_summary} status={report.status} />
+      ) : report.section_id === "1-6" ? (
+        <G16FindingsPanel findings={findings} status={report.status} />
+      ) : findings.length === 0 ? (
         <p className="text-xs text-cyber-muted">finding 없음</p>
       ) : report.section_id === "1-5" ? (
         <G15FindingsPanel findings={findings} />
@@ -1583,8 +1611,6 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
         <G45FindingsPanel findings={findings} />
       ) : report.section_id === "5-2" ? (
         <G52FindingsPanel findings={findings} stats={stats} />
-      ) : report.section_id === "6-1" && report.g61_summary ? (
-        <G61FindingsPanel summary={report.g61_summary} status={report.status} />
       ) : report.section_id === "6-2" ? (
         <G62FindingsPanel findings={findings} />
       ) : report.section_id === "7-1" ? (
