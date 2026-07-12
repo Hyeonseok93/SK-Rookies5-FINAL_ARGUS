@@ -144,11 +144,70 @@ def _format_request(req_obj) -> str:
     return f"{getattr(req_obj, 'method', '')} {getattr(req_obj, 'url', '')}\n\nHeaders:\n{headers}\n\nBody:\n{body}"
 
 
-def _format_response(res) -> str:
+def _find_containing_record(body: str, needle: str) -> str | None:
+    """If ``body`` is JSON and ``needle`` lives inside one specific object in
+    a list (e.g. one post out of a feed array), return that object alone,
+    pretty-printed — a whole, valid record instead of an arbitrary character
+    slice that could cut a JSON object in half."""
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+
+    def _search(node):
+        if isinstance(node, dict):
+            try:
+                serialized = json.dumps(node, ensure_ascii=False)
+            except (TypeError, ValueError):
+                return None
+            if needle not in serialized:
+                return None
+            for value in node.values():
+                deeper = _search(value)
+                if deeper is not None:
+                    return deeper
+            return node
+        if isinstance(node, list):
+            for item in node:
+                found = _search(item)
+                if found is not None:
+                    return found
+        return None
+
+    record = _search(data)
+    if record is None:
+        return None
+    try:
+        pretty = json.dumps(record, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError):
+        return None
+    return f"(취약점이 발견된 항목만 표시, 전체 응답에서 발췌)\n{pretty}"
+
+
+def _windowed_body(body: str, needle: str = "", *, context: int = 800, max_len: int = 3000) -> str:
+    """Keep the evidence readable without losing the payload: if ``body`` is
+    long, save just the JSON record containing ``needle`` (falling back to a
+    character window around it) instead of the first N characters — a
+    payload stored deep in a list response would otherwise be truncated away."""
+    if not body or len(body) <= max_len:
+        return body
+    if needle:
+        record = _find_containing_record(body, needle)
+        if record is not None:
+            return record
+        idx = body.find(needle)
+        if idx != -1:
+            start = max(0, idx - context)
+            end = min(len(body), idx + len(needle) + context)
+            prefix = "... (앞부분 생략) ...\n" if start > 0 else ""
+            suffix = "\n... (뒷부분 생략, 취약점 증거 주변만 저장됨) ..." if end < len(body) else ""
+            return f"{prefix}{body[start:end]}{suffix}"
+    return body[:max_len] + "\n... (뒷부분 생략, 응답이 너무 길어 앞부분만 저장됨) ..."
+
+
+def _format_response(res, needle: str = "") -> str:
     headers = "\n".join(f"  {k}: {v}" for k, v in res.headers.items())
-    body = res.text or ""
-    if len(body) > 1600:
-        body = body[:1600] + "\n... truncated ..."
+    body = _windowed_body(res.text or "", needle)
     return f"HTTP/1.1 {res.status_code} {res.reason}\n\nHeaders:\n{headers}\n\nBody:\n{body}"
 
 
@@ -613,7 +672,7 @@ def _alert_from_xss(result: dict, method: str, url: str, param: str, payload: st
         "custom_type": result.get("custom_type", "40012"),
         "account_role": account_role,
         "evidence_request": _format_request(res.request),
-        "evidence_response": _format_response(res),
+        "evidence_response": _format_response(res, payload),
         "successful_attack_payloads": [payload],
         "description": "Response reflected an executable XSS payload.",
         "solution": "Escape untrusted output by context and reject executable markup in API input.",
@@ -769,6 +828,35 @@ def _write_reports(findings: list[dict], result_dir: Path, role: str = "web_ui")
     ]
     filtered.write_text("\n".join(lines), encoding="utf-8")
     return str(summary)
+
+
+def _dedupe_findings(findings: list[dict]) -> list[dict]:
+    """Collapse duplicate findings produced across per-account scan passes.
+
+    The same endpoint gets scanned once per account plus once in the
+    cross-account pass, so an identical vulnerability can be reported several
+    times. Two findings are "the same" only when they share vuln type, URL,
+    parameter, method AND account role — keeping the role in the key means a
+    regular user's stored XSS and an admin's stored XSS on the same endpoint
+    stay as two distinct findings (which is the whole point of scanning every
+    account), while true repeats collapse to one."""
+    seen: set[tuple] = set()
+    deduped: list[dict] = []
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        key = (
+            str(finding.get("vuln_type") or ""),
+            str(finding.get("url") or "").rstrip("/"),
+            str(finding.get("param") or ""),
+            str(finding.get("method") or "").upper(),
+            str(finding.get("account_role") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(finding)
+    return deduped
 
 
 def _scan_accounts(target_url: str, auth_tokens: list[dict], zap=None) -> list[dict]:
@@ -1042,6 +1130,7 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
         with contextlib.redirect_stdout(tee_out), contextlib.redirect_stderr(tee_err):
             _log(f"[G11] log_file={log_path}")
             _log(f"[G11] started_at={time.strftime('%Y-%m-%dT%H:%M:%S%z')}")
+            result_path = result_dir / "zap_report_summary_web_ui.json"
             for base_url in scan_bases:
                 base_key = _base_key(base_url)
                 base_auth_tokens = [
@@ -1055,25 +1144,60 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
                     account["validated_endpoints"] = endpoints_by_base.get(base_url, {}) or account.get("validated_endpoints", {})
                     account["swagger_components"] = components or account.get("swagger_components", {})
 
-                before = Path.cwd()
-                previous_result_dir_override = getattr(zap_runner, "result_dir_override", None)
-                try:
-                    os.chdir(result_dir.parent)
-                    zap_runner.scan_status = scan_status
-                    zap_runner.result_dir_override = str(result_dir.resolve())
-                    zap_runner.run_zap_scan(base_url, legacy_accounts)
-                finally:
-                    zap_runner.result_dir_override = previous_result_dir_override
-                    os.chdir(before)
+                # Scan once per account so *every* registered account is the
+                # primary (its own token drives the whole XSS/CSRF injection),
+                # not just the single highest-privilege one. Without this,
+                # "my-data" endpoints like /members/me/profile were only ever
+                # tested as the admin, so a regular user's own stored-XSS
+                # (which needs that user's session) was never found.
+                #
+                # NOTE: an extra all-accounts pass would also catch
+                # cross-account (cross-role) stored XSS — a payload one role
+                # stores being read by another — but that roughly doubles the
+                # request volume (each stored-XSS check broadcasts a GET to
+                # every endpoint), which was overloading the target server and
+                # making it drop the reflection-verification GETs (posts XSS
+                # was stored but never confirmed). Per-account passes alone
+                # keep the server stable; the cross-account pass is dropped.
+                scan_passes: list[list[dict]] = [[account] for account in legacy_accounts]
 
-                result_path = result_dir / "zap_report_summary_web_ui.json"
-                if result_path.is_file():
+                for pass_accounts in scan_passes:
+                    pass_label = ",".join(
+                        str(a.get("role") or a.get("email") or "account") for a in pass_accounts
+                    )
+                    _log(f"[G11] scan pass accounts=[{pass_label}] base={base_url}")
+                    # Clear any prior pass's result so a pass that finds
+                    # nothing can't re-import the previous pass's findings.
+                    if result_path.exists():
+                        try:
+                            result_path.unlink()
+                        except OSError:
+                            pass
+
+                    before = Path.cwd()
+                    previous_result_dir_override = getattr(zap_runner, "result_dir_override", None)
                     try:
-                        loaded = json.loads(result_path.read_text(encoding="utf-8"))
-                        if isinstance(loaded, list):
-                            findings.extend(loaded)
-                    except Exception as exc:
-                        _log(f"[G11] failed to read legacy result {result_path}: {exc}")
+                        os.chdir(result_dir.parent)
+                        zap_runner.scan_status = scan_status
+                        zap_runner.result_dir_override = str(result_dir.resolve())
+                        zap_runner.run_zap_scan(base_url, pass_accounts)
+                    finally:
+                        zap_runner.result_dir_override = previous_result_dir_override
+                        os.chdir(before)
+
+                    if result_path.is_file():
+                        try:
+                            loaded = json.loads(result_path.read_text(encoding="utf-8"))
+                            if isinstance(loaded, list):
+                                findings.extend(loaded)
+                                _log(f"[G11] pass [{pass_label}] produced {len(loaded)} findings")
+                        except Exception as exc:
+                            _log(f"[G11] failed to read legacy result {result_path}: {exc}")
+            # De-duplicate across per-account passes: the same endpoint tested
+            # by several accounts (or re-seen in the cross-account pass) should
+            # not produce duplicate findings — but keep genuinely distinct ones
+            # (same URL, *different account role* = a real separate finding).
+            findings = _dedupe_findings(findings)
             _log(f"[G11] finished_at={time.strftime('%Y-%m-%dT%H:%M:%S%z')}")
     source_msg = f" api_tree={source_name}" if source_name else ""
     status = "fail" if findings else "pass"

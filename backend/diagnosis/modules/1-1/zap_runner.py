@@ -43,19 +43,43 @@ scan_status = {
     "total_alerts": 0
 }
 
-def _bounded_get(url, *, headers=None, params=None, timeout=4, max_bytes=524288):
-    """GET with a bounded response body so streaming/large endpoints cannot stall scans."""
-    res = requests.get(
-        url,
-        headers=headers,
-        params=params,
-        timeout=timeout,
-        stream=True,
-    )
+def _bounded_get(url, *, headers=None, params=None, timeout=4, max_bytes=524288, retries=2, retry_wait=1.5):
+    """GET with a bounded response body so streaming/large endpoints cannot stall scans.
+
+    Retries on connection errors: under the per-account scan load the target
+    server intermittently drops connections, and a dropped reflection-
+    verification GET would silently lose a real stored-XSS finding (the payload
+    was stored but never confirmed). A couple of short-waited retries ride out
+    those transient drops instead."""
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            res = requests.get(
+                url,
+                headers=headers,
+                params=params,
+                timeout=timeout,
+                stream=True,
+            )
+            break
+        except requests.exceptions.RequestException as exc:
+            last_exc = exc
+            if attempt < retries:
+                time.sleep(retry_wait)
+                continue
+            raise
     chunks = []
     total = 0
+    # Cap not just the body *size* but the time spent reading it: an endpoint
+    # that has accumulated thousands of test records (e.g. GET /api/v1/posts
+    # after many scan runs seed posts and DELETE cleanup is disabled) can take
+    # far longer to stream than the connect timeout, hanging the whole scan on
+    # one URL. Once the read deadline passes, keep what we have and move on.
+    read_deadline = time.monotonic() + max(timeout, 4) * 2
     try:
         for chunk in res.iter_content(chunk_size=16384):
+            if time.monotonic() > read_deadline:
+                break
             if not chunk:
                 continue
             remaining = max_bytes - total
@@ -65,6 +89,8 @@ def _bounded_get(url, *, headers=None, params=None, timeout=4, max_bytes=524288)
             total += len(chunks[-1])
             if total >= max_bytes:
                 break
+    except requests.exceptions.RequestException:
+        pass
     finally:
         res.close()
     res._content = b"".join(chunks)
@@ -613,6 +639,91 @@ def default_value_for_query_param(param_name: str, schema: dict, components: dic
     if get_schema_type(schema, components) in {"object", "array", "unknown"}:
         return None
     return default_value_for_schema(schema, components, param_name)
+
+def _is_profile_endpoint(api_url: str | None) -> bool:
+    """True when the URL is the authenticated user's own single-record
+    resource (a profile / "my info" endpoint). Matched as substrings so
+    ``/members/me/profile``, ``/api/v1/me``, ``/mypage/info`` etc. are all
+    recognised, instead of keying on the literal word "profile" alone."""
+    low = str(api_url or "").lower()
+    return (
+        "profile" in low
+        or "/me/" in low
+        or low.rstrip("/").endswith("/me")
+        or "mypage" in low
+        or "myinfo" in low
+    )
+
+# Tokens that mark a profile-update field as authentication-critical.
+# Matched as substrings (after stripping separators) rather than an exact
+# name list, so variants like newPassword / current_password / userEmail /
+# passwordConfirm are all covered without enumerating every spelling — these
+# are generic auth field-name tokens, not any one app's schema. Overwriting
+# such a field — even with a benign "safe" default — locks us out of the
+# account (password stops matching, or the login identifier changes). Profile
+# updates are PATCH (partial), so simply not sending the field leaves the
+# stored value intact.
+_LOGIN_CRITICAL_TOKENS = ("password", "passwd", "pwd", "email", "loginid", "username")
+
+
+def _is_login_critical_field(key: str) -> bool:
+    collapsed = re.sub(r"[^a-z0-9]", "", str(key or "").lower())
+    return any(token in collapsed for token in _LOGIN_CRITICAL_TOKENS)
+
+
+def stabilize_profile_payload(payload: dict | None, api_url: str, role: str | None, *, preserve: set[str] | None = None) -> None:
+    """Keep a profile-update baseline from locking us out of the account:
+    never send login-critical fields (password/email/...), so testing a
+    profile's stored XSS leaves the account's credentials intact.
+
+    Uniqueness of non-tested fields (a profile whose nickname/handle has a
+    UNIQUE constraint would reject a shared sample) is handled generically by
+    ``preserve_current_profile_values``, which keeps every non-tested field at
+    its *current* stored value — so no field name has to be special-cased here."""
+    if not isinstance(payload, dict):
+        return
+    if not _is_profile_endpoint(api_url):
+        return
+    preserve = preserve or set()
+    for key in list(payload.keys()):
+        if key in preserve:
+            continue
+        if _is_login_critical_field(key):
+            # Drop it — a PATCH without the field leaves the stored value
+            # (the real password / email) untouched.
+            payload.pop(key, None)
+            continue
+
+
+def preserve_current_profile_values(payload: dict | None, api_url: str, headers: dict | None, tested_param: str) -> None:
+    """Keep a profile update from clobbering fields it isn't testing.
+
+    A profile is one shared record, so testing stored XSS field-by-field
+    (name, then nickname, ...) would otherwise overwrite each earlier field's
+    payload with a benign default, leaving only the last one in the DB. Read
+    the *current* profile and copy every non-tested, non-login field's current
+    value into this request, so a payload a previous scan stored in another
+    field survives. App-neutral: unwraps a common ``{...,"data":{...}}``
+    envelope, keeps the tested field and login-critical fields untouched, and
+    silently no-ops on any error or non-profile endpoint."""
+    if not isinstance(payload, dict) or not _is_profile_endpoint(api_url):
+        return
+    try:
+        resp = requests.get(api_url, headers=headers or {}, timeout=5)
+        body = resp.json()
+    except Exception:
+        return
+    data = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
+    if not isinstance(data, dict):
+        return
+    tested_top = str(tested_param or "").split(".", 1)[0].replace("[0]", "")
+    for key, value in data.items():
+        if key == tested_top or key not in payload:
+            continue
+        if _is_login_critical_field(key) or isinstance(value, (dict, list)):
+            continue
+        payload[key] = value
+
 
 def build_default_payload_from_schema(schema: dict, components: dict | None = None) -> dict:
     schema = resolve_schema_ref(schema, components)
@@ -1998,13 +2109,69 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             except Exception as e:
                 return f"Request formatting error: {e}"
 
-        def format_http_response(res_obj):
+        def find_containing_record(body: str, needle: str):
+            """If body is JSON and needle lives inside one specific object in
+            a list (e.g. one post out of a feed array), return that object
+            alone, pretty-printed — a whole valid record instead of an
+            arbitrary character slice that could cut a JSON object in half."""
+            try:
+                data = json.loads(body)
+            except (ValueError, TypeError):
+                return None
+
+            def _search(node):
+                if isinstance(node, dict):
+                    try:
+                        serialized = json.dumps(node, ensure_ascii=False)
+                    except (TypeError, ValueError):
+                        return None
+                    if needle not in serialized:
+                        return None
+                    for value in node.values():
+                        deeper = _search(value)
+                        if deeper is not None:
+                            return deeper
+                    return node
+                if isinstance(node, list):
+                    for item in node:
+                        found = _search(item)
+                        if found is not None:
+                            return found
+                return None
+
+            record = _search(data)
+            if record is None:
+                return None
+            try:
+                pretty = json.dumps(record, ensure_ascii=False, indent=2)
+            except (TypeError, ValueError):
+                return None
+            return f"(취약점이 발견된 항목만 표시, 전체 응답에서 발췌)\n{pretty}"
+
+        def windowed_body(body: str, needle: str = "", context: int = 800, max_len: int = 3000) -> str:
+            """Keep the evidence readable without losing the payload: save
+            just the JSON record containing it (falling back to a character
+            window) instead of the first N characters, so a payload stored
+            deep in a list response isn't truncated away."""
+            if not body or len(body) <= max_len:
+                return body
+            if needle:
+                record = find_containing_record(body, needle)
+                if record is not None:
+                    return record
+                idx = body.find(needle)
+                if idx != -1:
+                    start = max(0, idx - context)
+                    end = min(len(body), idx + len(needle) + context)
+                    prefix = "... (앞부분 생략) ...\n" if start > 0 else ""
+                    suffix = "\n... (뒷부분 생략, 취약점 증거 주변만 저장됨) ..." if end < len(body) else ""
+                    return f"{prefix}{body[start:end]}{suffix}"
+            return body[:max_len] + "\n... (뒷부분 생략, 응답이 너무 길어 앞부분만 저장됨) ..."
+
+        def format_http_response(res_obj, needle: str = ""):
             try:
                 hdrs = "\n".join(f'  "{k}": "{v}"' for k, v in res_obj.headers.items())
-                body_str = res_obj.text if res_obj.text else ""
-                # 프론트 표시를 위해 너무 긴 응답 바디는 1000자로 제어
-                if len(body_str) > 1000:
-                    body_str = body_str[:1000] + "\n... (응답 데이터가 너무 길어 중략됨)"
+                body_str = windowed_body(res_obj.text if res_obj.text else "", needle)
                 return f"HTTP/1.1 {res_obj.status_code} {res_obj.reason}\n\nHeaders:\n{{\n{hdrs}\n}}\n\nBody:\n{body_str}"
             except Exception as e:
                 return f"Response formatting error: {e}"
@@ -2371,7 +2538,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                     ),
                     "custom_type": "40014",
                     "evidence_request": format_http_request(reader_res.request),
-                    "evidence_response": format_http_response(reader_res),
+                    "evidence_response": format_http_response(reader_res, payload),
                     "expected_status_code": reader_res.status_code,
                     "expected_evidence_in_response": payload,
                     "cross_account_writer_role": writer_role,
@@ -2559,6 +2726,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                         prop_name = k.split(".")[-1]
                         dummy_val = default_value_for_schema(base_test_json_schemas.get(k, {"type": "string"}), account_swagger_components, prop_name)
                         set_nested_value_by_keypath(baseline_json, k, dummy_val)
+                    stabilize_profile_payload(baseline_json, resolved_api_url, best_role)
                     baseline_multipart = dict(base_multipart_defaults or base_multipart_required_defaults)
                     for k in base_test_multipart_keys:
                         if k not in baseline_multipart:
@@ -2858,7 +3026,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                     "evidence": f"HTTP 요청 헤더 '{header_name}'에 주입된 페이로드가 응답 본문에 그대로 실행 가능한 형태로 반사됨",
                                     "custom_type": "40012",
                                     "evidence_request": format_http_request(res_hdr.request),
-                                    "evidence_response": format_http_response(res_hdr),
+                                    "evidence_response": format_http_response(res_hdr, header_payload),
                                     "parsed_request_headers": hdr_req_parts["parsed_request_headers"],
                                     "parsed_request_body": hdr_req_parts["parsed_request_body"],
                                     "parsed_request_query": hdr_req_parts["parsed_request_query"],
@@ -2929,6 +3097,14 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 set_nested_value_by_keypath(store_json, k, base_test_enum_defaults.get(prop_name, dummy_val))
                             if target_type == "json":
                                 set_nested_value_by_keypath(store_json, target_param, stored_payload)
+                            preserve_json_keys = {target_param.split(".", 1)[0].replace("[0]", "")} if target_type == "json" else set()
+                            stabilize_profile_payload(store_json, resolved_api_url, best_role, preserve=preserve_json_keys)
+                            # (a) Keep the *other* profile fields at their current
+                            # stored values (which may hold another finding's
+                            # payload) instead of resetting them to "safe", so
+                            # per-field profile stored-XSS findings don't overwrite
+                            # each other — every field's payload survives in the DB.
+                            preserve_current_profile_values(store_json, resolved_api_url, xss_headers, target_param if target_type == "json" else "")
                             
                             store_multipart = dict(base_multipart_defaults or base_multipart_required_defaults)
                             for k in base_test_multipart_keys:
@@ -3112,7 +3288,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                                         "evidence": f"{method.upper()} {api_url} 저장 후 GET {get_url} 재조회 응답에 페이로드 '{stored_payload}'가 반사됨",
                                                         "custom_type": "40014",
                                                         "evidence_request": format_http_request(get_res.request),
-                                                        "evidence_response": format_http_response(get_res),
+                                                        "evidence_response": format_http_response(get_res, stored_payload),
                                                         "expected_status_code": get_res.status_code,
                                                         "expected_evidence_in_response": stored_payload,
                                                         "screenshot_on": "page_loaded",
