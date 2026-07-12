@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, Terminal, Copy } from "lucide-react"; // 💡 Terminal, Copy 추가
+import { ChevronDown, Terminal, Copy, AlertTriangle } from "lucide-react";
 import type { DiagnosisSectionReport } from "../../types";
 import { G15FindingsPanel } from "./G15FindingsPanel";
 import { G22FindingsPanel } from "./G22FindingsPanel";
