@@ -1,15 +1,15 @@
 """ARGUS 1-1 scanner orchestration.
 
-The 1-1 module owns the scan loop.  It can be called by the ARGUS diagnosis
-runtime through ``run_g11_scan()`` or by the development web UI through the
-compatibility ``run_zap_scan()`` function at the bottom of this file.
+The 1-1 module owns the scan loop, entered through ``run_g11_scan()``. It
+delegates the actual scan to the ``zap_runner`` engine (per account/pass) and
+reads back the findings zap_runner writes, then de-duplicates them. The
+finding shape is built in one place only — ``zap_runner``'s report builder.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 import contextlib
-import copy
 import importlib.util
 import json
 import os
@@ -20,7 +20,6 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
-import requests
 
 
 _MODULE_DIR = Path(__file__).resolve().parent
@@ -82,11 +81,6 @@ class ScanResult:
     message: str = ""
 
 
-def _short_payload(value: str, limit: int = 80) -> str:
-    text = str(value or "").replace("\n", "\\n").replace("\r", "\\r")
-    return text if len(text) <= limit else text[: limit - 3] + "..."
-
-
 def _log(message: str) -> None:
     print(message, flush=True)
 
@@ -109,7 +103,16 @@ def update_status(is_running=None, progress=None, message=None, result_file=None
 
         if is_running is False:
             if progress == 100:
-                dp.finish(message or "1-1 scan completed")
+                # Don't mark the run finished here — the orchestrator
+                # (_run_module) finishes only AFTER evidence-screenshot capture,
+                # so the UI reports completion once screenshots exist, not the
+                # moment the scan engine stops. Keep running=True and hand off to
+                # the screenshot phase.
+                dp.update(
+                    phase="screenshot",
+                    message="스캔 완료 — 증거 스크린샷 생성 중…",
+                    percent=98,
+                )
             elif message:
                 dp.fail(message)
         else:
@@ -136,81 +139,6 @@ def _load_api_tree(data_dir: Path):
     return None, ""
 
 
-def _format_request(req_obj) -> str:
-    headers = "\n".join(f"  {k}: {v}" for k, v in getattr(req_obj, "headers", {}).items())
-    body = getattr(req_obj, "body", b"") or b""
-    if isinstance(body, bytes):
-        body = body.decode("utf-8", errors="ignore")
-    return f"{getattr(req_obj, 'method', '')} {getattr(req_obj, 'url', '')}\n\nHeaders:\n{headers}\n\nBody:\n{body}"
-
-
-def _find_containing_record(body: str, needle: str) -> str | None:
-    """If ``body`` is JSON and ``needle`` lives inside one specific object in
-    a list (e.g. one post out of a feed array), return that object alone,
-    pretty-printed — a whole, valid record instead of an arbitrary character
-    slice that could cut a JSON object in half."""
-    try:
-        data = json.loads(body)
-    except (ValueError, TypeError):
-        return None
-
-    def _search(node):
-        if isinstance(node, dict):
-            try:
-                serialized = json.dumps(node, ensure_ascii=False)
-            except (TypeError, ValueError):
-                return None
-            if needle not in serialized:
-                return None
-            for value in node.values():
-                deeper = _search(value)
-                if deeper is not None:
-                    return deeper
-            return node
-        if isinstance(node, list):
-            for item in node:
-                found = _search(item)
-                if found is not None:
-                    return found
-        return None
-
-    record = _search(data)
-    if record is None:
-        return None
-    try:
-        pretty = json.dumps(record, ensure_ascii=False, indent=2)
-    except (TypeError, ValueError):
-        return None
-    return f"(취약점이 발견된 항목만 표시, 전체 응답에서 발췌)\n{pretty}"
-
-
-def _windowed_body(body: str, needle: str = "", *, context: int = 800, max_len: int = 3000) -> str:
-    """Keep the evidence readable without losing the payload: if ``body`` is
-    long, save just the JSON record containing ``needle`` (falling back to a
-    character window around it) instead of the first N characters — a
-    payload stored deep in a list response would otherwise be truncated away."""
-    if not body or len(body) <= max_len:
-        return body
-    if needle:
-        record = _find_containing_record(body, needle)
-        if record is not None:
-            return record
-        idx = body.find(needle)
-        if idx != -1:
-            start = max(0, idx - context)
-            end = min(len(body), idx + len(needle) + context)
-            prefix = "... (앞부분 생략) ...\n" if start > 0 else ""
-            suffix = "\n... (뒷부분 생략, 취약점 증거 주변만 저장됨) ..." if end < len(body) else ""
-            return f"{prefix}{body[start:end]}{suffix}"
-    return body[:max_len] + "\n... (뒷부분 생략, 응답이 너무 길어 앞부분만 저장됨) ..."
-
-
-def _format_response(res, needle: str = "") -> str:
-    headers = "\n".join(f"  {k}: {v}" for k, v in res.headers.items())
-    body = _windowed_body(res.text or "", needle)
-    return f"HTTP/1.1 {res.status_code} {res.reason}\n\nHeaders:\n{headers}\n\nBody:\n{body}"
-
-
 def _normalize_endpoint_path(url_or_path: str, base_url: str) -> str:
     value = str(url_or_path or "").strip()
     if not value:
@@ -220,69 +148,6 @@ def _normalize_endpoint_path(url_or_path: str, base_url: str) -> str:
     elif value.startswith(base_url):
         value = value[len(base_url):] or "/"
     return value.split("?", 1)[0] or "/"
-
-
-def _merge_components(target: dict, source: dict) -> None:
-    for comp_type, comp_value in (source or {}).items():
-        if isinstance(comp_value, dict):
-            target.setdefault(comp_type, {}).update(comp_value)
-
-
-def _load_openapi_spec(spec: str, base_url: str, zap=None) -> tuple[dict, dict]:
-    endpoints: dict[str, dict] = {}
-    components: dict[str, dict] = {}
-    for item in [s.strip() for s in str(spec or "").replace(",", "\n").splitlines() if s.strip()]:
-        data = None
-        try:
-            if item.startswith(("http://", "https://")):
-                if zap:
-                    try:
-                        zap.openapi.import_url(item, base_url)
-                    except Exception:
-                        pass
-                res = requests.get(item, timeout=8)
-                if res.ok:
-                    data = res.json()
-            else:
-                path = Path(item)
-                if path.is_file():
-                    if zap:
-                        try:
-                            zap.openapi.import_file(str(path.resolve()), base_url)
-                        except Exception:
-                            pass
-                    data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            print(f"[OpenAPI] failed to load {item}: {exc}")
-        if not isinstance(data, dict):
-            continue
-        for ep_path, methods in (data.get("paths") or {}).items():
-            endpoints.setdefault(ep_path, {})
-            for method, details in (methods or {}).items():
-                if method.lower() in {"get", "post", "put", "patch", "delete", "options", "head"}:
-                    endpoints[ep_path][method.lower()] = details or {}
-        _merge_components(components, data.get("components") or {})
-    return endpoints, components
-
-
-def _build_endpoints_for_account(account: dict, target_url: str, zap=None) -> tuple[dict, dict]:
-    base_url = account.get("base_url", target_url).rstrip("/")
-    endpoints, components = _load_openapi_spec(account.get("openapi_url", ""), base_url, zap)
-
-    for raw in str(account.get("url_list_str", "") or "").splitlines():
-        path = _normalize_endpoint_path(raw, base_url)
-        if path:
-            endpoints.setdefault(path, {}).setdefault("get", {"parameters": [], "responses": {}})
-
-    for raw in str(account.get("api_list_str", "") or "").splitlines():
-        parts = raw.strip().split(None, 1)
-        if len(parts) != 2:
-            continue
-        method, raw_path = parts
-        path = _normalize_endpoint_path(raw_path, base_url)
-        endpoints.setdefault(path, {})[method.lower()] = {"parameters": [], "responses": {}}
-
-    return endpoints, components
 
 
 def _base_key(url: str) -> str:
@@ -412,424 +277,6 @@ def _endpoints_by_base_from_api_tree(
     return grouped, api_tree.get("components") or {}
 
 
-def _build_auth_headers_for_mode(account: dict, mode: str | None = None) -> dict:
-    token = account.get("token")
-    headers = auth.build_auth_headers(token, account, mode)
-    clean_token = str(token or "").replace("Bearer ", "").strip()
-    if mode == "authorization_raw" and clean_token:
-        headers["Authorization"] = clean_token
-    elif mode == "x_auth_token" and clean_token:
-        headers.pop("Authorization", None)
-        headers["X-Auth-Token"] = clean_token
-    elif mode == "access_token_header" and clean_token:
-        headers.pop("Authorization", None)
-        headers["access-token"] = clean_token
-    elif mode == "access_token_camel_header" and clean_token:
-        headers.pop("Authorization", None)
-        headers["accessToken"] = clean_token
-    return headers
-
-
-def _authorization_headers_from_account(account: dict) -> dict:
-    current = dict(_build_auth_headers_for_mode(account, account.get("auth_mode")))
-    current.pop("Cookie", None)
-    current.pop("cookie", None)
-    if current:
-        return current
-    for mode in ["header", "authorization_raw", "x_auth_token", "access_token_header", "access_token_camel_header"]:
-        headers = dict(_build_auth_headers_for_mode(account, mode))
-        headers.pop("Cookie", None)
-        headers.pop("cookie", None)
-        if headers:
-            return headers
-    return {}
-
-
-def _cookie_header_and_source(account: dict) -> tuple[str, str]:
-    cookie_header = auth.build_cookie_header_from_account(account)
-    if cookie_header:
-        return cookie_header, "real"
-    token = str(account.get("token") or "").replace("Bearer ", "").strip()
-    if token:
-        cookie_name = str(account.get("token_field") or "accessToken").split(".")[-1] or "accessToken"
-        return f"{cookie_name}={token}", "synthetic"
-    return "", "none"
-
-
-def _classify_auth_acceptance(
-    account: dict,
-    url: str,
-    method: str,
-    params: dict | None = None,
-    json_body: dict | None = None,
-    files=None,
-) -> dict:
-    authz_headers = _authorization_headers_from_account(account)
-    cookie_header, cookie_source = _cookie_header_and_source(account)
-    probes = {
-        "no_auth": {},
-        "header_only": dict(authz_headers),
-        "cookie_only": {"Cookie": cookie_header} if cookie_header else {},
-        "both": {**authz_headers, **({"Cookie": cookie_header} if cookie_header else {})},
-    }
-    statuses: dict[str, int | None] = {}
-    errors: dict[str, str] = {}
-    for name, probe_headers in probes.items():
-        try:
-            res = requests.request(
-                method,
-                url,
-                headers=probe_headers or None,
-                params=params or None,
-                json=json_body or None,
-                files=files,
-                timeout=6,
-            )
-            statuses[name] = res.status_code
-        except Exception as exc:
-            statuses[name] = None
-            errors[name] = str(exc)
-
-    def ok(name: str) -> bool:
-        return _is_successful_response(statuses.get(name) or 0)
-
-    if ok("no_auth"):
-        mode = "PUBLIC_OR_BROKEN"
-    elif ok("header_only") and not ok("cookie_only"):
-        mode = "HEADER_ONLY"
-    elif ok("cookie_only") and not ok("header_only"):
-        mode = "COOKIE_ONLY"
-    elif ok("header_only") and ok("cookie_only"):
-        mode = "HEADER_OR_COOKIE"
-    elif ok("both") and not ok("header_only") and not ok("cookie_only"):
-        mode = "HEADER_AND_COOKIE"
-    elif any(value is None for value in statuses.values()):
-        mode = "UNKNOWN"
-    else:
-        mode = "UNKNOWN"
-
-    result = {"mode": mode, "statuses": statuses, "cookie_source": cookie_source}
-    if errors:
-        result["errors"] = errors
-    return result
-
-
-def _auth_probe_paths(endpoints: dict, account: dict) -> list[str]:
-    excluded = ["login", "signup", "register", "refresh", "logout", "reset-password"]
-    preferred = ["me", "profile", "account", "user", "member", "dashboard", "order", "reservation"]
-    if auth.is_admin_account(account):
-        preferred = ["admin", "dashboard", "member", "user", "reservation", "report", "me", "profile"]
-    paths = []
-    for ep_path, methods in endpoints.items():
-        lowered = ep_path.lower()
-        if "get" not in methods or "{" in ep_path or any(x in lowered for x in excluded):
-            continue
-        if auth.is_admin_account(account) and "admin" not in lowered:
-            continue
-        if not auth.is_admin_account(account) and "admin" in lowered:
-            continue
-        if any(x in lowered for x in preferred):
-            paths.append(ep_path)
-    for ep_path, methods in endpoints.items():
-        if len(paths) >= 12:
-            break
-        lowered = ep_path.lower()
-        if "get" in methods and "{" not in ep_path and not any(x in lowered for x in excluded) and ep_path not in paths:
-            paths.append(ep_path)
-    return paths[:12]
-
-
-def _detect_account_auth_mode(account: dict, target_url: str) -> str:
-    candidates = _auth_probe_paths(account.get("validated_endpoints", {}), account)
-    if not candidates:
-        return "cookie" if auth.build_cookie_header_from_account(account) else "header"
-    base_url = account.get("base_url", target_url).rstrip("/")
-    modes = ["header", "cookie", "both", "authorization_raw", "x_auth_token", "access_token_header", "access_token_camel_header"]
-    if (account.get("token_source") or "").lower() == "cookie":
-        modes = ["cookie", "both", "header"]
-    for mode in modes:
-        headers = _build_auth_headers_for_mode(account, mode)
-        if not headers:
-            continue
-        for path in candidates:
-            url = f"{base_url}{path}"
-            try:
-                no_auth = requests.get(url, timeout=4)
-                with_auth = requests.get(url, headers=headers, timeout=4)
-            except Exception:
-                continue
-            if 200 <= with_auth.status_code < 400 and no_auth.status_code in {401, 403}:
-                print(f"[AuthMode] {account.get('role', 'account')}: verified {mode} on {url}")
-                return mode
-            if 200 <= with_auth.status_code < 400:
-                return mode
-    account["auth_unverified"] = True
-    return "disabled"
-
-
-def _account_role_text(account: dict | None) -> str:
-    account = account or {}
-    return " ".join(
-        str(value or "").lower()
-        for value in [
-            account.get("role"),
-            account.get("base_url"),
-            account.get("claims", {}),
-            account.get("email"),
-        ]
-    )
-
-
-def _endpoint_role_priority(path: str, account: dict | None) -> tuple[int, str]:
-    lowered = str(path or "").lower()
-    role_text = _account_role_text(account)
-    is_admin = "admin" in role_text
-    is_seller = "seller" in role_text
-    if is_admin and re.search(r"(^|/)admin(s)?(/|$)", lowered):
-        return (0, lowered)
-    if is_seller and re.search(r"(^|/)seller(s)?(/|$)", lowered):
-        return (0, lowered)
-    if not is_admin and re.search(r"(^|/)admin(s)?(/|$)", lowered):
-        return (3, lowered)
-    if not is_seller and re.search(r"(^|/)seller(s)?(/|$)", lowered):
-        return (3, lowered)
-    return (1, lowered)
-
-
-def _resolved_paths(path: str) -> list[str]:
-    if "{" not in path:
-        return [path]
-    return [re.sub(r"\{[^}]+\}", "1", path)]
-
-
-def _is_mutation(method: str) -> bool:
-    return method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
-
-
-def _is_protected_mutation(path: str, method: str) -> tuple[bool, str]:
-    lowered = path.lower()
-    if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
-        return False, ""
-    account_markers = ["logout", "password", "profile", "/me", "withdraw", "delete-account"]
-    state_markers = ["close", "reopen", "restore", "status", "approve", "reject", "cancel", "payment"]
-    if any(x in lowered for x in account_markers):
-        return True, "account/session/profile mutation is protected from active scanning"
-    if any(x in lowered for x in state_markers):
-        return True, "state-transition endpoint is protected from active scanning"
-    return False, ""
-
-
-def _request_defaults(details: dict, components: dict) -> tuple[dict, dict, dict, list[str], dict, bool, list[str]]:
-    params = {}
-    param_schemas = {}
-    json_body = {}
-    json_keypaths: list[str] = []
-    json_schemas = {}
-    multipart = False
-    multipart_file_keys: list[str] = []
-
-    for param in details.get("parameters", []) or []:
-        if not isinstance(param, dict) or param.get("in", "query") != "query":
-            continue
-        name = param.get("name")
-        schema = param.get("schema") or {}
-        if not name:
-            continue
-        params[name] = openapi_utils.default_value_for_query_param(name, schema, components)
-        if openapi_utils.is_xss_injectable_schema(schema, name, components):
-            param_schemas[name] = openapi_utils.resolve_schema_ref(schema, components)
-
-    content = ((details.get("requestBody") or {}).get("content") or {})
-    if "multipart/form-data" in content:
-        multipart = True
-        schema = openapi_utils.resolve_schema_ref(content["multipart/form-data"].get("schema") or {}, components)
-        for name, prop in (schema.get("properties") or {}).items():
-            prop_type = openapi_utils.get_schema_type(prop, components)
-            item_schema = openapi_utils.resolve_schema_ref(prop.get("items", {}), components)
-            item_format = (item_schema.get("format") or "").lower() if isinstance(item_schema, dict) else ""
-            if _looks_like_file_field(name, prop):
-                multipart_file_keys.append(name)
-    elif "application/json" in content:
-        schema = openapi_utils.resolve_schema_ref(content["application/json"].get("schema") or {}, components)
-        json_body = openapi_utils.build_default_payload_from_schema(schema, components)
-        json_keypaths = openapi_utils.extract_injectable_keypaths(schema, components=components)
-        json_schemas = {kp: openapi_utils.schema_for_keypath(schema, kp, components) for kp in json_keypaths}
-
-    return params, param_schemas, json_body, json_keypaths, json_schemas, multipart, multipart_file_keys
-
-
-def _alert_from_xss(result: dict, method: str, url: str, param: str, payload: str, res, account_role: str) -> dict:
-    return {
-        "alert": "Reflected Cross Site Scripting",
-        "url": url,
-        "method": method.upper(),
-        "risk": result.get("risk", "High"),
-        "confidence": result.get("confidence", "High"),
-        "param": param,
-        "attack": payload,
-        "status_code": res.status_code,
-        "evidence": result.get("evidence", ""),
-        "custom_type": result.get("custom_type", "40012"),
-        "account_role": account_role,
-        "evidence_request": _format_request(res.request),
-        "evidence_response": _format_response(res, payload),
-        "successful_attack_payloads": [payload],
-        "description": "Response reflected an executable XSS payload.",
-        "solution": "Escape untrusted output by context and reject executable markup in API input.",
-    }
-
-
-def _is_successful_response(status_code: int) -> bool:
-    return 200 <= int(status_code or 0) < 400
-
-
-def _csrf_alert(method: str, url: str, name: str, param: str, res, account_role: str, auth_acceptance: dict | None = None) -> dict:
-    auth_acceptance = auth_acceptance or {}
-    return {
-        "alert": name,
-        "url": url,
-        "method": method.upper(),
-        "risk": "High",
-        "confidence": "Medium",
-        "param": param,
-        "attack": param,
-        "status_code": res.status_code,
-        "evidence": f"Request was accepted with {param}.",
-        "custom_type": "CSRF_CUSTOM",
-        "account_role": account_role,
-        "evidence_request": _format_request(res.request),
-        "evidence_response": _format_response(res),
-        "auth_acceptance_mode": auth_acceptance.get("mode", ""),
-        "auth_acceptance_statuses": auth_acceptance.get("statuses", {}),
-        "cookie_source": auth_acceptance.get("cookie_source", "none"),
-        "description": "State-changing request may be accepted without strong Origin/CSRF validation.",
-        "solution": "Require server-side CSRF tokens or strict Origin/Referer checks for cookie-authenticated mutations.",
-    }
-
-
-def _normalized_group_url(url: str) -> str:
-    parsed = urlparse(str(url or ""))
-    path = parsed.path if parsed.scheme else str(url or "").split("?", 1)[0]
-    path = re.sub(r"/\d+(?=/|$)", "/{id}", path or "/")
-    if parsed.scheme:
-        host = parsed.netloc
-        return f"{parsed.scheme}://{host}{path}"
-    return path
-
-
-def _group_alerts(alerts: list[dict]) -> list[dict]:
-    grouped: dict[str, dict] = {}
-    global_types = {"CORS_ORIGIN_REFLECTION"}
-    endpoint_grouped_types = {"40012", "40014", "40016", "40017", "DOM_XSS_SUSPECT", "CSRF_CUSTOM"}
-    for alert in alerts:
-        key_id = alert.get("custom_type") or alert.get("pluginId") or alert.get("alert", "")
-        normalized_url = _normalized_group_url(alert.get("url", ""))
-        if key_id in global_types:
-            key = f"GLOBAL_{key_id}"
-        elif key_id in endpoint_grouped_types:
-            key = f"{alert.get('account_role', '')}:{alert.get('method', '')}:{normalized_url}:{key_id}"
-        else:
-            key = f"{alert.get('account_role', '')}:{alert.get('method', '')}:{normalized_url}:{key_id}:{alert.get('param', '')}"
-        current_url = f"{alert.get('method', 'GET')} {alert.get('url', '')}"
-        if key not in grouped:
-            grouped[key] = dict(alert)
-            grouped[key]["occurrence_count"] = 1
-            grouped[key]["affected_urls"] = [current_url]
-            grouped[key]["affected_parameters"] = [alert.get("param", "")] if alert.get("param") else []
-            grouped[key]["account_roles"] = [alert.get("account_role", "")] if alert.get("account_role") else []
-            if alert.get("attack") and alert["attack"] not in grouped[key].get("successful_attack_payloads", []):
-                grouped[key]["successful_attack_payloads"] = grouped[key].get("successful_attack_payloads", []) + [alert["attack"]]
-            continue
-        item = grouped[key]
-        item["occurrence_count"] += 1
-        if current_url not in item["affected_urls"]:
-            item["affected_urls"].append(current_url)
-        param = alert.get("param")
-        if param and param not in item["affected_parameters"]:
-            item["affected_parameters"].append(param)
-        role = alert.get("account_role")
-        if role and role not in item["account_roles"]:
-            item["account_roles"].append(role)
-        payloads_seen = set(item.get("successful_attack_payloads", []))
-        payloads_seen.update(alert.get("successful_attack_payloads", []))
-        if alert.get("attack"):
-            payloads_seen.add(alert["attack"])
-        item["successful_attack_payloads"] = sorted(payloads_seen)
-    return list(grouped.values())
-
-
-def _map_alerts(alerts: list[dict]) -> list[dict]:
-    mapped = []
-    type_names = {
-        "40012": ("1-1-XSS-REFLECTED", "Reflected XSS", "High"),
-        "40014": ("1-1-XSS-STORED", "Stored XSS", "High"),
-        "40016": ("1-1-XSS-PERSISTENT", "Persistent XSS", "High"),
-        "40017": ("1-1-XSS-CROSS-ROLE", "Cross-Role Stored XSS", "High"),
-        "DOM_XSS_SUSPECT": ("1-1-XSS-DOM", "DOM XSS Suspect", "Low"),
-        "CSRF_CUSTOM": ("1-1-CSRF", "CSRF", "High"),
-        "CORS_ORIGIN_REFLECTION": ("1-1-CORS", "CORS Origin Reflection", "High"),
-    }
-    for alert in alerts:
-        key_id = alert.get("custom_type") or alert.get("pluginId") or ""
-        vuln_id, vuln_type, severity = type_names.get(key_id, (f"1-1-{key_id or 'ZAP'}", alert.get("alert", "Security Finding"), alert.get("risk", "Medium")))
-        mapped.append({
-            "vuln_id": vuln_id,
-            "vuln_type": vuln_type,
-            "severity": severity,
-            "vuln_description": alert.get("description") or alert.get("alert", ""),
-            "validation_status": "True Positive" if key_id != "DOM_XSS_SUSPECT" else "Suspected",
-            "validation_reason": "Verified by the ARGUS 1-1 backend scanner.",
-            "alert": alert.get("alert", ""),
-            "url": alert.get("url", ""),
-            "method": alert.get("method", "GET"),
-            "risk": alert.get("risk", severity),
-            "confidence": alert.get("confidence", "Medium"),
-            "param": alert.get("param", ""),
-            "attack": alert.get("attack", ""),
-            "status_code": alert.get("status_code", 0),
-            "evidence": alert.get("evidence", ""),
-            "evidence_request": alert.get("evidence_request", ""),
-            "evidence_response": alert.get("evidence_response", ""),
-            "description": alert.get("description", ""),
-            "occurrence_count": alert.get("occurrence_count", 1),
-            "account_role": alert.get("account_role", ""),
-            "account_roles": alert.get("account_roles", []),
-            "affected_parameters": alert.get("affected_parameters", []),
-            "affected_urls": alert.get("affected_urls", []),
-            "successful_attack_payloads": alert.get("successful_attack_payloads", []),
-            "auth_acceptance_mode": alert.get("auth_acceptance_mode", ""),
-            "auth_acceptance_statuses": alert.get("auth_acceptance_statuses", {}),
-            "cookie_source": alert.get("cookie_source", ""),
-            "cross_account_writer_role": alert.get("cross_account_writer_role", ""),
-            "cross_account_reader_role": alert.get("cross_account_reader_role", ""),
-            "cross_account_write_url": alert.get("cross_account_write_url", ""),
-            "cross_account_read_url": alert.get("cross_account_read_url", ""),
-            "remediation_summary": alert.get("solution", ""),
-            "remediation_cause": "",
-            "remediation_guide": alert.get("solution", ""),
-            "remediation_code": "",
-        })
-    return mapped
-
-
-def _write_reports(findings: list[dict], result_dir: Path, role: str = "web_ui") -> str:
-    result_dir.mkdir(parents=True, exist_ok=True)
-    summary = result_dir / f"zap_report_summary_{role}.json"
-    summary.write_text(json.dumps(findings, ensure_ascii=False, indent=4), encoding="utf-8")
-    filtered = result_dir / f"zap_report_summary_{role}_filtered.jsonc"
-    meaningful = [a for a in findings if a.get("severity") != "-" and a.get("risk") != "False Positive"]
-    lines = [
-        "// =====================================================================",
-        "// ARGUS 1-1 scan result report - filtered JSONC",
-        f"// total findings: {len(meaningful)}",
-        "// =====================================================================",
-        json.dumps(meaningful, ensure_ascii=False, indent=4),
-        "",
-    ]
-    filtered.write_text("\n".join(lines), encoding="utf-8")
-    return str(summary)
-
-
 def _dedupe_findings(findings: list[dict]) -> list[dict]:
     """Collapse duplicate findings produced across per-account scan passes.
 
@@ -857,196 +304,6 @@ def _dedupe_findings(findings: list[dict]) -> list[dict]:
         seen.add(key)
         deduped.append(finding)
     return deduped
-
-
-def _scan_accounts(target_url: str, auth_tokens: list[dict], zap=None) -> list[dict]:
-    accounts = auth_tokens or [{"role": "anonymous", "token": None, "base_url": target_url}]
-    for account in accounts:
-        if account.get("token") and not account.get("claims"):
-            _, claims = auth.decode_jwt_claims(account.get("token"))
-            account["claims"] = claims
-        endpoints, components = _build_endpoints_for_account(account, target_url, zap)
-        account["validated_endpoints"] = account.get("validated_endpoints") or endpoints
-        account["swagger_components"] = account.get("swagger_components") or components
-        if account.get("token") or account.get("cookies"):
-            account["auth_mode"] = _detect_account_auth_mode(account, target_url)
-    verified = [a for a in accounts if not a.get("auth_unverified")]
-    if auth_tokens and not verified:
-        raise RuntimeError("No authenticated account could be verified; scan stopped to avoid unsafe fallback requests.")
-    return verified
-
-
-def scan_target(target_url: str, auth_tokens: list[dict] | None = None, result_dir: Path | None = None, endpoints: dict | None = None, components: dict | None = None) -> list[dict]:
-    update_status(is_running=True, progress=0, message="ARGUS 1-1 backend scanner starting", result_file=None, total_alerts=0)
-    
-    if os.path.exists("/.dockerenv"):
-        target_url = target_url.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
-        if auth_tokens:
-            for token in auth_tokens:
-                if "target_url" in token:
-                    token["target_url"] = token["target_url"].replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
-
-    auth_tokens = auth_tokens or []
-    result_dir = result_dir or Path("scanner_app/results")
-    _log(f"[G11] scan starting target={target_url.rstrip('/')} accounts={len(auth_tokens) or 1}")
-
-    zap = None
-    zap_proxy_env = os.environ.get("ZAP_PROXY")
-    proxy_urls = [zap_proxy_env] if zap_proxy_env else [f"http://127.0.0.1:{p}" for p in [8889, 8090]]
-    for proxy_url in proxy_urls:
-        try:
-            zap = zap_adapter.connect_zap(proxy_url)
-            zap.core.version
-            _log(f"[ZAP] connected to {proxy_url}")
-            break
-        except Exception:
-            zap = None
-
-    accounts = _scan_accounts(target_url.rstrip("/"), auth_tokens, zap)
-    if endpoints:
-        for account in accounts:
-            account.setdefault("validated_endpoints", {}).update(endpoints)
-            account.setdefault("swagger_components", {}).update(components or {})
-
-    alerts: list[dict] = []
-    update_status(progress=10, message="Endpoint scan started")
-
-    total = sum(len(a.get("validated_endpoints", {})) for a in accounts) or 1
-    done = 0
-    for account in accounts:
-        role = account.get("role", "anonymous")
-        base_url = account.get("base_url", target_url).rstrip("/")
-        headers = _build_auth_headers_for_mode(account, account.get("auth_mode"))
-        _log(f"[G11] account role={role} base={base_url} auth_mode={account.get('auth_mode') or 'anonymous'}")
-        if zap and account is accounts[0]:
-            zap_adapter.apply_auth_to_zap(zap, account.get("token"), auth.build_cookie_header_from_account(account))
-
-        ordered_endpoints = sorted(
-            (account.get("validated_endpoints") or {}).items(),
-            key=lambda item: _endpoint_role_priority(item[0], account),
-        )
-        for path, methods in ordered_endpoints:
-            done += 1
-            update_status(progress=min(85, 10 + int(done / total * 75)), message=f"Scanning {role} {path}")
-            for method, details in (methods or {}).items():
-                method = method.upper()
-                skip, reason = _is_protected_mutation(path, method)
-                if skip:
-                    _log(f"[Safety] skip {method} {path}: {reason}")
-                    continue
-                for resolved_path in _resolved_paths(path):
-                    url = f"{base_url}/{resolved_path.lstrip('/')}"
-                    params, param_schemas, json_body, json_keypaths, json_schemas, multipart, file_keys = _request_defaults(details or {}, account.get("swagger_components", {}))
-                    files = {key: ("", b"", "application/octet-stream") for key in file_keys} if file_keys else None
-                    _log(
-                        f"[G11] endpoint {done}/{total} {role} {method} {url} "
-                        f"query_fields={len(param_schemas)} body_fields={len(json_keypaths)} csrf={'yes' if _is_mutation(method) else 'no'}"
-                    )
-
-                    try:
-                        baseline = requests.request(method, url, headers=headers, params=params or None, json=json_body or None, files=files, timeout=6)
-                    except Exception as exc:
-                        _log(f"[Scan] baseline failed {method} {url}: {exc}")
-                        continue
-                    _log(f"[G11] baseline {method} {url} -> {baseline.status_code}")
-
-                    if baseline.status_code in {401, 403}:
-                        _log(f"[G11] skip active XSS/CSRF {method} {url}: baseline auth status {baseline.status_code}")
-                        continue
-
-                    for param in param_schemas:
-                        trial_count = len(payloads.payloads_for_xss_field(param, param_schemas[param], account.get("swagger_components", {})))
-                        _log(f"[XSS] testing query field '{param}' on {method} {url} payloads={trial_count}")
-                        for payload in payloads.payloads_for_xss_field(param, param_schemas[param], account.get("swagger_components", {})):
-                            test_params = dict(params)
-                            test_params[param] = payload
-                            try:
-                                res = requests.request(method, url, headers=headers, params=test_params, json=json_body or None, files=files, timeout=6)
-                            except Exception:
-                                continue
-                            if not _is_successful_response(res.status_code):
-                                continue
-                            result = rules.classify_xss_response(payload, res.text, res.headers.get("Content-Type", ""), method, _is_mutation(method), dict(res.headers), baseline.text)
-                            if result:
-                                _log(
-                                    f"[XSS] DETECTED {result.get('kind', 'xss')} {method} {url} "
-                                    f"field={param} status={res.status_code} payload={_short_payload(payload)}"
-                                )
-                                alerts.append(_alert_from_xss(result, method, url, param, payload, res, role))
-                                break
-
-                    for keypath in json_keypaths:
-                        trial_count = len(payloads.payloads_for_xss_field(keypath, json_schemas.get(keypath), account.get("swagger_components", {})))
-                        _log(f"[XSS] testing body field '{keypath}' on {method} {url} payloads={trial_count}")
-                        for payload in payloads.payloads_for_xss_field(keypath, json_schemas.get(keypath), account.get("swagger_components", {})):
-                            body = copy.deepcopy(json_body)
-                            openapi_utils.set_nested_value_by_keypath(body, keypath, payload)
-                            req_headers = dict(headers)
-                            req_headers["Content-Type"] = "application/json"
-                            try:
-                                res = requests.request(method, url, headers=req_headers, params=params or None, json=body, timeout=6)
-                            except Exception:
-                                continue
-                            if not _is_successful_response(res.status_code):
-                                continue
-                            result = rules.classify_xss_response(payload, res.text, res.headers.get("Content-Type", ""), method, _is_mutation(method), dict(res.headers), baseline.text)
-                            if result:
-                                _log(
-                                    f"[XSS] DETECTED {result.get('kind', 'xss')} {method} {url} "
-                                    f"field={keypath} status={res.status_code} payload={_short_payload(payload)}"
-                                )
-                                alerts.append(_alert_from_xss(result, method, url, keypath, payload, res, role))
-                                break
-
-                    if _is_mutation(method):
-                        auth_acceptance = _classify_auth_acceptance(account, url, method, params, json_body, files)
-                        account["auth_acceptance"] = auth_acceptance
-                        acceptance_mode = auth_acceptance.get("mode")
-                        cookie_source = auth_acceptance.get("cookie_source", "none")
-                        _log(
-                            f"[AuthAcceptance] {role} {method} {url} mode={acceptance_mode} "
-                            f"statuses={auth_acceptance.get('statuses')} cookie_source={cookie_source}"
-                        )
-                        if acceptance_mode in {"HEADER_ONLY", "HEADER_AND_COOKIE"}:
-                            _log(f"[CSRF] not applicable {method} {url}: auth_acceptance={acceptance_mode}")
-                            continue
-                        if acceptance_mode == "PUBLIC_OR_BROKEN":
-                            _log(f"[CSRF] skip {method} {url}: no_auth succeeded; authentication/authorization issue, not CSRF")
-                            continue
-                        if acceptance_mode == "UNKNOWN":
-                            _log(f"[CSRF] deferred {method} {url}: auth acceptance could not be classified")
-                            continue
-                        if acceptance_mode not in {"COOKIE_ONLY", "HEADER_OR_COOKIE"}:
-                            continue
-                        if cookie_source != "real":
-                            _log(f"[CSRF] potential only {method} {url}: cookie_source={cookie_source}; not reporting confirmed CSRF")
-                            continue
-                        cookie_header = auth.build_cookie_header_from_account(account)
-                        _log(f"[CSRF] testing {method} {url} origins={len(payloads.CSRF_TEST_ORIGINS)} auth_acceptance={acceptance_mode}")
-                        for origin in payloads.CSRF_TEST_ORIGINS:
-                            csrf_headers = {"Cookie": cookie_header, "Origin": origin, "Referer": origin + "/csrf.html"}
-                            try:
-                                res = requests.request(method, url, headers=csrf_headers, json=json_body or {}, timeout=6)
-                            except Exception:
-                                continue
-                            _log(f"[CSRF] origin={origin} {method} {url} -> {res.status_code}")
-                            if res.status_code not in {401, 403, 415, 500} and rules.check_csrf_token_absence(res):
-                                _log(f"[CSRF] DETECTED {method} {url} origin={origin} status={res.status_code}")
-                                alerts.append(_csrf_alert(method, url, "CSRF Origin Verification Defect", "Origin", res, role, auth_acceptance))
-                                break
-
-    if zap:
-        allowed = {"40012", "40014", "40016", "40017"}
-        for alert in zap_adapter.collect_zap_alerts(zap, target_url):
-            if str(alert.get("pluginId", "")) in allowed:
-                alerts.append(alert)
-
-    update_status(progress=90, message="Writing scan report")
-    findings = _map_alerts(_group_alerts(alerts))
-    result_file = _write_reports(findings, result_dir)
-    _log(f"[G11] scan completed target={target_url.rstrip('/')} raw_alerts={len(alerts)} findings={len(findings)} result={result_file}")
-    update_status(is_running=False, progress=100, message="Scan completed", result_file=result_file, total_alerts=len(findings))
-    return findings
 
 
 def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
@@ -1094,7 +351,6 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
         except Exception:
             auth_tokens = []
 
-    import os
     if os.path.exists("/.dockerenv"):
         if isinstance(target_url, str):
             target_url = target_url.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
@@ -1204,19 +460,3 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
     return ScanResult(status=status, findings=findings, message=f"1-1 scan completed.{source_msg} findings={len(findings)}")
 
 
-def run_zap_scan(target_url: str, auth_tokens: list[dict]):
-    """Compatibility entrypoint for the development web UI."""
-    legacy = zap_runner
-    legacy.scan_status = scan_status
-    scanner_app_dir = Path(__file__).resolve().parents[4] / "scanner_app"
-    previous_cwd = Path.cwd()
-    try:
-        os.chdir(scanner_app_dir)
-        legacy.run_zap_scan(target_url, auth_tokens)
-    except Exception as exc:
-        import traceback
-
-        traceback.print_exc()
-        update_status(is_running=False, message=f"Scan error: {exc}")
-    finally:
-        os.chdir(previous_cwd)

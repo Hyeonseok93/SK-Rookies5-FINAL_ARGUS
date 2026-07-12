@@ -51,7 +51,6 @@ def _bounded_get(url, *, headers=None, params=None, timeout=4, max_bytes=524288,
     verification GET would silently lose a real stored-XSS finding (the payload
     was stored but never confirmed). A couple of short-waited retries ride out
     those transient drops instead."""
-    last_exc = None
     for attempt in range(retries + 1):
         try:
             res = requests.get(
@@ -62,8 +61,7 @@ def _bounded_get(url, *, headers=None, params=None, timeout=4, max_bytes=524288,
                 stream=True,
             )
             break
-        except requests.exceptions.RequestException as exc:
-            last_exc = exc
+        except requests.exceptions.RequestException:
             if attempt < retries:
                 time.sleep(retry_wait)
                 continue
@@ -110,7 +108,16 @@ def update_status(is_running=None, progress=None, message=None, result_file=None
 
         if is_running is False:
             if progress == 100:
-                dp.finish(message or "1-1 scan completed")
+                # Don't mark the run finished here — the orchestrator
+                # (_run_module) finishes only AFTER evidence-screenshot capture,
+                # so the UI reports completion once screenshots exist, not the
+                # moment the scan engine stops. Keep running=True and hand off to
+                # the screenshot phase.
+                dp.update(
+                    phase="screenshot",
+                    message="스캔 완료 — 증거 스크린샷 생성 중…",
+                    percent=98,
+                )
             elif message:
                 dp.fail(message)
         else:
@@ -121,10 +128,6 @@ def update_status(is_running=None, progress=None, message=None, result_file=None
             )
     except Exception:
         pass
-
-def get_payload_reflection(payload, response_body):
-    if not payload or not response_body:
-        return None
 
 import difflib
 import copy
@@ -253,9 +256,6 @@ def classify_xss_response(payload, response_body, content_type, method="GET", is
     decoded_response_body = normalize_reflection_text(response_body)
     decoded_response_lower = decoded_response_body.lower()
     content_type_lower = (content_type or "").lower()
-    headers = response_headers or {}
-    x_content_type = (headers.get("X-Content-Type-Options", "") or "").lower()
-
     source_indicators = ["location", "search", "document.cookie", "document.location", "url", "query", "param", "input"]
     dom_sink_patterns = [
         "document.write",
@@ -307,7 +307,6 @@ def classify_xss_response(payload, response_body, content_type, method="GET", is
 
     is_html_context = "html" in content_type_lower
     is_json_context = "json" in content_type_lower
-    has_nosniff = "nosniff" in x_content_type
     reflection_context = detect_xss_reflection_context(payload, response_body)
 
     # ── Reflected XSS ──────────────────────────────────────────────────────────────────
@@ -539,17 +538,6 @@ def make_unique_xss_payload(base_payload: str, param_name: str = "") -> str:
         return f"javascript:alert('{marker}')"
     return f"<img src=x onerror=alert('{marker}')>"
 
-def looks_like_validation_rejection(response) -> bool:
-    if response is None or response.status_code != 400:
-        return False
-    text = (getattr(response, "text", "") or "").lower()
-    validation_markers = [
-        "valid", "validation", "fielderror", "field_errors", "fielderrors",
-        "invalid", "format", "constraint", "입력값", "형식", "올바르지",
-        "검증", "유효", "비밀번호", "이메일", "전화번호", "닉네임",
-    ]
-    return any(marker in text for marker in validation_markers)
-
 def default_value_for_schema(schema: dict, components: dict | None = None, param_name: str = ""):
     schema = resolve_schema_ref(schema, components)
     if not isinstance(schema, dict):
@@ -768,36 +756,6 @@ def build_query_defaults_from_details(details: dict | None, components: dict | N
             params[name] = default_value
     return params
 
-def find_get_endpoint_for_post(post_path: str, validated_endpoints: dict) -> str | None:
-    """POST 엔드포인트 경로에 대응하는 GET 단건 조회 엔드포인트를 Swagger 목록에서 탐색합니다.
-    
-    예: POST /api/v1/posts → GET /api/v1/posts/{id}
-    반환값이 None이면 대응 GET 엔드포인트를 찾지 못한 것.
-    """
-    for ep_path, ep_methods in validated_endpoints.items():
-        if "get" not in ep_methods:
-            continue
-        # POST 경로가 GET 경로의 prefix이고 GET 경로에 경로 변수({...})가 있는 패턴 탐색
-        if ep_path.startswith(post_path.rstrip("/")) and "{" in ep_path:
-            return ep_path
-    return None
-
-def find_readable_endpoints_for_post(post_path: str, validated_endpoints: dict) -> list[tuple[str, str]]:
-    candidates = []
-    normalized_post_path = post_path.rstrip("/")
-
-    for ep_path, ep_methods in validated_endpoints.items():
-        if "get" not in ep_methods:
-            continue
-
-        normalized_ep_path = ep_path.rstrip("/")
-        if normalized_ep_path == normalized_post_path:
-            candidates.append(("list", ep_path))
-        elif normalized_ep_path.startswith(normalized_post_path) and "{" in ep_path:
-            candidates.append(("single", ep_path))
-
-    return candidates
-
 def is_resource_identifier_key(key: str = "") -> bool:
     normalized = normalized_field_name(key)
     return normalized == "id" or normalized.endswith("id") or normalized in {"uuid", "key", "no", "seq"}
@@ -901,15 +859,6 @@ def build_cookie_header_from_account(account: dict | None) -> str:
         return ""
     return "; ".join(f"{name}={value}" for name, value in cookies.items() if name and value is not None)
 
-def build_normal_auth_headers(token: str | None = None, account: dict | None = None) -> dict:
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {str(token).replace('Bearer ', '').strip()}"
-    cookie_header = build_cookie_header_from_account(account)
-    if cookie_header:
-        headers["Cookie"] = cookie_header
-    return headers
-
 def build_auth_headers(token: str | None = None, account: dict | None = None, mode: str | None = None) -> dict:
     mode = (mode or (account or {}).get("auth_mode") or "both").lower()
     headers = {}
@@ -931,91 +880,6 @@ def build_auth_headers(token: str | None = None, account: dict | None = None, mo
             headers["Cookie"] = cookie_header
 
     return headers
-
-def authorization_headers_from_account(account: dict, token: str | None = None) -> dict:
-    current = dict(build_auth_headers(token or (account or {}).get("token"), account, (account or {}).get("auth_mode")))
-    current.pop("Cookie", None)
-    current.pop("cookie", None)
-    if current:
-        return current
-    for mode in ["header", "authorization_raw", "x_auth_token", "access_token_header", "access_token_camel_header"]:
-        headers = dict(build_auth_headers(token or (account or {}).get("token"), account, mode))
-        headers.pop("Cookie", None)
-        headers.pop("cookie", None)
-        if headers:
-            return headers
-    return {}
-
-def cookie_header_and_source(account: dict, token: str | None = None, fallback_cookie_name: str = "accessToken") -> tuple[str, str]:
-    cookie_header = build_cookie_header_from_account(account)
-    if cookie_header:
-        return cookie_header, "real"
-    clean_token = str(token or (account or {}).get("token") or "").replace("Bearer ", "").strip()
-    if clean_token:
-        cookie_name = str((account or {}).get("token_field") or fallback_cookie_name or "accessToken").split(".")[-1]
-        return f"{cookie_name}={clean_token}", "synthetic"
-    return "", "none"
-
-def is_successful_auth_acceptance_status(status_code) -> bool:
-    try:
-        return 200 <= int(status_code or 0) < 400
-    except Exception:
-        return False
-
-def classify_auth_acceptance(account: dict, protected_url: str, method: str, body=None, token: str | None = None, fallback_cookie_name: str = "accessToken") -> dict:
-    authz_headers = authorization_headers_from_account(account, token)
-    cookie_header, cookie_source = cookie_header_and_source(account, token, fallback_cookie_name)
-    probes = {
-        "no_auth": {},
-        "header_only": dict(authz_headers),
-        "cookie_only": {"Cookie": cookie_header} if cookie_header else {},
-        "both": {**authz_headers, **({"Cookie": cookie_header} if cookie_header else {})},
-    }
-    statuses = {}
-    errors = {}
-    for name, headers in probes.items():
-        try:
-            res = requests.request(
-                method=method.upper(),
-                url=protected_url,
-                json=body or {},
-                headers=headers or None,
-                timeout=4,
-            )
-            statuses[name] = res.status_code
-        except Exception as exc:
-            statuses[name] = None
-            errors[name] = str(exc)
-
-    def ok(name: str) -> bool:
-        return is_successful_auth_acceptance_status(statuses.get(name))
-
-    if ok("no_auth"):
-        mode = "PUBLIC_OR_BROKEN"
-    elif ok("header_only") and not ok("cookie_only"):
-        mode = "HEADER_ONLY"
-    elif ok("cookie_only") and not ok("header_only"):
-        mode = "COOKIE_ONLY"
-    elif ok("header_only") and ok("cookie_only"):
-        mode = "HEADER_OR_COOKIE"
-    elif ok("both") and not ok("header_only") and not ok("cookie_only"):
-        mode = "HEADER_AND_COOKIE"
-    else:
-        mode = "UNKNOWN"
-    result = {"mode": mode, "statuses": statuses, "cookie_source": cookie_source}
-    if errors:
-        result["errors"] = errors
-    return result
-
-def cookie_names_from_header(cookie_header: str) -> list:
-    names = []
-    for part in (cookie_header or "").split(";"):
-        if "=" not in part:
-            continue
-        name = part.split("=", 1)[0].strip()
-        if name and name not in names:
-            names.append(name)
-    return names
 
 def jwt_debug_summary(token: str | None) -> str:
     if not token:
@@ -2301,7 +2165,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                     "replay_script": f"// extract_request_parts error: {e}",
                 }
 
-        session_cookie_name = detect_session_cookie(target_url, primary_token, validated_endpoints) if primary_token else "accessToken"
         custom_alerts = []
         cross_role_stored_seen = set()
 
@@ -2670,9 +2533,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 base_multipart_defaults[prop_name] = default_multipart_value
                                 if prop_name in required_multipart_props:
                                     base_multipart_required_defaults[prop_name] = default_multipart_value
-                                prop_type = get_schema_type(prop_meta, account_swagger_components)
-                                items_schema = resolve_schema_ref(prop_meta.get("items", {}), account_swagger_components)
-                                item_format = (items_schema.get("format") or "").lower() if isinstance(items_schema, dict) else ""
                                 if looks_like_file_field(prop_name, prop_meta, account_swagger_components):
                                     base_multipart_file_keys.append(prop_name)
                                 if is_xss_injectable_schema(prop_meta, prop_name, account_swagger_components):
@@ -2727,6 +2587,13 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                         dummy_val = default_value_for_schema(base_test_json_schemas.get(k, {"type": "string"}), account_swagger_components, prop_name)
                         set_nested_value_by_keypath(baseline_json, k, dummy_val)
                     stabilize_profile_payload(baseline_json, resolved_api_url, best_role)
+                    # Keep the baseline probe from failing a UNIQUE-constrained
+                    # profile field (e.g. nickname) with "already in use": copy
+                    # the account's own current field values in, so the baseline
+                    # PATCH is accepted and the stored-XSS scan isn't skipped on a
+                    # 400. Mirrors what the store request does below; app-neutral
+                    # (no field name hardcoded) and no-ops off profile endpoints.
+                    preserve_current_profile_values(baseline_json, resolved_api_url, xss_headers, "")
                     baseline_multipart = dict(base_multipart_defaults or base_multipart_required_defaults)
                     for k in base_test_multipart_keys:
                         if k not in baseline_multipart:
@@ -2734,7 +2601,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                         dummy_val = default_value_for_schema({"type": "string"}, account_swagger_components, k)
                         baseline_multipart[k] = base_test_enum_defaults.get(k, dummy_val)
     
-                    baseline_body = None
                     baseline_status = None
                     try:
                         req_headers = {**xss_headers}
@@ -2756,7 +2622,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                             timeout=4
                         )
                         baseline_status = res_base.status_code
-                        baseline_body = res_base.text
                         print(
                             f"[HTTP TRACE] baseline {method.upper()} {resolved_api_url} "
                             f"role={best_role} status={res_base.status_code} "
@@ -2774,202 +2639,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                         print(f"[XSS DEBUG] skip fuzzing -> {method.upper()} {resolved_api_url} baseline returned {baseline_status} for account '{best_role}'")
                         continue
     
-#                     reflected_xss_detected = False
-#                     successful_payloads = []
-#                     xss_first_result = None
-#                     xss_first_req_parts = None
-#                     xss_first_res = None
-#                     xss_first_content_type = ""
-#                     xss_first_x_content_type = ""
-#                     target_vulnerable_param = ""
-#     
-#                     # 테스트 대상 파라미터 후보 리스트 (쿼리 파라미터 + JSON 바디 키 + Multipart 폼 필드)
-#                     params_to_test = []
-#                     for q_param in base_test_params.keys():
-#                         params_to_test.append(("query", q_param, base_test_param_schemas.get(q_param, {"type": "string"})))
-#                     for j_key in base_test_json_keys:
-#                         params_to_test.append(("json", j_key, base_test_json_schemas.get(j_key, {"type": "string"})))
-#                     for m_key in base_test_multipart_keys:
-#                         params_to_test.append(("multipart", m_key, base_test_multipart_schemas.get(m_key, {"type": "string"})))
-#     
-#                     for target_type, target_param, target_schema in params_to_test:
-#                         field_payloads = payloads_for_xss_field(target_param, target_schema, swagger_components)
-#                         if not field_payloads:
-#                             print(f"[XSS DEBUG] skip field -> {method.upper()} {resolved_api_url} | param: {target_param} ({target_type}) not suitable for XSS payloads")
-#                             continue
-#                         for xss_payload in field_payloads:
-#                             # 타겟 파라미터 하나만 페이로드를 주입하고, 나머지는 안전한 기본값("safe")을 설정함
-#                             test_params = dict(base_param_defaults)
-#                             if target_type == "query":
-#                                 test_params[target_param] = xss_payload
-#                             
-#                             # JSON Fuzzing 딕셔너리 구성: non-string fields keep type-correct defaults.
-#                             test_json = copy.deepcopy(base_json_required_defaults)
-#                             for k in base_test_json_keys:
-#                                 top_key = k.split(".", 1)[0].replace("[0]", "")
-#                                 if target_type != "json" and top_key not in base_json_required_defaults:
-#                                     continue
-#                                 prop_name = k.split(".")[-1]
-#                                 dummy_val = default_value_for_schema(base_test_json_schemas.get(k, {"type": "string"}), swagger_components, prop_name)
-#                                 set_nested_value_by_keypath(test_json, k, dummy_val)
-#                             if target_type == "json":
-#                                 set_nested_value_by_keypath(test_json, target_param, xss_payload)
-#                             
-#                             # Multipart Fuzzing 딕셔너리 구성: payload only goes into string fields.
-#                             test_multipart = dict(base_multipart_required_defaults)
-#                             for k in base_test_multipart_keys:
-#                                 if target_type != "multipart" and k not in base_multipart_required_defaults:
-#                                     continue
-#                                 dummy_val = default_value_for_schema({"type": "string"}, swagger_components, k)
-#                                 test_multipart[k] = base_test_enum_defaults.get(k, dummy_val)
-#                             if target_type == "multipart":
-#                                 test_multipart[target_param] = xss_payload
-#     
-#                             try:
-#                                 req_headers = {**xss_headers}
-#                                 if target_type == "json":
-#                                     req_headers["Content-Type"] = "application/json"
-#                                 elif is_multipart_request:
-#                                     # requests가 자동으로 boundary를 가진 Content-Type 헤더를 채우도록 대소문자 구분 없이 소거
-#                                     for ct_key in [k for k in req_headers.keys() if k.lower() == "content-type"]:
-#                                         req_headers.pop(ct_key, None)
-#     
-#                                 print(f"[XSS DEBUG] testing -> {method.upper()} {resolved_api_url} | param: {target_param} ({target_type}) | payload: {xss_payload[:30]}...")
-#                                 res_xss = requests.request(
-#                                     method=method.upper(),
-#                                     url=resolved_api_url,
-#                                     params=test_params if test_params else None,
-#                                     json=test_json if (test_json and target_type == "json") else None,
-#                                     data=test_multipart if (is_multipart_request and test_multipart) else None,
-#                                     files=multipart_files_for_request() if is_multipart_request else None,
-#                                     headers=req_headers,
-#                                     timeout=4
-#                                 )
-#     
-#                                 res_body = res_xss.text
-#                                 x_content_type = res_xss.headers.get("X-Content-Type-Options", "").lower()
-#                                 content_type = res_xss.headers.get("Content-Type", "").lower()
-#                                 print(
-#                                     f"[HTTP TRACE] xss {method.upper()} {resolved_api_url} "
-#                                     f"role={best_role} param={target_param} target_type={target_type} "
-#                                     f"status={res_xss.status_code} params={test_params or {}} "
-#                                     f"json_keys={list(test_json.keys()) if isinstance(test_json, dict) and test_json else []} "
-#                                     f"multipart_keys={list(test_multipart.keys()) if test_multipart else []} "
-#                                     f"file_keys={base_multipart_file_keys if is_multipart_request else []} "
-#                                     f"content_type={res_xss.headers.get('Content-Type', '')} "
-#                                     f"payload_reflected={is_payload_reflected(xss_payload, res_body, baseline_body)} "
-#                                     f"response={summarize_response_for_log(res_xss, 300)}"
-#                                 )
-#     
-#                                 # 4xx/5xx 에러 응답은 XSS로 처리하지 않음 (에러 페이지 반사는 6-1 영역)
-#                                 if res_xss.status_code >= 400:
-#                                     print(f"[XSS DEBUG] skipped -> {method.upper()} {api_url} returned status {res_xss.status_code}. Response: {res_body[:200]}")
-#                                     if looks_like_validation_rejection(res_xss):
-#                                         print(f"[XSS DEBUG] stop field -> {method.upper()} {resolved_api_url} | param: {target_param} rejected by validation")
-#                                         break
-#                                     continue
-#     
-#     
-#                                 # 고도화 6: baseline_body를 공급하여 Diff 영역에서만 반사 여부 검증
-#                                 xss_result = classify_xss_response(
-#                                     payload=xss_payload,
-#                                     response_body=res_body,
-#                                     content_type=content_type,
-#                                     method=method.upper(),
-#                                     is_mutation=(target_type in ["json", "multipart"]),
-#                                     response_headers=res_xss.headers,
-#                                     baseline_body=baseline_body
-#                                 )
-#     
-#     
-#                                 if xss_result:
-#                                     reflected_xss_detected = True
-#                                     target_vulnerable_param = target_param
-#                                     if xss_payload not in successful_payloads:
-#                                         successful_payloads.append(xss_payload)
-#                                     
-#                                     # 첫 번째 감지 시, 반사 컨텍스트에 맞춰 2차 정밀 스캔 진행 (2차 우회 최적화)
-#                                     if not xss_first_result:
-#                                         xss_first_result = xss_result
-#                                         xss_first_res = res_xss
-#                                         xss_first_content_type = content_type
-#                                         xss_first_x_content_type = x_content_type
-#                                         
-#                                         # ── XSS 고도화 2단계: 컨텍스트 기반 2차 정밀 페이로드 검증 ──
-#                                         reflection_ctx = xss_result.get("reflection_context", "HTML body")
-#                                         context_specific_payloads = CONTEXT_PAYLOADS.get(reflection_ctx, [])
-#                                         
-#                                         for ctx_payload in context_specific_payloads:
-#                                             t_params_2 = dict(base_param_defaults)
-#                                             if target_type == "query":
-#                                                 t_params_2[target_param] = ctx_payload
-#                                             t_json_2 = copy.deepcopy(base_json_required_defaults)
-#                                             for k in base_test_json_keys:
-#                                                 top_key = k.split(".", 1)[0].replace("[0]", "")
-#                                                 if target_type != "json" and top_key not in base_json_required_defaults:
-#                                                     continue
-#                                                 set_nested_value_by_keypath(t_json_2, k, "safe")
-#                                             if target_type == "json":
-#                                                 set_nested_value_by_keypath(t_json_2, target_param, ctx_payload)
-#                                             t_multipart_2 = dict(base_multipart_required_defaults)
-#                                             if target_type == "multipart":
-#                                                 t_multipart_2[target_param] = ctx_payload
-#                                             try:
-#                                                 req_headers_2 = {**xss_headers}
-#                                                 if target_type == "json":
-#                                                     req_headers_2["Content-Type"] = "application/json"
-#                                                 elif is_multipart_request:
-#                                                     req_headers_2.pop("Content-Type", None)
-#                                                 res_ctx_2 = requests.request(
-#                                                     method=method.upper(),
-#                                                     url=api_url,
-#                                                     params=t_params_2 if t_params_2 else None,
-#                                                     json=t_json_2 if (t_json_2 and target_type == "json") else None,
-#                                                     data=t_multipart_2 if (is_multipart_request and t_multipart_2) else None,
-#                                                     files=multipart_files_for_request() if is_multipart_request else None,
-#                                                     headers=req_headers_2,
-#                                                     timeout=4
-#                                                 )
-#                                                 result_2 = classify_xss_response(
-#                                                     payload=ctx_payload,
-#                                                     response_body=res_ctx_2.text,
-#                                                     content_type=content_type,
-#                                                     method=method.upper(),
-#                                                     is_mutation=(target_type == "json"),
-#                                                     response_headers=res_ctx_2.headers,
-#                                                     baseline_body=baseline_body
-#                                                 )
-#                                                 if result_2:
-#                                                     if ctx_payload not in successful_payloads:
-#                                                         successful_payloads.append(ctx_payload)
-#                                                     # 컨텍스트에 맞춘 증거 패킷으로 대표값 업데이트
-#                                                     xss_first_result = result_2
-#                                                     xss_first_res = res_ctx_2
-#                                                     xss_payload = ctx_payload
-#                                             except Exception:
-#                                                 continue
-#     
-#                                         # 스크립트 작성용 파싱 추출
-#                                         xss_first_req_parts = extract_request_parts(
-#                                             xss_first_res.request,
-#                                             body_json=test_json if target_type == "json" else None,
-#                                             query_params=test_params if target_type == "query" else None
-#                                         )
-#     
-#                             except Exception as xe:
-#                                 print(f"XSS Custom scan skip for {api_url} ({target_param}): {xe}")
-#     
-#                     if reflected_xss_detected and xss_first_result:
-#                         print(f"[XSS DEBUG] !!! {xss_first_result['kind'].upper()} XSS DETECTED on {api_url} (Param: {target_vulnerable_param}, Success Payloads: {len(successful_payloads)}) !!!")
-#     
-#                         replay_with_payload = xss_first_req_parts["replay_script"].replace(
-#                             "'/* 공격 페이로드 삽입 */'",
-#                             repr(successful_payloads[0])
-#                         )
-#                         custom_alerts.append({
-#                             "alert": xss_first_result["alert"],
-#                             "url": api_url,
-#     
                     # ── XSS 고도화 3단계: HTTP 헤더 인젝션 XSS (Header Injection) ──
                     # User-Agent, Referer, X-Forwarded-For 등 클라이언트 전송 헤더가 응답 페이지나 에러 출력에 그대로 반사되는 취약점을 진단합니다.
                     INJECTABLE_HEADERS = [
@@ -2995,7 +2664,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 headers=inject_headers,
                                 timeout=4
                             )
-                            x_content_type = res_hdr.headers.get("X-Content-Type-Options", "").lower()
                             content_type = res_hdr.headers.get("Content-Type", "").lower()
     
                             # 4xx/5xx 에러 응답은 XSS로 처리하지 않음
@@ -3581,6 +3249,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 "evidence": alert_evidence,
                 "evidence_request": evidence_req,
                 "evidence_response": evidence_res,
+                "csrf_defenses": alert.get("csrf_defenses", {}),
                 "description": description,
                 "occurrence_count": alert.get("occurrence_count", 1),
                 "account_role": alert.get("account_role", ""),

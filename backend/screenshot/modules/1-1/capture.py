@@ -64,6 +64,7 @@ def case_from_finding(finding: dict[str, Any]) -> EvidenceCase:
             "vuln_description": evidence.get("vuln_description"),
             "validation_reason": evidence.get("validation_reason"),
             "ui_url": evidence.get("ui_url") or evidence.get("page_url"),
+            "csrf_defenses": evidence.get("csrf_defenses"),
         },
     )
 

@@ -86,6 +86,20 @@ def scan_csrf_endpoint(
     is_high_risk = failed_count == 3
     is_medium_risk = failed_count == 2
 
+    # Structured verdict carried into the finding so the evidence screenshot can
+    # explain *why* this is a vulnerability (which of the 3 CSRF defenses failed
+    # and the status the server returned), instead of only showing an accepted
+    # request/response with no baseline to compare against.
+    csrf_defenses = {
+        "origin_referer_bypass": bool(origin_referrer_bypass),
+        "csrf_token_absent": bool(csrf_token_absent),
+        "unsafe_samesite": bool(has_unsafe_samesite),
+        "failed_count": int(failed_count),
+        "tampered_ref_status": status_tampered_ref,
+        "no_ref_status": status_no_ref,
+        "has_cookie_session": bool(has_cookie_session),
+    }
+
     print(
         f"[CSRF DEBUG] {method.upper()} {api_url} -> "
         f"TamperedRef={status_tampered_ref}, NoRef={status_no_ref}, "
@@ -119,6 +133,7 @@ def scan_csrf_endpoint(
                 "auth_token_used": csrf_req_parts["auth_token_used"],
                 "login_required": csrf_req_parts["login_required"],
                 "expected_status_code": status_tampered_ref,
+                "csrf_defenses": csrf_defenses,
                 "screenshot_on": "response_received",
                 "replay_script": csrf_req_parts["replay_script"],
                 "description": (
@@ -156,6 +171,7 @@ def scan_csrf_endpoint(
                 "auth_token_used": csrf_req_parts["auth_token_used"],
                 "login_required": csrf_req_parts["login_required"],
                 "expected_status_code": status_no_ref,
+                "csrf_defenses": csrf_defenses,
                 "screenshot_on": "response_received",
                 "replay_script": csrf_req_parts["replay_script"],
                 "description": (
