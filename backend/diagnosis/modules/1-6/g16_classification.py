@@ -41,6 +41,28 @@ def finding_message(raw: dict[str, Any]) -> str:
     return f"1-6 {vuln_type}: {exception_type} at {url}"
 
 
+_SEVERITY_ORDER = {"high": 3, "medium": 2, "low": 1, "info": 0}
+
+
+def _vuln_type_key(raw: dict[str, Any]) -> str:
+    """Best-available vulnerability category, used to keep one representative
+    finding per type instead of every near-duplicate occurrence (same payload
+    hitting different endpoints/roles)."""
+    kisa = str(raw.get("kisa_code") or "").strip()
+    if kisa:
+        return f"kisa:{kisa}"
+    cwe = raw.get("cwe_id") or next(iter(raw.get("cwe") or []), None)
+    if cwe:
+        return f"cwe:{cwe}"
+    owasp = str(raw.get("owasp_id") or raw.get("owasp") or "").strip()
+    if owasp:
+        return f"owasp:{owasp}"
+    payload = str(raw.get("payload_name") or "").strip()
+    if payload:
+        return f"payload:{payload}"
+    return f"vector:{raw.get('attack_vector') or 'unknown'}"
+
+
 def _clean_reproduction_flow(steps: Any) -> list[dict[str, Any]]:
     if not isinstance(steps, list):
         return []
@@ -60,7 +82,12 @@ def _clean_reproduction_flow(steps: Any) -> list[dict[str, Any]]:
 
 
 def convert_findings(raw_findings: list[dict[str, Any]], limit: int) -> list[DiagnosisFinding]:
-    out: list[DiagnosisFinding] = []
+    """
+    한 유형(kisa/cwe/owasp/payload)당 가장 심각한 대표 finding 하나만 리포트에
+    올린다 — 같은 취약점이 여러 엔드포인트/역할에서 반복 발견돼도 리포트엔
+    중복 없이 유형별 1건 + 실제 발견 횟수(type_occurrences)로 표시.
+    """
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for raw in raw_findings:
         if not isinstance(raw, dict):
             continue
@@ -69,6 +96,18 @@ def convert_findings(raw_findings: list[dict[str, Any]], limit: int) -> list[Dia
             continue
         if str(raw.get("review_bucket") or "").lower() == "noise":
             continue
+        grouped.setdefault(_vuln_type_key(raw), []).append(raw)
+
+    representatives: list[tuple[dict[str, Any], int]] = []
+    for group in grouped.values():
+        best = max(group, key=lambda r: _SEVERITY_ORDER.get(severity(r), 0))
+        representatives.append((best, len(group)))
+
+    representatives.sort(key=lambda row: -_SEVERITY_ORDER.get(severity(row[0]), 0))
+
+    out: list[DiagnosisFinding] = []
+    for raw, occurrences in representatives:
+        cls = raw.get("classification") or {}
         out.append(
             DiagnosisFinding(
                 severity=severity(raw),
@@ -90,6 +129,7 @@ def convert_findings(raw_findings: list[dict[str, Any]], limit: int) -> list[Dia
                     "screenshot_rel_path": raw.get("screenshot_rel_path"),
                     "overlay_applied": raw.get("overlay_applied"),
                     "reproduction_flow": _clean_reproduction_flow(raw.get("reproduction_flow")),
+                    "type_occurrences": occurrences,
                 },
             )
         )
