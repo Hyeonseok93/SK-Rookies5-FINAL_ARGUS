@@ -41,6 +41,7 @@ services:
       CONFIG_PATH: /app/config.docker.yaml
       ARGUS_PROBE_HOST: host.docker.internal
       ZAP_PROXY: http://zap:8090
+      GITHUB_TOKEN: ${GITHUB_TOKEN}          
     volumes:
       # Zap 워크스페이스 (MD, swagger.json) — 읽기 전용
       - ..:/workspace:ro

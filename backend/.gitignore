@@ -24,3 +24,6 @@ logs/
 
 # Generated dependency upload metadata
 data/gradle_dep_files.json
+
+__pycache__/
+*.pyc

@@ -197,6 +197,7 @@ class SaveTestAccountsResponse(BaseModel):
 class BaseUrlEntry(BaseModel):
     id: str
     url: str = ""
+    kind: Literal["api", "frontend", "api-and-frontend"] = "api"
 
 
 class BaseUrlsResponse(BaseModel):
@@ -695,5 +696,4 @@ class ReplayRunSectionResponse(BaseModel):
     ok: bool
     section_id: str
     results: list[ReplayRunResultResponse] = Field(default_factory=list)
-
 

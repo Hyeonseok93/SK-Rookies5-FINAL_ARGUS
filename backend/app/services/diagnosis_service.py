@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -12,7 +15,7 @@ from diagnosis.catalog import SECTION_BY_ID, SECTIONS
 from diagnosis.context import DiagnosisContext
 from diagnosis.registry import get_module, get_modules, list_registered_ids
 from diagnosis.exceptions import DiagnosisCancelled
-from diagnosis.result import SectionReport
+from diagnosis.result import DiagnosisFinding, SectionReport
 
 def _inject_gradle_dep_files(raw: dict) -> dict:
     """data/gradle_dep_files.json에 저장된 경로를 diagnosis_7_4.gradle_dep_files에 주입한다.
@@ -422,6 +425,127 @@ def _finish_progress(section_id: str, report: SectionReport) -> None:
     dp.finish(f"{section_id}: {report.status}")
 
 
+def _run_g11_screenshot_capture(mod: Any, ctx: DiagnosisContext, report: SectionReport) -> None:
+    """Generate 1-1 evidence screenshots after latest.yaml is written.
+
+    Screenshot capture is a post-processing artifact step. It should never turn
+    a completed diagnosis into a failed diagnosis; failures are recorded as an
+    informational finding and in capture-summary.json.
+    """
+    if report.section_id != "1-1":
+        return
+
+    import os
+    from app.services import diagnosis_progress as dp
+
+    if str(os.getenv("ARGUS_SCREENSHOT_AUTO", "true")).strip().lower() in {"0", "false", "no", "off"}:
+        return
+
+    screenshot_root = ctx.data_dir.parent / "screenshot"
+    capture_script = screenshot_root / "modules" / "1-1" / "capture.py"
+    report_path = ctx.data_dir / "report" / "1-1" / "latest.yaml"
+    output_dir = ctx.data_dir / "report" / "1-1" / "evidence"
+    summary_path = output_dir / "capture-summary.json"
+
+    if not capture_script.is_file():
+        report.findings.append(
+            DiagnosisFinding(
+                severity="info",
+                message="1-1 evidence screenshot capture skipped",
+                evidence={
+                    "screenshot_capture": {
+                        "ok": False,
+                        "reason": f"capture script not found: {capture_script}",
+                    }
+                },
+            )
+        )
+        mod.save_report(ctx, report)
+        return
+
+    dp.update(phase="screenshot", message="1-1 generating evidence screenshots...", percent=98)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable,
+        str(capture_script),
+        "--report",
+        str(report_path),
+        "--output",
+        str(output_dir),
+    ]
+    timeout_sec = int(os.getenv("ARGUS_SCREENSHOT_TIMEOUT_SEC", "900") or "900")
+    capture_log_path = output_dir / "capture.log"
+
+    result_payload: dict[str, Any] = {
+        "command": cmd,
+        "report": str(report_path),
+        "output": str(output_dir),
+        "summary": str(summary_path),
+        "log": str(capture_log_path),
+    }
+
+    def _tail(text_or_path: Any, limit: int = 4000) -> str:
+        try:
+            if isinstance(text_or_path, Path):
+                return text_or_path.read_text(encoding="utf-8", errors="replace")[-limit:]
+            return str(text_or_path or "")[-limit:]
+        except Exception:
+            return ""
+
+    # Stream capture output to a log FILE, not a pipe. capture.py prints
+    # thousands of progress lines and re-execs itself under xvfb-run (spawning
+    # scrot/chromium children); with capture_output=True (PIPE) that mix
+    # triggered [Errno 32] Broken pipe partway through, killing every remaining
+    # finding's capture. A plain file has no such backpressure — this is the
+    # same reason a manual run piped to `tee` captured all 32/32 findings.
+    try:
+        with capture_log_path.open("w", encoding="utf-8", errors="replace") as logf:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(ctx.data_dir.parent),
+                text=True,
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                timeout=timeout_sec,
+            )
+        result_payload.update(
+            {
+                "ok": proc.returncode == 0,
+                "returncode": proc.returncode,
+                "stdout": _tail(capture_log_path),
+                "stderr": "",
+            }
+        )
+    except subprocess.TimeoutExpired:
+        result_payload.update(
+            {
+                "ok": False,
+                "error": f"screenshot capture timed out after {timeout_sec}s",
+                "stdout": _tail(capture_log_path),
+                "stderr": "",
+            }
+        )
+    except Exception as exc:
+        result_payload.update({"ok": False, "error": str(exc), "stdout": _tail(capture_log_path)})
+
+    if summary_path.is_file():
+        try:
+            result_payload["capture_summary"] = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            result_payload["capture_summary"] = {"unreadable": str(summary_path)}
+
+    report.findings.append(
+        DiagnosisFinding(
+            severity="info",
+            message="1-1 evidence screenshot capture completed"
+            if result_payload.get("ok")
+            else "1-1 evidence screenshot capture failed",
+            evidence={"screenshot_capture": result_payload},
+        )
+    )
+    mod.save_report(ctx, report)
+
+
 def _run_module(mod: Any, ctx: DiagnosisContext, section_id: str) -> SectionReport:
     from app.services import diagnosis_progress as dp
 
@@ -430,6 +554,7 @@ def _run_module(mod: Any, ctx: DiagnosisContext, section_id: str) -> SectionRepo
     except DiagnosisCancelled as exc:
         dp.cancel_finish(f"{section_id}: cancelled")
         raise RuntimeError(str(exc) or "Diagnosis cancelled") from exc
+    # 1-2 / 2-1 / 2-2 / 7-4: 증거 스크린샷 캡처
     if section_id in {"1-2", "2-1", "2-2", "7-4"} and report.status != "cancelled":
         from app.services.evidence_capture_service import capture_after_diagnosis
 
@@ -445,6 +570,11 @@ def _run_module(mod: Any, ctx: DiagnosisContext, section_id: str) -> SectionRepo
                 message=f"{section_id}: 스크린샷 생성 실패 — 진단 결과는 저장됨",
                 percent=99,
             )
+
+    # 1-1: XSS/CSRF 증거 스크린샷 캡처 
+    # 내부에서 section_id != "1-1"이면 즉시 return 하므로 무조건 호출해도 안전
+    _run_g11_screenshot_capture(mod, ctx, report)
+
     _finish_progress(section_id, report)
     return report
 
