@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html
-import json
 import re
 import urllib.parse
 import difflib
@@ -188,5 +187,3 @@ def reflected_near_resource_id(response_text: str, payload: str, resource_id) ->
     return payload in response_text[max(0, idx - 250): idx + 750]
 
 
-def safe_json_dumps(value) -> str:
-    return json.dumps(value, ensure_ascii=False, indent=2)

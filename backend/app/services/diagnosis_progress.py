@@ -92,8 +92,11 @@ def update(
     requests_sent: int | None = None,
     requests_cap: int | None = None,
     percent: int | None = None,
+    running: bool | None = None,
 ) -> None:
     with _lock:
+        if running is not None:
+            _state["running"] = bool(running)
         if phase is not None:
             _state["phase"] = phase
         if message is not None:
