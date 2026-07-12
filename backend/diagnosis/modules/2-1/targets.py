@@ -233,7 +233,7 @@ def _from_inventory(
     meta["inventory_endpoints"] = len(tree.endpoints)
     meta["upload_endpoints_found"] = len(endpoints)
 
-    tree_bases = {ep.base_url.rstrip("/").lower() for ep in endpoints}
+    known_bases = {b.rstrip("/").lower() for b in bases}
     out: list[UploadTarget] = []
     seen: set[str] = set()
     for ep in endpoints:
@@ -242,7 +242,7 @@ def _from_inventory(
         extra_fields = _form_fields_from_endpoint(ep, file_field)
         query_params = _query_params_from_endpoint(ep, file_field)
         target_bases = (
-            [ep.base_url] if ep.base_url.rstrip("/").lower() in tree_bases else bases
+            [ep.base_url] if ep.base_url.rstrip("/").lower() in known_bases else bases
         )
         for base in target_bases or bases:
             probe_base = probe_base_url(base)

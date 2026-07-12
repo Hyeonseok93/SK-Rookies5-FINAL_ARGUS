@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -144,7 +145,7 @@ def case_from_finding(
 def _safe_exchange(exchange: HttpExchange) -> dict[str, Any]:
     return {
         "method": exchange.method,
-        "url": exchange.display_url or display_url(exchange.url),
+        "url": redact_text(exchange.display_url or display_url(exchange.url)),
         "request_headers": redact_headers(exchange.request_headers),
         "request_body": redact_text(exchange.request_body),
         "status_code": exchange.status_code,
@@ -152,6 +153,28 @@ def _safe_exchange(exchange: HttpExchange) -> dict[str, Any]:
         "response_body": redact_text(exchange.response_body),
         "elapsed_ms": exchange.elapsed_ms,
     }
+
+
+def _cached_artifacts(output_dir: Path) -> list[dict[str, str]] | None:
+    """Return artifacts from a prior capture for this exact finding, if any.
+
+    ``finding_id`` is a stable hash of (method, path, extension, technique,
+    reason), so a hit here means the same vulnerability was already replayed
+    and captured — skip re-uploading the live malicious payload again.
+    """
+    manifest_path = output_dir / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        cached = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not cached.get("metadata", {}).get("replay", {}).get("performed"):
+        return None
+    artifacts = cached.get("artifacts")
+    if not isinstance(artifacts, list):
+        return None
+    return artifacts
 
 
 def capture_finding(
@@ -166,6 +189,7 @@ def capture_finding(
     id_field: str,
     password_field: str,
     perform_replay: bool = True,
+    force_replay: bool = False,
 ) -> list[dict[str, str]]:
     case = case_from_finding(
         finding,
@@ -175,9 +199,13 @@ def capture_finding(
         id_field=id_field,
         password_field=password_field,
     )
+    output_dir = output_root / case.finding_id
+    if perform_replay and not force_replay:
+        cached = _cached_artifacts(output_dir)
+        if cached is not None:
+            return cached
     if perform_replay:
         case = replay_case(case, raw_config=raw_config, data_dir=data_dir)
-    output_dir = output_root / case.finding_id
     artifacts = capture_case(case, output_dir)
 
     manifest = {
@@ -199,6 +227,32 @@ def capture_finding(
     return manifest["artifacts"]
 
 
+_STALE_DIR_GRACE_SECONDS = 60
+
+
+def _cleanup_stale_dirs(output_root: Path, *, keep: set[str]) -> None:
+    """Remove finding directories no longer selected by the latest report.
+
+    Runs after captures finish (not before) and skips anything touched very
+    recently, so an overlapping capture run (auto-capture vs. a manual
+    re-capture) is much less likely to have its in-progress directory
+    deleted out from under it.
+    """
+    if not output_root.is_dir():
+        return
+    now = time.time()
+    for stale_dir in output_root.glob("2-1-*"):
+        if not stale_dir.is_dir() or stale_dir.name in keep:
+            continue
+        try:
+            mtime = stale_dir.stat().st_mtime
+        except OSError:
+            continue
+        if now - mtime < _STALE_DIR_GRACE_SECONDS:
+            continue
+        shutil.rmtree(stale_dir, ignore_errors=True)
+
+
 def capture_latest(
     report_path: Path,
     output_root: Path,
@@ -206,6 +260,7 @@ def capture_latest(
     config_path: Path | None = None,
     limit: int = 3,
     perform_replay: bool = True,
+    force_replay: bool = False,
 ) -> list[dict[str, Any]]:
     backend_root = _default_backend_root()
     data_dir = backend_root / "data"
@@ -217,10 +272,6 @@ def capture_latest(
     findings = list(report.get("findings") or [])
     selected = select_representatives(findings, limit=limit)
     selected_ids = {stable_finding_id(finding) for finding in selected}
-    if output_root.is_dir():
-        for stale_dir in output_root.glob("2-1-*"):
-            if stale_dir.is_dir() and stale_dir.name not in selected_ids:
-                shutil.rmtree(stale_dir)
     results: list[dict[str, Any]] = []
     for finding in selected:
         finding_id = stable_finding_id(finding)
@@ -236,10 +287,13 @@ def capture_latest(
                 id_field=capture_context["id_field"],
                 password_field=capture_context["password_field"],
                 perform_replay=perform_replay,
+                force_replay=force_replay,
             )
             results.append({"finding_id": finding_id, "ok": True, "artifacts": artifacts})
         except Exception as exc:
             results.append({"finding_id": finding_id, "ok": False, "error": str(exc)})
+
+    _cleanup_stale_dirs(output_root, keep=selected_ids)
 
     summary = {
         "section_id": "2-1",
@@ -295,6 +349,11 @@ def main() -> int:
         default=Path(os.environ.get("CONFIG_PATH") or backend_root / "config.yaml"),
     )
     parser.add_argument("--no-replay", action="store_true", help="Render saved evidence without HTTP replay")
+    parser.add_argument(
+        "--force-replay",
+        action="store_true",
+        help="Re-upload the live malicious payload even if this finding was already captured",
+    )
     args = parser.parse_args()
 
     results = capture_latest(
@@ -303,6 +362,7 @@ def main() -> int:
         config_path=args.config,
         limit=max(1, args.limit),
         perform_replay=not args.no_replay,
+        force_replay=args.force_replay,
     )
     print(json.dumps(results, ensure_ascii=False, indent=2))
     return 0 if results and all(row["ok"] for row in results) else 1

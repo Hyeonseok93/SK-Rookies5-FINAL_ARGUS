@@ -14,7 +14,8 @@ def _esc(value: object) -> str:
 
 
 def _request(exchange: HttpExchange) -> str:
-    lines = [f"{exchange.method.upper()} {exchange.display_url or exchange.url} HTTP/1.1"]
+    request_url = redact_text(exchange.display_url or exchange.url)
+    lines = [f"{exchange.method.upper()} {request_url} HTTP/1.1"]
     lines.extend(f"{k}: {v}" for k, v in redact_headers(exchange.request_headers).items())
     if exchange.request_body:
         lines.extend(["", redact_text(exchange.request_body)])
@@ -39,11 +40,11 @@ def render_evidence_overlay(case: EvidenceCase, kind: str) -> tuple[str, str]:
     if kind == "baseline":
         left_title, right_title = "Request (allowed file)", "Response"
         left, right = _request(case.baseline), _response(case.baseline)
-        target = case.baseline.display_url or case.baseline.url
+        target = redact_text(case.baseline.display_url or case.baseline.url)
     elif kind == "attack":
         left_title, right_title = "Request (malicious upload)", "Response"
         left, right = _request(case.attack), _response(case.attack)
-        target = case.attack.display_url or case.attack.url
+        target = redact_text(case.attack.display_url or case.attack.url)
     else:
         raise ValueError(f"Unknown evidence kind: {kind}")
 

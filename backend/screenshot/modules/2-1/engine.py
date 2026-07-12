@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import socket
 import subprocess
@@ -94,6 +95,15 @@ def _inject_overlay(page, css: str, markup: str) -> None:
             last_error = exc
             page.wait_for_timeout(500)
     raise RuntimeError(f"Overlay injection failed after SPA navigation: {last_error}")
+
+
+def _take_window_shot(page, path: Path) -> None:
+    page.bring_to_front()
+    page.wait_for_timeout(250)
+    if os.environ.get("DISPLAY"):
+        subprocess.run(["scrot", "--overwrite", str(path)], check=True)
+    else:
+        page.screenshot(path=str(path), full_page=False)
 
 
 _VERSION_SEG_RE = re.compile(r"^v\d+$")
@@ -262,7 +272,7 @@ def capture_case(case: EvidenceCase, output_dir: Path) -> list[CaptureArtifact]:
     with sync_playwright() as playwright:
         host_gateway = socket.gethostbyname("host.docker.internal")
         browser = playwright.chromium.launch(
-            headless=False,
+            headless=not bool(os.environ.get("DISPLAY")),
             args=[
                 f"--host-resolver-rules=MAP localhost {host_gateway}",
                 "--window-position=0,0",
@@ -304,9 +314,7 @@ def capture_case(case: EvidenceCase, output_dir: Path) -> list[CaptureArtifact]:
             except Exception:
                 page.wait_for_timeout(500)
             path = output_dir / filename
-            page.bring_to_front()
-            page.wait_for_timeout(250)
-            subprocess.run(["scrot", "--overwrite", str(path)], check=True)
+            _take_window_shot(page, path)
             artifacts.append(CaptureArtifact(kind=kind, path=str(path)))
             page.close()
 
