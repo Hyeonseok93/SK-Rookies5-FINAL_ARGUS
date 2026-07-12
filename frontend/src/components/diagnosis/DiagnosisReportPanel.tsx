@@ -498,9 +498,13 @@ function FpCandidateSection({
       {open ? (
         <ul className="space-y-2 border-t border-amber-500/20 px-3 py-2">
           {findings.map((f, i) => (
-            <FindingListItem key={`fpc-${i}`} f={f} />
+            <FindingListItem key={`fpc-${i}`} f={f} sectionId="2-1" />
           ))}
         </ul>
+      ) : null}
+    </div>
+  );
+}
 
 function Gradle74Guide() {
   const [open, setOpen] = useState(false);
@@ -619,6 +623,7 @@ function GroupedG21FindingsPanel({
             count={roleFindings.length}
             defaultOpen
             findings={roleFindings}
+            sectionId="2-1"
           />
         );
       })}
@@ -632,9 +637,12 @@ function GroupedG21FindingsPanel({
             count={items.length}
             defaultOpen={false}
             findings={items}
+            sectionId="2-1"
           />
         ))}
     </>
+  );
+}
 
 function GuideCommandBlock({
   label,
@@ -692,6 +700,7 @@ function GroupedFindingsPanel({
 
   if (sectionId === "2-1") {
     return <GroupedG21FindingsPanel findings={findings} />;
+  }
 
   if (sectionId === "1-2") {
     const info = findings.filter((f) => findingBucket(f) === "info");

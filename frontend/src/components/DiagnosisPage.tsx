@@ -49,12 +49,6 @@ import {
   type G41DiagnosisOptions,
 } from "../lib/g41DiagnosisOptions";
 import {
-  DEFAULT_G21_OPTIONS,
-  g21OptionsSummary,
-  g21OptionsToPayload,
-  type G21DiagnosisOptions,
-} from "../lib/g21DiagnosisOptions";
-import {
   DEFAULT_G22_OPTIONS,
   g22OptionsSummary,
   g22OptionsToPayload,
@@ -674,15 +668,6 @@ export function DiagnosisPage() {
       setG22Options(options);
       setG22DialogOpen(false);
       void handleRun("2-2", options);
-    },
-    [handleRun],
-  );
-
-  const handleG21Start = useCallback(
-    (options: G21DiagnosisOptions) => {
-      setG21Options(options);
-      setG21DialogOpen(false);
-      void handleRun("2-1", options);
     },
     [handleRun],
   );
