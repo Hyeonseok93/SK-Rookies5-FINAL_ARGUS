@@ -548,6 +548,12 @@ def _run_g11_screenshot_capture(mod: Any, ctx: DiagnosisContext, report: Section
             evidence={"screenshot_capture": result_payload},
         )
     )
+    try:
+        from app.services.g11_report_document import generate_g11_report_document
+
+        result_payload["report_document"] = str(generate_g11_report_document(report_path.parent))
+    except Exception as exc:
+        result_payload["report_document_error"] = str(exc)
     mod.save_report(ctx, report)
 
 

@@ -96,6 +96,24 @@ def get_g11_evidence_file(relative_path: str) -> FileResponse:
     return FileResponse(target)
 
 
+@router.get("/modules/1-1/report/download")
+def download_g11_report_document() -> FileResponse:
+    report_dir = BACKEND_ROOT / "data" / "report" / "1-1"
+    try:
+        from app.services.g11_report_document import generate_g11_report_document
+
+        target = generate_g11_report_document(report_dir)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="No 1-1 report found") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to generate report: {exc}") from exc
+    return FileResponse(
+        target,
+        media_type="text/html; charset=utf-8",
+        filename="ARGUS-1-1-diagnosis-result.html",
+    )
+
+
 @router.get("/modules/{section_id}/evidence")
 def get_evidence_file(section_id: str, path: str) -> FileResponse:
     resolved = diagnosis_service.resolve_evidence_file(section_id, path)

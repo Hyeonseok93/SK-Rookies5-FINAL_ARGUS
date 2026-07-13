@@ -1,6 +1,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, ChevronDown, Loader2, Stethoscope } from "lucide-react";
+import { AlertCircle, ChevronDown, Download, Loader2, Stethoscope } from "lucide-react";
 import { G12DiagnosisStartDialog } from "./G12DiagnosisStartDialog";
 import { G32DiagnosisStartDialog } from "./G32DiagnosisStartDialog";
 import { G34DiagnosisStartDialog } from "./G34DiagnosisStartDialog";
@@ -865,6 +865,26 @@ export function DiagnosisPage() {
                           </span>
                         ) : null}
                         {report ? <StatusBadge status={report.status} /> : null}
+                        {section.id === "1-1" && report ? (
+                          <span
+                            role="link"
+                            tabIndex={0}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              window.location.href = "/api/diagnosis/modules/1-1/report/download";
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter" && event.key !== " ") return;
+                              event.preventDefault();
+                              event.stopPropagation();
+                              window.location.href = "/api/diagnosis/modules/1-1/report/download";
+                            }}
+                            className="inline-flex shrink-0 items-center gap-1 rounded border border-cyber-border/50 px-1.5 py-0.5 text-[10px] text-cyan-200 transition hover:border-cyan-400/60 hover:bg-cyan-400/10"
+                          >
+                            <Download className="h-3 w-3" />
+                            진단 결과 다운로드
+                          </span>
+                        ) : null}
                       </button>
                       {reviewLater || (!diagnosable && !statusLabel) ? (
                         <DiagnosisReviewLaterButton compact />
