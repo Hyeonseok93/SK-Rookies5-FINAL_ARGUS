@@ -896,14 +896,12 @@ function GroupedFindingsPanel({
     return <p className="text-xs text-cyber-muted">finding 없음</p>;
   }
 
-<<<<<<< HEAD
+  if (sectionId === "1-1") {
+    return <G11FindingsPanel findings={findings} />;
+  }
 
   if (sectionId === "2-1") {
     return <GroupedG21FindingsPanel findings={findings} sectionId={sectionId} />;
-=======
-  if (sectionId === "1-1") {
-    return <G11FindingsPanel findings={findings} />;
->>>>>>> xss/csrf_screenshot
   }
 
   if (sectionId === "1-2") {
