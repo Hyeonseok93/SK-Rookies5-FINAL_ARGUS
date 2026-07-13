@@ -118,6 +118,18 @@ export function G32SectionInfoPopover() {
                     </span>
                     <span>차단은 있으나 임계값이 높거나 우회 가능 — 실패 횟수·차단 정책 강화 권장</span>
                   </li>
+                  <li className="flex items-start gap-2">
+                    <span className="inline-flex h-4 shrink-0 items-center rounded border border-sky-400/35 bg-sky-500/10 px-1.5 text-[9px] leading-none text-sky-200">
+                      낮음
+                    </span>
+                    <span>경미한 이슈 — 참고 수준으로 확인 권장</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="inline-flex h-4 shrink-0 items-center rounded border border-emerald-400/35 bg-emerald-500/10 px-1.5 text-[9px] leading-none text-emerald-200">
+                      양호
+                    </span>
+                    <span>실패가 반복되면 잠금·지연·차단이 정상 작동 — 조치 불필요</span>
+                  </li>
                 </ul>
                 <p className="mt-2 text-[9px] leading-relaxed text-white/50">
                   참고: <code className="text-cyan-300/70">429</code>(요청 과다)·<code className="text-cyan-300/70">423</code>(잠김) 응답이나 잠금 안내 메시지가 나오면 방어가 작동하는 것입니다.
