@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from pathlib import Path
 
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+
+from app.config import BACKEND_ROOT
 from app.schemas import (
     DiagnosisCatalogModule,
     DiagnosisCatalogResponse,
@@ -82,6 +85,15 @@ def get_module_report(section_id: str) -> DiagnosisSectionReportResponse:
     if report is None:
         raise HTTPException(status_code=404, detail=f"No report for module {section_id}")
     return _report_to_response(report)
+
+
+@router.get("/modules/1-1/evidence/{relative_path:path}")
+def get_g11_evidence_file(relative_path: str) -> FileResponse:
+    evidence_root = (BACKEND_ROOT / "data" / "report" / "1-1" / "evidence").resolve()
+    target = (evidence_root / Path(relative_path)).resolve()
+    if not target.is_file() or evidence_root not in target.parents:
+        raise HTTPException(status_code=404, detail="Evidence file not found")
+    return FileResponse(target)
 
 
 @router.post("/modules/{section_id}/run", response_model=DiagnosisRunSectionResponse)

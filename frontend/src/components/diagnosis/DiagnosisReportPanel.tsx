@@ -314,6 +314,200 @@ function FindingListItem({
   );
 }
 
+type FindingSummary = {
+  severity: string;
+  message: string;
+  evidence?: Record<string, unknown>;
+};
+
+type G11Artifact = {
+  kind: string;
+  path: string;
+};
+
+type G11CaptureResult = {
+  finding_id?: string;
+  ok?: boolean;
+  artifacts?: G11Artifact[];
+  error?: string;
+};
+
+function textValue(value: unknown, fallback = "-") {
+  if (value === undefined || value === null || value === "") return fallback;
+  return String(value);
+}
+
+function slugG11Part(value: string) {
+  const slug = String(value || "")
+    .trim()
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "x";
+}
+
+function g11FindingIdPrefix(finding: FindingSummary) {
+  const ev = finding.evidence ?? {};
+  const vulnType = textValue(ev.vuln_type, "").trim();
+  const method = textValue(ev.method, "GET").toUpperCase();
+  const url = textValue(ev.url, "/").replace(/\/+$/, "") || "/";
+  let path = "root";
+  try {
+    path = new URL(url).pathname.replace(/^\/+|\/+$/g, "") || "root";
+  } catch {
+    path = url.replace(/^https?:\/\/[^/]+/i, "").replace(/^\/+|\/+$/g, "") || "root";
+  }
+  const param = textValue(ev.param, "").toLowerCase();
+  const role = textValue(ev.account_role, "").trim().toUpperCase();
+  const parts = [vulnType, method, path, param];
+  if (role) parts.push(role);
+  return `1-1_${parts.map(slugG11Part).join("_")}_`;
+}
+
+function g11EvidenceUrl(path: string) {
+  const marker = "/evidence/";
+  const idx = path.indexOf(marker);
+  const relative = idx >= 0 ? path.slice(idx + marker.length) : path;
+  return `/api/diagnosis/modules/1-1/evidence/${relative
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")}`;
+}
+
+function g11CaptureResults(findings: FindingSummary[]) {
+  const captureFinding = findings.find((f) => f.evidence?.screenshot_capture);
+  const capture = captureFinding?.evidence?.screenshot_capture as Record<string, unknown> | undefined;
+  const summary = capture?.capture_summary as Record<string, unknown> | undefined;
+  const results = summary?.results;
+  return Array.isArray(results) ? (results as G11CaptureResult[]) : [];
+}
+
+function g11ArtifactsForFinding(finding: FindingSummary, results: G11CaptureResult[]) {
+  const prefix = g11FindingIdPrefix(finding);
+  const row = results.find((item) => String(item.finding_id ?? "").startsWith(prefix));
+  return {
+    result: row,
+    images: (row?.artifacts ?? []).filter((item) => /\.(png|jpe?g|webp)$/i.test(item.path)),
+  };
+}
+
+function g11VulnerabilityTitle(finding: FindingSummary) {
+  const ev = finding.evidence ?? {};
+  return textValue(ev.vuln_type, finding.message || "취약점");
+}
+
+function G11DetailBlock({ title, value }: { title: string; value: unknown }) {
+  if (value === undefined || value === null || value === "") return null;
+  return (
+    <div>
+      <div className="mb-1 text-[10px] font-medium text-cyber-muted">{title}</div>
+      <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded border border-cyber-border/30 bg-black/25 p-2 font-mono text-[10px] leading-relaxed text-cyan-100/80">
+        {String(value)}
+      </pre>
+    </div>
+  );
+}
+
+function G11FindingCard({
+  finding,
+  results,
+}: {
+  finding: FindingSummary;
+  results: G11CaptureResult[];
+}) {
+  const [open, setOpen] = useState(false);
+  const ev = finding.evidence ?? {};
+  const { result, images } = g11ArtifactsForFinding(finding, results);
+  const isCsrf = String(ev.vuln_type ?? "").toLowerCase().includes("csrf");
+  const csrf = ev.csrf_defenses as Record<string, unknown> | undefined;
+
+  return (
+    <li className="rounded border border-cyber-border/35 bg-cyber-panel/25 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className={`font-mono text-[10px] uppercase ${SEVERITY_STYLES[finding.severity] ?? SEVERITY_STYLES.info}`}>
+              {finding.severity}
+            </span>
+            <span className="text-sm font-semibold text-white">{g11VulnerabilityTitle(finding)}</span>
+            {ev.validation_status ? (
+              <span className="rounded border border-cyber-border/40 px-1.5 py-0.5 text-[10px] text-cyber-muted">
+                {String(ev.validation_status)}
+              </span>
+            ) : null}
+          </div>
+          <dl className="grid gap-1 text-[11px] sm:grid-cols-[5rem_1fr]">
+            <dt className="text-cyber-muted">URL</dt>
+            <dd className="break-all font-mono text-cyan-200/85">{textValue(ev.url)}</dd>
+            <dt className="text-cyber-muted">파라미터</dt>
+            <dd className="break-all font-mono text-cyan-200/85">{textValue(ev.param)}</dd>
+            <dt className="text-cyber-muted">페이로드</dt>
+            <dd className="break-all font-mono text-cyan-200/85">{textValue(ev.attack)}</dd>
+          </dl>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="shrink-0 rounded border border-cyber-border/50 px-2 py-1 text-[11px] text-cyber-muted transition hover:border-cyan-400/50 hover:text-cyan-200"
+        >
+          상세보기
+        </button>
+      </div>
+
+      {images.length > 0 ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {images.map((image) => (
+            <figure key={`${image.kind}-${image.path}`} className="overflow-hidden rounded border border-cyber-border/30 bg-black/20">
+              <img src={g11EvidenceUrl(image.path)} alt={`${g11VulnerabilityTitle(finding)} ${image.kind} evidence`} className="w-full object-contain" loading="lazy" />
+              <figcaption className="border-t border-cyber-border/25 px-2 py-1 text-[10px] text-cyber-muted">
+                {image.kind === "site" ? "실제 화면 증거" : "요청/응답 증거"}
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      ) : null}
+
+      {open ? (
+        <div className="mt-3 space-y-3 border-t border-cyber-border/30 pt-3">
+          {result && result.ok === false ? (
+            <p className="text-[11px] text-amber-200/90">증거 캡처 실패: {textValue(result.error)}</p>
+          ) : null}
+          {isCsrf && csrf ? (
+            <div className="grid gap-1 rounded border border-cyber-border/30 bg-black/15 p-2 text-[11px] sm:grid-cols-2">
+              <span className="text-cyber-muted">Origin/Referer 우회: {String(Boolean(csrf.origin_referer_bypass))}</span>
+              <span className="text-cyber-muted">CSRF token 부재: {String(Boolean(csrf.csrf_token_absent))}</span>
+              <span className="text-cyber-muted">SameSite 미흡: {String(Boolean(csrf.unsafe_samesite))}</span>
+              <span className="text-cyber-muted">실패 방어 수: {textValue(csrf.failed_count)}</span>
+            </div>
+          ) : null}
+          <G11DetailBlock title="판정 근거" value={ev.validation_reason ?? ev.description} />
+          <G11DetailBlock title="조치 가이드" value={ev.remediation_guide ?? ev.remediation_summary} />
+          <G11DetailBlock title="원인" value={ev.remediation_cause} />
+          <G11DetailBlock title="예시 코드" value={ev.remediation_code} />
+          <G11DetailBlock title="Evidence Request" value={ev.evidence_request} />
+          <G11DetailBlock title="Evidence Response" value={ev.evidence_response} />
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+function G11FindingsPanel({ findings }: { findings: FindingSummary[] }) {
+  const captureResults = g11CaptureResults(findings);
+  const visibleFindings = findings.filter((f) => !f.evidence?.screenshot_capture);
+
+  if (visibleFindings.length === 0) {
+    return <p className="text-xs text-cyber-muted">finding 없음</p>;
+  }
+
+  return (
+    <ul className="space-y-3">
+      {visibleFindings.map((finding, index) => (
+        <G11FindingCard key={`${finding.message}-${index}`} finding={finding} results={captureResults} />
+      ))}
+    </ul>
+  );
+}
+
 function findingBucket(f: {
   severity: string;
   evidence?: Record<string, unknown>;
@@ -512,6 +706,10 @@ function GroupedFindingsPanel({
 
   if (findings.length === 0) {
     return <p className="text-xs text-cyber-muted">finding 없음</p>;
+  }
+
+  if (sectionId === "1-1") {
+    return <G11FindingsPanel findings={findings} />;
   }
 
   if (sectionId === "1-2") {
