@@ -124,6 +124,42 @@ def capture_finding(
     return manifest["artifacts"]
 
 
+def _csrf_occurrence_findings(finding: dict[str, Any]) -> list[dict[str, Any]]:
+    evidence = finding_evidence(finding)
+    if str(evidence.get("vuln_type") or "").strip() != "CSRF":
+        return []
+    occurrences = evidence.get("csrf_occurrences")
+    if not isinstance(occurrences, list) or len(occurrences) <= 1:
+        return []
+
+    expanded: list[dict[str, Any]] = []
+    for index, occurrence in enumerate(occurrences, start=1):
+        if not isinstance(occurrence, dict):
+            continue
+        occurrence_evidence = dict(evidence)
+        occurrence_evidence.update(
+            {
+                "method": occurrence.get("method") or evidence.get("method"),
+                "url": occurrence.get("url") or evidence.get("url"),
+                "param": occurrence.get("param") or evidence.get("param"),
+                "attack": occurrence.get("attack") or evidence.get("attack"),
+                "status_code": occurrence.get("status_code") if occurrence.get("status_code") is not None else evidence.get("status_code"),
+                "account_role": occurrence.get("account_role") or evidence.get("account_role"),
+                "csrf_defenses": occurrence.get("csrf_defenses") or evidence.get("csrf_defenses"),
+                "evidence_request": occurrence.get("evidence_request") or evidence.get("evidence_request"),
+                "evidence_response": occurrence.get("evidence_response") or evidence.get("evidence_response"),
+                "validation_status": occurrence.get("validation_status") or evidence.get("validation_status"),
+                "validation_reason": occurrence.get("validation_reason") or evidence.get("validation_reason"),
+                "confidence": occurrence.get("confidence") or evidence.get("confidence"),
+                "risk": occurrence.get("risk") or evidence.get("risk"),
+                "occurrence_index": index,
+                "occurrence_count": evidence.get("occurrence_count") or len(occurrences),
+            }
+        )
+        expanded.append({**finding, "evidence": occurrence_evidence})
+    return expanded
+
+
 def capture_latest(
     report_path: Path,
     output_root: Path,
@@ -134,25 +170,49 @@ def capture_latest(
     report = yaml.safe_load(report_path.read_text(encoding="utf-8")) or {}
     findings = list(report.get("findings") or [])
     selected = select_representatives(findings, per_type_limit=per_type_limit)
-    selected_ids = {stable_finding_id(finding) for finding in selected}
+    capture_jobs: list[tuple[dict[str, Any], str | None, int | None]] = []
+    for finding in selected:
+        parent_id = stable_finding_id(finding)
+        occurrence_findings = _csrf_occurrence_findings(finding)
+        if occurrence_findings:
+            capture_jobs.extend((item, parent_id, index) for index, item in enumerate(occurrence_findings, start=1))
+        else:
+            capture_jobs.append((finding, None, None))
+
+    selected_ids = {stable_finding_id(finding) for finding, _, _ in capture_jobs}
     if output_root.is_dir():
         for stale_dir in output_root.glob("1-1_*"):
             if stale_dir.is_dir() and stale_dir.name not in selected_ids:
                 shutil.rmtree(stale_dir)
 
     results: list[dict[str, Any]] = []
-    for finding in selected:
+    for finding, parent_id, occurrence_index in capture_jobs:
         finding_id = stable_finding_id(finding)
         try:
             artifacts = capture_finding(finding, output_root, perform_replay=perform_replay)
-            results.append({"finding_id": finding_id, "ok": True, "artifacts": artifacts})
+            row = {"finding_id": finding_id, "ok": True, "artifacts": artifacts}
+            if parent_id:
+                evidence = finding_evidence(finding)
+                row.update(
+                    {
+                        "parent_finding_id": parent_id,
+                        "occurrence_index": occurrence_index,
+                        "url": display_url(str(evidence.get("url") or "")),
+                        "param": evidence.get("param"),
+                        "payload": evidence.get("attack"),
+                    }
+                )
+            results.append(row)
         except Exception as exc:
-            results.append({"finding_id": finding_id, "ok": False, "error": str(exc)})
+            row = {"finding_id": finding_id, "ok": False, "error": str(exc)}
+            if parent_id:
+                row.update({"parent_finding_id": parent_id, "occurrence_index": occurrence_index})
+            results.append(row)
 
     summary = {
         "section_id": "1-1",
         "report": str(report_path),
-        "selected": len(selected),
+        "selected": len(capture_jobs),
         "succeeded": sum(1 for row in results if row["ok"]),
         "failed": sum(1 for row in results if not row["ok"]),
         "results": results,
