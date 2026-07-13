@@ -46,6 +46,44 @@ export function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
+
+const SEVERITY_STATUS_STYLES: Record<string, string> = {
+  high: "border-rose-400/50 bg-rose-500/10 text-rose-300",
+  medium: "border-amber-400/50 bg-amber-500/10 text-amber-300",
+  low: "border-sky-400/50 bg-sky-500/10 text-sky-300",
+};
+
+const SEVERITY_RANK: Record<string, number> = { high: 3, medium: 2, low: 1, info: 0 };
+
+// Sections that report a fail/warn status but should surface it as a
+// severity-graded badge (HIGH/MEDIUM/LOW) instead of the raw FAIL/WARN label.
+const SEVERITY_STATUS_SECTIONS = new Set(["3-2", "4-4", "5-2"]);
+
+function highestFindingSeverity(
+  findings: { severity: string }[],
+): "high" | "medium" | "low" | null {
+  let best: string | null = null;
+  let bestRank = 0;
+  for (const f of findings) {
+    const sev = (f.severity ?? "").toLowerCase();
+    const rank = SEVERITY_RANK[sev] ?? 0;
+    if (rank > bestRank) {
+      bestRank = rank;
+      best = sev;
+    }
+  }
+  if (best === "high" || best === "medium" || best === "low") return best;
+  return null;
+}
+
+function SeverityStatusBadge({ severity }: { severity: string }) {
+  const cls = SEVERITY_STATUS_STYLES[severity] ?? STATUS_STYLES.fail;
+  return (
+    <span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase ${cls}`}>
+      {severity}
+    </span>
+  );
+}
 export function FindingEvidence({
   evidence,
   sectionId,
@@ -1119,10 +1157,20 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const isG36Stats = statsFinding?.message === "3-6 scan statistics";
 
 
+  const severityStatus =
+    SEVERITY_STATUS_SECTIONS.has(report.section_id) &&
+    (report.status === "fail" || report.status === "warn")
+      ? highestFindingSeverity(findings)
+      : null;
+
   return (
     <div className="border-t border-cyber-border/40 bg-cyber-bg/30 px-4 py-3">
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <StatusBadge status={report.status} />
+        {severityStatus ? (
+          <SeverityStatusBadge severity={severityStatus} />
+        ) : (
+          <StatusBadge status={report.status} />
+        )}
         {report.checked_at ? (
           <span className="text-[10px] text-cyber-muted">{report.checked_at}</span>
         ) : null}
