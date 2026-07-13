@@ -1,14 +1,23 @@
 import { useCallback, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import {
+  computeSectionInfoPopoverPos,
+  sectionInfoPopoverStyle,
+  type SectionInfoPopoverPos,
+} from "./sectionInfoPopoverLayout";
 
-const CARD_WIDTH = 352;
 const HOVER_LEAVE_MS = 140;
 
 export function G45SectionInfoPopover() {
   const anchorRef = useRef<HTMLButtonElement>(null);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const [pos, setPos] = useState<SectionInfoPopoverPos>({
+    top: 0,
+    left: 0,
+    maxHeight: 360,
+    placement: "below",
+  });
 
   const clearLeaveTimer = useCallback(() => {
     if (leaveTimer.current != null) {
@@ -20,11 +29,7 @@ export function G45SectionInfoPopover() {
   const updatePosition = useCallback(() => {
     const el = anchorRef.current;
     if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const margin = 12;
-    let left = rect.left + rect.width / 2 - CARD_WIDTH / 2;
-    left = Math.max(margin, Math.min(left, window.innerWidth - CARD_WIDTH - margin));
-    setPos({ top: rect.bottom + 8, left });
+    setPos(computeSectionInfoPopoverPos(el.getBoundingClientRect()));
   }, []);
 
   const showCard = useCallback(() => {
@@ -54,8 +59,8 @@ export function G45SectionInfoPopover() {
     open && typeof document !== "undefined"
       ? createPortal(
           <div
-            className="pointer-events-auto fixed z-[300] w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-xl border border-cyan-400/25 bg-[#0a1219]/98 shadow-[0_12px_40px_rgba(0,0,0,0.55)] backdrop-blur-md"
-            style={{ top: pos.top, left: pos.left }}
+            className="pointer-events-auto fixed z-[300] overflow-y-auto overflow-x-hidden rounded-xl border border-cyan-400/25 bg-[#0a1219]/98 shadow-[0_12px_40px_rgba(0,0,0,0.55)] backdrop-blur-md"
+            style={sectionInfoPopoverStyle(pos)}
             onMouseEnter={showCard}
             onMouseLeave={scheduleHide}
             role="tooltip"
