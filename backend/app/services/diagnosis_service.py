@@ -190,6 +190,16 @@ def get_report(section_id: str) -> SectionReport | None:
     return mod.load_report(ctx)
 
 
+def build_report_pdf(section_id: str) -> bytes:
+    """Render latest.yaml + evidence/ for one section into a downloadable PDF."""
+    if section_id not in SECTION_BY_ID:
+        raise KeyError(f"Unknown section: {section_id}")
+    from app.services.report_pdf_service import render_report_pdf
+
+    ctx = _context()
+    return render_report_pdf(section_id, ctx=ctx)
+
+
 def resolve_evidence_file(section_id: str, rel_path: str) -> Path | None:
     """Resolve a client-supplied relative path to a file under a section's
     evidence dir, rejecting anything that would escape that dir."""
@@ -430,7 +440,7 @@ def _run_module(mod: Any, ctx: DiagnosisContext, section_id: str) -> SectionRepo
     except DiagnosisCancelled as exc:
         dp.cancel_finish(f"{section_id}: cancelled")
         raise RuntimeError(str(exc) or "Diagnosis cancelled") from exc
-    if section_id in {"1-2", "2-2", "7-4"} and report.status != "cancelled":
+    if section_id in {"1-2", "1-5", "2-2", "7-4"} and report.status != "cancelled":
         from app.services.evidence_capture_service import capture_after_diagnosis
 
         dp.update(

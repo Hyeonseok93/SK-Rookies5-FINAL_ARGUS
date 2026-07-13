@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.schemas import (
@@ -90,6 +90,24 @@ def get_evidence_file(section_id: str, path: str) -> FileResponse:
     if resolved is None:
         raise HTTPException(status_code=404, detail="Evidence file not found")
     return FileResponse(resolved)
+
+
+@router.get("/modules/{section_id}/report.pdf")
+def download_module_report_pdf(section_id: str) -> Response:
+    from app.services.report_pdf_service import report_pdf_filename
+
+    try:
+        pdf_bytes = diagnosis_service.build_report_pdf(section_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    filename = report_pdf_filename(section_id)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/modules/{section_id}/run", response_model=DiagnosisRunSectionResponse)

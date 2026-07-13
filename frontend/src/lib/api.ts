@@ -258,6 +258,10 @@ export function fetchDiagnosisReport(sectionId: string): Promise<DiagnosisSectio
   return request(`/diagnosis/modules/${encodeURIComponent(sectionId)}/report`);
 }
 
+export function diagnosisReportPdfUrl(sectionId: string): string {
+  return `${BASE}/diagnosis/modules/${encodeURIComponent(sectionId)}/report.pdf`;
+}
+
 export function runDiagnosisSection(
   sectionId: string,
   body?: DiagnosisRunSectionRequest,
