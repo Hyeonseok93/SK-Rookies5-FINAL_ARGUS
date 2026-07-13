@@ -1,8 +1,11 @@
 """Tests for the 2-1 evidence capture idempotency guard and stale-dir cleanup.
 
-Regression coverage for a bug where every capture run (auto-triggered after
-each diagnosis run) re-uploaded the live malicious payload to the real
-target, even for a finding that was already captured.
+Regression coverage for two requirements that pull in opposite directions:
+  - every capture run (auto-triggered after each diagnosis run) must NOT
+    re-upload the live malicious payload to the real target once a finding
+    has already been replayed once;
+  - the evidence screenshot itself must still be freshly (re-)generated on
+    every diagnosis run, never left as a stale image from a past run.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ import json
 import os
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -88,52 +92,114 @@ def _finding_output_dir(capture, tmp_path: Path) -> Path:
     return tmp_path / case.finding_id
 
 
-def test_cached_artifacts_returns_none_when_no_manifest(tmp_path):
+def test_cached_case_returns_none_when_no_manifest(tmp_path):
     capture = _load_capture()
-    assert capture._cached_artifacts(tmp_path / "missing") is None
+    case = capture.case_from_finding(_FINDING, **{k: v for k, v in _CONTEXT_KWARGS.items() if k != "raw_config"})
+    assert capture._cached_case(tmp_path / "missing", case) is None
 
 
-def test_cached_artifacts_returns_none_when_replay_not_performed(tmp_path):
+def test_cached_case_returns_none_when_replay_not_performed(tmp_path):
     capture = _load_capture()
+    case = capture.case_from_finding(_FINDING, **{k: v for k, v in _CONTEXT_KWARGS.items() if k != "raw_config"})
     output_dir = tmp_path / "2-1-abc"
     output_dir.mkdir()
     (output_dir / "manifest.json").write_text(
-        json.dumps({"artifacts": [], "metadata": {"replay": {"performed": False}}}),
+        json.dumps({"baseline": {}, "attack": {}, "metadata": {"replay": {"performed": False}}}),
         encoding="utf-8",
     )
-    assert capture._cached_artifacts(output_dir) is None
+    assert capture._cached_case(output_dir, case) is None
 
 
-def test_cached_artifacts_returns_artifacts_when_replay_performed(tmp_path):
+def test_cached_case_reconstructs_exchange_from_manifest(tmp_path):
     capture = _load_capture()
+    case = capture.case_from_finding(_FINDING, **{k: v for k, v in _CONTEXT_KWARGS.items() if k != "raw_config"})
     output_dir = tmp_path / "2-1-abc"
     output_dir.mkdir()
-    expected = [{"kind": "attack_evidence", "path": "05_attack_evidence.png"}]
-    (output_dir / "manifest.json").write_text(
-        json.dumps({"artifacts": expected, "metadata": {"replay": {"performed": True}}}),
-        encoding="utf-8",
-    )
-    assert capture._cached_artifacts(output_dir) == expected
+    manifest = {
+        "baseline": {"method": "POST", "url": "http://localhost:8080/x", "status_code": 201},
+        "attack": {"method": "POST", "url": "http://localhost:8080/x", "status_code": 201, "response_body": "ok"},
+        "metadata": {"replay": {"performed": True, "technique": "direct_extension", "attack_filename": "argus-shell.php"}},
+    }
+    (output_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    cached_case = capture._cached_case(output_dir, case)
+
+    assert cached_case is not None
+    assert cached_case.attack.status_code == 201
+    assert cached_case.attack.response_body == "ok"
+    assert cached_case.payload == "argus-shell.php"
+    assert cached_case.verification_type == "direct_extension"
 
 
-def test_capture_finding_skips_live_reupload_when_already_captured(tmp_path, monkeypatch):
+def test_capture_finding_skips_live_reupload_but_still_recaptures_screenshot(tmp_path, monkeypatch):
+    """Re-diagnosing an already-captured finding must not re-upload the live
+    malicious payload, but the screenshot itself must still be regenerated
+    every time (never left as a stale image from a past run)."""
     capture = _load_capture()
     output_dir = _finding_output_dir(capture, tmp_path)
     output_dir.mkdir(parents=True)
-    cached_artifacts = [{"kind": "attack_evidence", "path": str(output_dir / "05_attack_evidence.png")}]
     (output_dir / "manifest.json").write_text(
-        json.dumps({"artifacts": cached_artifacts, "metadata": {"replay": {"performed": True}}}),
+        json.dumps(
+            {
+                "baseline": {"method": "POST", "url": "http://localhost:8080/x", "status_code": 415},
+                "attack": {"method": "POST", "url": "http://localhost:8080/x", "status_code": 201},
+                "metadata": {"replay": {"performed": True, "technique": "direct_extension", "attack_filename": "argus-shell.php"}},
+            }
+        ),
         encoding="utf-8",
     )
 
     calls = {"replay": 0, "capture": 0}
+    fresh_artifacts = [
+        sys.modules["models"].CaptureArtifact(kind="attack_evidence", path=str(output_dir / "05_attack_evidence.png"))
+    ]
     monkeypatch.setattr(capture, "replay_case", lambda case, **kw: calls.__setitem__("replay", calls["replay"] + 1) or case)
-    monkeypatch.setattr(capture, "capture_case", lambda case, out_dir: calls.__setitem__("capture", calls["capture"] + 1) or [])
+    monkeypatch.setattr(
+        capture,
+        "capture_case",
+        lambda case, out_dir: calls.__setitem__("capture", calls["capture"] + 1) or fresh_artifacts,
+    )
 
     artifacts = capture.capture_finding(_FINDING, tmp_path, data_dir=tmp_path, **_CONTEXT_KWARGS)
 
-    assert calls == {"replay": 0, "capture": 0}
-    assert artifacts == cached_artifacts
+    # No live re-upload — but the screenshot capture step still runs fresh.
+    assert calls == {"replay": 0, "capture": 1}
+    assert artifacts == [{"kind": "attack_evidence", "path": str(output_dir / "05_attack_evidence.png")}]
+
+
+def test_capture_finding_recaptures_every_call_without_repeated_reupload(tmp_path, monkeypatch):
+    """Simulates two diagnosis runs finding the same vulnerability back to
+    back: the live upload should happen once, but each run must still
+    produce (overwrite) its own screenshot."""
+    capture = _load_capture()
+
+    calls = {"replay": 0, "capture": 0}
+
+    def fake_replay(case, **kw):
+        calls["replay"] += 1
+        return replace(
+            case,
+            baseline=capture.HttpExchange(method="POST", url="http://x", status_code=415),
+            attack=capture.HttpExchange(method="POST", url="http://x", status_code=201),
+            metadata={**case.metadata, "replay": {"performed": True, "technique": "direct_extension", "attack_filename": "argus-shell.php"}},
+        )
+
+    def fake_capture_case(case, out_dir):
+        calls["capture"] += 1
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return [
+            sys.modules["models"].CaptureArtifact(
+                kind="attack_evidence", path=str(out_dir / "05_attack_evidence.png")
+            )
+        ]
+
+    monkeypatch.setattr(capture, "replay_case", fake_replay)
+    monkeypatch.setattr(capture, "capture_case", fake_capture_case)
+
+    capture.capture_finding(_FINDING, tmp_path, data_dir=tmp_path, **_CONTEXT_KWARGS)
+    capture.capture_finding(_FINDING, tmp_path, data_dir=tmp_path, **_CONTEXT_KWARGS)
+
+    assert calls == {"replay": 1, "capture": 2}
 
 
 def test_capture_finding_force_replay_bypasses_cache(tmp_path, monkeypatch):

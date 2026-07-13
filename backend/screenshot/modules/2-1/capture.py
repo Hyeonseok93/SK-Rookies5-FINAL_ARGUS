@@ -13,6 +13,7 @@ import os
 import shutil
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -155,12 +156,29 @@ def _safe_exchange(exchange: HttpExchange) -> dict[str, Any]:
     }
 
 
-def _cached_artifacts(output_dir: Path) -> list[dict[str, str]] | None:
-    """Return artifacts from a prior capture for this exact finding, if any.
+def _exchange_from_cache(data: dict[str, Any]) -> HttpExchange:
+    url = str(data.get("url") or "")
+    return HttpExchange(
+        method=str(data.get("method") or "POST"),
+        url=url,
+        display_url=url,
+        request_headers=dict(data.get("request_headers") or {}),
+        request_body=str(data.get("request_body") or ""),
+        status_code=data.get("status_code"),
+        response_headers=dict(data.get("response_headers") or {}),
+        response_body=str(data.get("response_body") or ""),
+        elapsed_ms=data.get("elapsed_ms"),
+    )
+
+
+def _cached_case(output_dir: Path, case: EvidenceCase) -> EvidenceCase | None:
+    """Reuse a prior capture's request/response for this exact finding, if any.
 
     ``finding_id`` is a stable hash of (method, path, extension, technique,
     reason), so a hit here means the same vulnerability was already replayed
-    and captured — skip re-uploading the live malicious payload again.
+    once before — skip re-uploading the live malicious payload again, but
+    still let the caller re-render a fresh screenshot from this data so the
+    evidence image reflects the current diagnosis run rather than going stale.
     """
     manifest_path = output_dir / "manifest.json"
     if not manifest_path.is_file():
@@ -169,12 +187,24 @@ def _cached_artifacts(output_dir: Path) -> list[dict[str, str]] | None:
         cached = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not cached.get("metadata", {}).get("replay", {}).get("performed"):
+    metadata = cached.get("metadata")
+    baseline = cached.get("baseline")
+    attack = cached.get("attack")
+    if not (
+        isinstance(metadata, dict)
+        and isinstance(baseline, dict)
+        and isinstance(attack, dict)
+        and metadata.get("replay", {}).get("performed")
+    ):
         return None
-    artifacts = cached.get("artifacts")
-    if not isinstance(artifacts, list):
-        return None
-    return artifacts
+    return replace(
+        case,
+        baseline=_exchange_from_cache(baseline),
+        attack=_exchange_from_cache(attack),
+        payload=str(metadata.get("replay", {}).get("attack_filename") or case.payload),
+        verification_type=str(metadata.get("replay", {}).get("technique") or case.verification_type),
+        metadata=dict(metadata),
+    )
 
 
 def capture_finding(
@@ -200,12 +230,13 @@ def capture_finding(
         password_field=password_field,
     )
     output_dir = output_root / case.finding_id
-    if perform_replay and not force_replay:
-        cached = _cached_artifacts(output_dir)
-        if cached is not None:
-            return cached
     if perform_replay:
-        case = replay_case(case, raw_config=raw_config, data_dir=data_dir)
+        cached_case = None if force_replay else _cached_case(output_dir, case)
+        case = (
+            cached_case
+            if cached_case is not None
+            else replay_case(case, raw_config=raw_config, data_dir=data_dir)
+        )
     artifacts = capture_case(case, output_dir)
 
     manifest = {
