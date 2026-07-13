@@ -150,6 +150,8 @@ def _finding_images(
 
 
 def _csrf_block(evidence: dict[str, Any]) -> str:
+    if not _is_csrf_evidence(evidence):
+        return ""
     csrf = evidence.get("csrf_defenses")
     if not isinstance(csrf, dict):
         return ""
@@ -164,6 +166,11 @@ def _csrf_block(evidence: dict[str, Any]) -> str:
     """
 
 
+def _is_csrf_evidence(evidence: dict[str, Any]) -> bool:
+    label = f"{evidence.get('vuln_type') or ''} {evidence.get('alert') or ''}"
+    return "csrf" in label.lower()
+
+
 def _load_sk_shieldus_guide() -> str:
     if not SK_SHIELDUS_G11_GUIDE.is_file():
         return ""
@@ -171,8 +178,7 @@ def _load_sk_shieldus_guide() -> str:
 
 
 def _guide_for_finding(evidence: dict[str, Any]) -> str:
-    vuln_type = str(evidence.get("vuln_type") or evidence.get("alert") or "").lower()
-    if "csrf" in vuln_type:
+    if _is_csrf_evidence(evidence):
         return CSRF_GUIDE
     return (
         _load_sk_shieldus_guide()
