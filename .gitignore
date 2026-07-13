@@ -22,6 +22,20 @@ env/
 *.log
 logs/
 
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Root-level debug dumps (manual tee / scratch; never commit)
+/backend_logs.txt
+/diag_log.txt
+/log.txt
+/g21_log.txt
+/old_g21.txt
+/diag_bug.txt
+/start_dialog_history.txt
+/fix.py
+
 # Local documentation (not committed)
 docs/
 
