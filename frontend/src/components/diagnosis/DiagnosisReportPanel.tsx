@@ -394,10 +394,18 @@ type FindingSummary = {
 type G11Artifact = {
   kind: string;
   path: string;
+  occurrenceIndex?: number;
+  occurrenceUrl?: string;
+  occurrenceParam?: string;
 };
 
 type G11CaptureResult = {
   finding_id?: string;
+  parent_finding_id?: string;
+  occurrence_index?: number;
+  url?: string;
+  param?: string;
+  payload?: string;
   ok?: boolean;
   artifacts?: G11Artifact[];
   error?: string;
@@ -454,6 +462,18 @@ function g11CaptureResults(findings: FindingSummary[]) {
 
 function g11ArtifactsForFinding(finding: FindingSummary, results: G11CaptureResult[]) {
   const prefix = g11FindingIdPrefix(finding);
+  const childRows = results.filter((item) => String(item.parent_finding_id ?? "").startsWith(prefix));
+  if (childRows.length > 0) {
+    return {
+      result: childRows.find((item) => item.ok === false) ?? childRows[0],
+      images: childRows.flatMap((row) =>
+        (row.artifacts ?? [])
+          .filter((item) => /\.(png|jpe?g|webp)$/i.test(item.path))
+          .map((item) => ({ ...item, occurrenceIndex: row.occurrence_index, occurrenceUrl: row.url, occurrenceParam: row.param }))
+      ),
+    };
+  }
+
   const row = results.find((item) => String(item.finding_id ?? "").startsWith(prefix));
   return {
     result: row,
@@ -478,6 +498,40 @@ function G11DetailBlock({ title, value }: { title: string; value: unknown }) {
   );
 }
 
+function G11CsrfOccurrenceTable({ occurrences }: { occurrences: unknown }) {
+  if (!Array.isArray(occurrences) || occurrences.length === 0) return null;
+
+  return (
+    <div className="mt-3 overflow-x-auto rounded border border-cyber-border/30">
+      <table className="min-w-full text-left text-[11px]">
+        <thead className="bg-cyber-bg/60 text-cyber-muted">
+          <tr>
+            <th className="px-2 py-1.5 font-medium">Method</th>
+            <th className="px-2 py-1.5 font-medium">URL</th>
+            <th className="px-2 py-1.5 font-medium">Param</th>
+            <th className="px-2 py-1.5 font-medium">Payload</th>
+            <th className="px-2 py-1.5 font-medium">HTTP</th>
+          </tr>
+        </thead>
+        <tbody>
+          {occurrences.map((item, index) => {
+            const row = (item ?? {}) as Record<string, unknown>;
+            return (
+              <tr key={`${textValue(row.method)}-${textValue(row.url)}-${textValue(row.param)}-${index}`} className="border-t border-cyber-border/20">
+                <td className="whitespace-nowrap px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.method)}</td>
+                <td className="min-w-56 break-all px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.url)}</td>
+                <td className="break-all px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.param)}</td>
+                <td className="max-w-72 break-all px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.attack)}</td>
+                <td className="whitespace-nowrap px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.status_code)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function G11FindingCard({
   finding,
   results,
@@ -490,6 +544,7 @@ function G11FindingCard({
   const { result, images } = g11ArtifactsForFinding(finding, results);
   const isCsrf = String(ev.vuln_type ?? "").toLowerCase().includes("csrf");
   const csrf = ev.csrf_defenses as Record<string, unknown> | undefined;
+  const csrfOccurrences = ev.csrf_occurrences;
 
   return (
     <li className="rounded border border-cyber-border/35 bg-cyber-panel/25 p-3">
@@ -514,6 +569,7 @@ function G11FindingCard({
             <dt className="text-cyber-muted">페이로드</dt>
             <dd className="break-all font-mono text-cyan-200/85">{textValue(ev.attack)}</dd>
           </dl>
+          {isCsrf ? <G11CsrfOccurrenceTable occurrences={csrfOccurrences} /> : null}
         </div>
         <button
           type="button"
