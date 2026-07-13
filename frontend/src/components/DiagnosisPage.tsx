@@ -42,6 +42,12 @@ import {
   type G15DiagnosisOptions,
 } from "../lib/g15DiagnosisOptions";
 import {
+  DEFAULT_G21_OPTIONS,
+  g21OptionsSummary,
+  g21OptionsToPayload,
+  type G21DiagnosisOptions,
+} from "../lib/g21DiagnosisOptions";
+import {
   DEFAULT_G41_OPTIONS,
   g41OptionsSummary,
   g41OptionsToPayload,
@@ -378,14 +384,12 @@ export function DiagnosisPage() {
         setRunningSummary(g12OptionsSummary(options as G12DiagnosisOptions));
       } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
         setRunningSummary(g15OptionsSummary(options as G15DiagnosisOptions));
-      } else if (sectionId === "2-1" && options && "sellerEmail" in options) {
+      } else if (sectionId === "2-1" && options && "maxTargets" in options) {
         setRunningSummary(g21OptionsSummary(options as G21DiagnosisOptions));
       } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
         setRunningSummary(g41OptionsSummary(options as G41DiagnosisOptions));
       } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
         setRunningSummary(g42OptionsSummary(options as G42DiagnosisOptions));
-      } else if (sectionId === "2-1" && options && "maxTargets" in options) {
-        setRunningSummary(g21OptionsSummary(options as G21DiagnosisOptions));
       } else if (sectionId === "2-2" && options && "useHttpx" in options) {
         setRunningSummary(g22OptionsSummary(options as G22DiagnosisOptions));
       } else if (sectionId === "7-1" && options && "strictRisky" in options) {
@@ -422,14 +426,12 @@ export function DiagnosisPage() {
           body = g12OptionsToPayload(options as G12DiagnosisOptions);
         } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
           body = g15OptionsToPayload(options as G15DiagnosisOptions);
-        } else if (sectionId === "2-1" && options && "sellerEmail" in options) {
+        } else if (sectionId === "2-1" && options && "maxTargets" in options) {
           body = g21OptionsToPayload(options as G21DiagnosisOptions);
         } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
           body = g41OptionsToPayload(options as G41DiagnosisOptions);
         } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
           body = g42OptionsToPayload(options as G42DiagnosisOptions);
-        } else if (sectionId === "2-1" && options && "maxTargets" in options) {
-          body = g21OptionsToPayload(options as G21DiagnosisOptions);
         } else if (sectionId === "2-2" && options && "useHttpx" in options) {
           body = g22OptionsToPayload(options as G22DiagnosisOptions);
         } else if (sectionId === "7-1" && options && "strictRisky" in options) {
@@ -495,10 +497,6 @@ export function DiagnosisPage() {
       }
       if (sectionId === "4-2") {
         setG42DialogOpen(true);
-        return;
-      }
-      if (sectionId === "2-1") {
-        setG21DialogOpen(true);
         return;
       }
       if (sectionId === "2-2") {
@@ -979,12 +977,6 @@ export function DiagnosisPage() {
         initialOptions={g42Options}
         onClose={() => setG42DialogOpen(false)}
         onStart={handleG42Start}
-      />
-      <G21DiagnosisStartDialog
-        open={g21DialogOpen && !runningId}
-        initialOptions={g21Options}
-        onClose={() => setG21DialogOpen(false)}
-        onStart={handleG21Start}
       />
       <G22DiagnosisStartDialog
         open={g22DialogOpen && !runningId}
