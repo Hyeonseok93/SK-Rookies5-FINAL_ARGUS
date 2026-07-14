@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { AlertTriangle, ChevronDown, Terminal, Copy, Download } from "lucide-react";
+import { ChevronDown, Terminal, Copy, AlertTriangle, Download } from "lucide-react";
 import { diagnosisReportPdfUrl } from "../../lib/api";
 import type { DiagnosisSectionReport } from "../../types";
 import { G15FindingsPanel } from "./G15FindingsPanel";
+import { G16FindingsPanel } from "./G16FindingsPanel";
 import { G22FindingsPanel } from "./G22FindingsPanel";
 import { G32FindingsPanel } from "./G32FindingsPanel";
 import { G34FindingsPanel } from "./G34FindingsPanel";
@@ -46,7 +47,45 @@ export function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
-function FindingEvidence({
+
+const SEVERITY_STATUS_STYLES: Record<string, string> = {
+  high: "border-rose-400/50 bg-rose-500/10 text-rose-300",
+  medium: "border-amber-400/50 bg-amber-500/10 text-amber-300",
+  low: "border-sky-400/50 bg-sky-500/10 text-sky-300",
+};
+
+const SEVERITY_RANK: Record<string, number> = { high: 3, medium: 2, low: 1, info: 0 };
+
+// Sections that report a fail/warn status but should surface it as a
+// severity-graded badge (HIGH/MEDIUM/LOW) instead of the raw FAIL/WARN label.
+const SEVERITY_STATUS_SECTIONS = new Set(["3-2", "4-4", "5-2"]);
+
+function highestFindingSeverity(
+  findings: { severity: string }[],
+): "high" | "medium" | "low" | null {
+  let best: string | null = null;
+  let bestRank = 0;
+  for (const f of findings) {
+    const sev = (f.severity ?? "").toLowerCase();
+    const rank = SEVERITY_RANK[sev] ?? 0;
+    if (rank > bestRank) {
+      bestRank = rank;
+      best = sev;
+    }
+  }
+  if (best === "high" || best === "medium" || best === "low") return best;
+  return null;
+}
+
+function SeverityStatusBadge({ severity }: { severity: string }) {
+  const cls = SEVERITY_STATUS_STYLES[severity] ?? STATUS_STYLES.fail;
+  return (
+    <span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase ${cls}`}>
+      {severity}
+    </span>
+  );
+}
+export function FindingEvidence({
   evidence,
   sectionId,
 }: {
@@ -385,6 +424,273 @@ function FindingListItem({
   );
 }
 
+type FindingSummary = {
+  severity: string;
+  message: string;
+  evidence?: Record<string, unknown>;
+};
+
+type G11Artifact = {
+  kind: string;
+  path: string;
+  occurrenceIndex?: number;
+  occurrenceUrl?: string;
+  occurrenceParam?: string;
+};
+
+type G11CaptureResult = {
+  finding_id?: string;
+  parent_finding_id?: string;
+  occurrence_index?: number;
+  url?: string;
+  param?: string;
+  payload?: string;
+  ok?: boolean;
+  artifacts?: G11Artifact[];
+  error?: string;
+};
+
+function textValue(value: unknown, fallback = "-") {
+  if (value === undefined || value === null || value === "") return fallback;
+  return String(value);
+}
+
+const G11_XSS_MANUAL_VERIFICATION_NOTE =
+  "Stored XSS 자동 진단은 페이로드 저장 및 재조회 응답을 기준으로 취약 가능성을 판단합니다. 다만 프론트엔드 렌더링 방식, HTML escaping/sanitizing 처리, CSP 정책, 사용자 권한에 따라 실제 스크립트 실행 여부가 달라질 수 있으므로 수동 진단이 필요합니다. 브라우저에서 해당 URL을 열어 저장된 값이 DOM에 반영되는지, alert 등 스크립트가 실제 실행되는지, 다른 사용자 계정에서도 노출되는지 확인하세요.";
+
+const G11_CSRF_MANUAL_VERIFICATION_NOTE =
+  "CSRF 자동 진단은 Origin/Referer 제거 또는 변조, CSRF Token 누락, SameSite Cookie 미흡 조건에서 상태 변경 요청이 수락되는지를 기준으로 취약 가능성을 판단합니다. 다만 인증 방식, 세션 쿠키의 SameSite 설정, CORS preflight 발생 여부, 요청 Content-Type에 따라 실제 악용 가능성이 달라질 수 있으므로 수동 진단이 필요합니다. Burp Suite Repeater 또는 CSRF PoC로 피해자 로그인 세션에서 동일 요청이 성공하는지 확인하세요.";
+
+const G11_CSRF_REMEDIATION_GUIDE =
+  "1. 상태 변경 요청에는 예측 불가능한 CSRF Token을 발급하고 서버에서 매 요청마다 검증합니다.\n" +
+  "2. POST, PUT, PATCH, DELETE 등 상태 변경 API는 Origin 또는 Referer를 검증하고, 허용되지 않은 도메인이나 누락된 헤더 요청을 차단합니다.\n" +
+  "3. 세션 쿠키에는 SameSite=Lax 또는 SameSite=Strict를 설정하고, Secure와 HttpOnly 옵션을 함께 적용합니다.\n" +
+  "4. Access-Control-Allow-Credentials: true를 사용하는 경우 Access-Control-Allow-Origin: *를 사용하지 말고 허용 Origin을 명시합니다.\n" +
+  "5. 비밀번호 변경, 결제, 예약, 권한 변경 등 민감 기능은 CSRF Token 외에도 재인증, OTP, 확인 팝업 같은 추가 확인 절차를 둡니다.\n" +
+  "6. GET 요청은 조회 용도로만 사용하고, 상태 변경은 명확한 상태 변경 메서드로 처리한 뒤 CSRF 방어를 적용합니다.";
+
+function slugG11Part(value: string) {
+  const slug = String(value || "")
+    .trim()
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "x";
+}
+
+function g11FindingIdPrefix(finding: FindingSummary) {
+  const ev = finding.evidence ?? {};
+  const vulnType = textValue(ev.vuln_type, "").trim();
+  const method = textValue(ev.method, "GET").toUpperCase();
+  const url = textValue(ev.url, "/").replace(/\/+$/, "") || "/";
+  let path = "root";
+  try {
+    path = new URL(url).pathname.replace(/^\/+|\/+$/g, "") || "root";
+  } catch {
+    path = url.replace(/^https?:\/\/[^/]+/i, "").replace(/^\/+|\/+$/g, "") || "root";
+  }
+  const param = textValue(ev.param, "").toLowerCase();
+  const role = textValue(ev.account_role, "").trim().toUpperCase();
+  const parts = [vulnType, method, path, param];
+  if (role) parts.push(role);
+  return `1-1_${parts.map(slugG11Part).join("_")}_`;
+}
+
+function g11EvidenceUrl(path: string) {
+  const marker = "/evidence/";
+  const idx = path.indexOf(marker);
+  const relative = idx >= 0 ? path.slice(idx + marker.length) : path;
+  return `/api/diagnosis/modules/1-1/evidence/${relative
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")}`;
+}
+
+function g11CaptureResults(findings: FindingSummary[]) {
+  const captureFinding = findings.find((f) => f.evidence?.screenshot_capture);
+  const capture = captureFinding?.evidence?.screenshot_capture as Record<string, unknown> | undefined;
+  const summary = capture?.capture_summary as Record<string, unknown> | undefined;
+  const results = summary?.results;
+  return Array.isArray(results) ? (results as G11CaptureResult[]) : [];
+}
+
+function g11ArtifactsForFinding(finding: FindingSummary, results: G11CaptureResult[]) {
+  const prefix = g11FindingIdPrefix(finding);
+  const childRows = results.filter((item) => String(item.parent_finding_id ?? "").startsWith(prefix));
+  if (childRows.length > 0) {
+    return {
+      result: childRows.find((item) => item.ok === false) ?? childRows[0],
+      images: childRows.flatMap((row) =>
+        (row.artifacts ?? [])
+          .filter((item) => /\.(png|jpe?g|webp)$/i.test(item.path))
+          .map((item) => ({ ...item, occurrenceIndex: row.occurrence_index, occurrenceUrl: row.url, occurrenceParam: row.param }))
+      ),
+    };
+  }
+
+  const row = results.find((item) => String(item.finding_id ?? "").startsWith(prefix));
+  return {
+    result: row,
+    images: (row?.artifacts ?? []).filter((item) => /\.(png|jpe?g|webp)$/i.test(item.path)),
+  };
+}
+
+function g11VulnerabilityTitle(finding: FindingSummary) {
+  const ev = finding.evidence ?? {};
+  return textValue(ev.vuln_type, finding.message || "취약점");
+}
+
+function G11DetailBlock({ title, value }: { title: string; value: unknown }) {
+  if (value === undefined || value === null || value === "") return null;
+  return (
+    <div>
+      <div className="mb-1 text-[10px] font-medium text-cyber-muted">{title}</div>
+      <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded border border-cyber-border/30 bg-black/25 p-2 font-mono text-[10px] leading-relaxed text-cyan-100/80">
+        {String(value)}
+      </pre>
+    </div>
+  );
+}
+
+function G11CsrfOccurrenceTable({ occurrences }: { occurrences: unknown }) {
+  if (!Array.isArray(occurrences) || occurrences.length === 0) return null;
+
+  return (
+    <div className="mt-3 overflow-x-auto rounded border border-cyber-border/30">
+      <table className="min-w-full text-left text-[11px]">
+        <thead className="bg-cyber-bg/60 text-cyber-muted">
+          <tr>
+            <th className="px-2 py-1.5 font-medium">Method</th>
+            <th className="px-2 py-1.5 font-medium">URL</th>
+            <th className="px-2 py-1.5 font-medium">Param</th>
+            <th className="px-2 py-1.5 font-medium">Payload</th>
+            <th className="px-2 py-1.5 font-medium">HTTP</th>
+          </tr>
+        </thead>
+        <tbody>
+          {occurrences.map((item, index) => {
+            const row = (item ?? {}) as Record<string, unknown>;
+            return (
+              <tr key={`${textValue(row.method)}-${textValue(row.url)}-${textValue(row.param)}-${index}`} className="border-t border-cyber-border/20">
+                <td className="whitespace-nowrap px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.method)}</td>
+                <td className="min-w-56 break-all px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.url)}</td>
+                <td className="break-all px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.param)}</td>
+                <td className="max-w-72 break-all px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.attack)}</td>
+                <td className="whitespace-nowrap px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.status_code)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function G11FindingCard({
+  finding,
+  results,
+}: {
+  finding: FindingSummary;
+  results: G11CaptureResult[];
+}) {
+  const [open, setOpen] = useState(false);
+  const ev = finding.evidence ?? {};
+  const { result, images } = g11ArtifactsForFinding(finding, results);
+  const isCsrf = String(ev.vuln_type ?? "").toLowerCase().includes("csrf");
+  const csrf = ev.csrf_defenses as Record<string, unknown> | undefined;
+  const csrfOccurrences = ev.csrf_occurrences;
+  const remediationGuide = isCsrf ? G11_CSRF_REMEDIATION_GUIDE : ev.remediation_guide ?? ev.remediation_summary;
+  const manualVerificationNote = isCsrf ? G11_CSRF_MANUAL_VERIFICATION_NOTE : G11_XSS_MANUAL_VERIFICATION_NOTE;
+
+  return (
+    <li className="rounded border border-cyber-border/35 bg-cyber-panel/25 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className={`font-mono text-[10px] uppercase ${SEVERITY_STYLES[finding.severity] ?? SEVERITY_STYLES.info}`}>
+              {finding.severity}
+            </span>
+            <span className="text-sm font-semibold text-white">{g11VulnerabilityTitle(finding)}</span>
+            {ev.validation_status ? (
+              <span className="rounded border border-cyber-border/40 px-1.5 py-0.5 text-[10px] text-cyber-muted">
+                {String(ev.validation_status)}
+              </span>
+            ) : null}
+          </div>
+          <dl className="grid gap-1 text-[11px] sm:grid-cols-[5rem_1fr]">
+            <dt className="text-cyber-muted">URL</dt>
+            <dd className="break-all font-mono text-cyan-200/85">{textValue(ev.url)}</dd>
+            <dt className="text-cyber-muted">파라미터</dt>
+            <dd className="break-all font-mono text-cyan-200/85">{textValue(ev.param)}</dd>
+            <dt className="text-cyber-muted">페이로드</dt>
+            <dd className="break-all font-mono text-cyan-200/85">{textValue(ev.attack)}</dd>
+          </dl>
+          {isCsrf ? <G11CsrfOccurrenceTable occurrences={csrfOccurrences} /> : null}
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="shrink-0 rounded border border-cyber-border/50 px-2 py-1 text-[11px] text-cyber-muted transition hover:border-cyan-400/50 hover:text-cyan-200"
+        >
+          상세보기
+        </button>
+      </div>
+
+      {images.length > 0 ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {images.map((image) => (
+            <figure key={`${image.kind}-${image.path}`} className="overflow-hidden rounded border border-cyber-border/30 bg-black/20">
+              <img src={g11EvidenceUrl(image.path)} alt={`${g11VulnerabilityTitle(finding)} ${image.kind} evidence`} className="w-full object-contain" loading="lazy" />
+              <figcaption className="border-t border-cyber-border/25 px-2 py-1 text-[10px] text-cyber-muted">
+                {image.kind === "site" ? "실제 화면 증거" : "요청/응답 증거"}
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      ) : null}
+
+      {open ? (
+        <div className="mt-3 space-y-3 border-t border-cyber-border/30 pt-3">
+          {result && result.ok === false ? (
+            <p className="text-[11px] text-amber-200/90">증거 캡처 실패: {textValue(result.error)}</p>
+          ) : null}
+          {isCsrf && csrf ? (
+            <div className="grid gap-1 rounded border border-cyber-border/30 bg-black/15 p-2 text-[11px] sm:grid-cols-2">
+              <span className="text-cyber-muted">Origin/Referer 우회: {String(Boolean(csrf.origin_referer_bypass))}</span>
+              <span className="text-cyber-muted">CSRF token 부재: {String(Boolean(csrf.csrf_token_absent))}</span>
+              <span className="text-cyber-muted">SameSite 미흡: {String(Boolean(csrf.unsafe_samesite))}</span>
+              <span className="text-cyber-muted">실패 방어 수: {textValue(csrf.failed_count)}</span>
+            </div>
+          ) : null}
+          <G11DetailBlock title="판정 근거" value={ev.validation_reason ?? ev.description} />
+          <G11DetailBlock title="수동 진단 필요" value={manualVerificationNote} />
+          <G11DetailBlock title="조치 가이드" value={remediationGuide} />
+          <G11DetailBlock title="원인" value={ev.remediation_cause} />
+          <G11DetailBlock title="예시 코드" value={ev.remediation_code} />
+          <G11DetailBlock title="Evidence Request" value={ev.evidence_request} />
+          <G11DetailBlock title="Evidence Response" value={ev.evidence_response} />
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+function G11FindingsPanel({ findings }: { findings: FindingSummary[] }) {
+  const captureResults = g11CaptureResults(findings);
+  const visibleFindings = findings.filter((f) => !f.evidence?.screenshot_capture);
+
+  if (visibleFindings.length === 0) {
+    return <p className="text-xs text-cyber-muted">finding 없음</p>;
+  }
+
+  return (
+    <ul className="space-y-3">
+      {visibleFindings.map((finding, index) => (
+        <G11FindingCard key={`${finding.message}-${index}`} finding={finding} results={captureResults} />
+      ))}
+    </ul>
+  );
+}
+
 function findingBucket(f: {
   severity: string;
   evidence?: Record<string, unknown>;
@@ -477,8 +783,10 @@ function CollapsibleFindingsSection({
 /** 오탐 후보(baseline 업로드 거부) 전용 섹션 */
 function FpCandidateSection({
   findings,
+  sectionId,
 }: {
   findings: { severity: string; message: string; evidence?: Record<string, unknown> }[];
+  sectionId: string;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -499,7 +807,7 @@ function FpCandidateSection({
       {open ? (
         <ul className="space-y-2 border-t border-amber-500/20 px-3 py-2">
           {findings.map((f, i) => (
-            <FindingListItem key={`fpc-${i}`} f={f} sectionId="2-1" />
+            <FindingListItem key={`fpc-${i}`} f={f} sectionId={sectionId} />
           ))}
         </ul>
       ) : null}
@@ -578,8 +886,10 @@ const ROLE_LABELS: Record<string, string> = {
 
 function GroupedG21FindingsPanel({
   findings,
+  sectionId,
 }: {
   findings: { severity: string; message: string; evidence?: Record<string, unknown> }[];
+  sectionId: string;
 }) {
   if (findings.length === 0) {
     return <p className="text-xs text-cyber-muted">finding 없음</p>;
@@ -607,7 +917,7 @@ function GroupedG21FindingsPanel({
     <>
       {/* 오탐 후보 섹션 — 엔드포인트 설정을 먼저 검증해야 함을 강조 */}
       {fpCandidates.length > 0 ? (
-        <FpCandidateSection findings={fpCandidates} />
+        <FpCandidateSection findings={fpCandidates} sectionId={sectionId} />
       ) : null}
 
       {/* 정탐 섹션 — 역할별 그룹 */}
@@ -624,7 +934,7 @@ function GroupedG21FindingsPanel({
             count={roleFindings.length}
             defaultOpen
             findings={roleFindings}
-            sectionId="2-1"
+            sectionId={sectionId}
           />
         );
       })}
@@ -638,7 +948,7 @@ function GroupedG21FindingsPanel({
             count={items.length}
             defaultOpen={false}
             findings={items}
-            sectionId="2-1"
+            sectionId={sectionId}
           />
         ))}
     </>
@@ -698,9 +1008,12 @@ function GroupedFindingsPanel({
     return <p className="text-xs text-cyber-muted">finding 없음</p>;
   }
 
+  if (sectionId === "1-1") {
+    return <G11FindingsPanel findings={findings} />;
+  }
 
   if (sectionId === "2-1") {
-    return <GroupedG21FindingsPanel findings={findings} />;
+    return <GroupedG21FindingsPanel findings={findings} sectionId={sectionId} />;
   }
 
   if (sectionId === "1-2") {
@@ -877,6 +1190,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const statsMessages = new Set([
     "1-2 scan statistics",
     "1-5 scan statistics",
+    "1-6 scan statistics",
     "2-1 scan statistics",
     "4-1 scan statistics",
     "4-2 scan statistics",
@@ -898,6 +1212,7 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const stats = statsFinding?.evidence?.stats as Record<string, unknown> | undefined;
   const isG12Stats = statsFinding?.message === "1-2 scan statistics";
   const isG15Stats = statsFinding?.message === "1-5 scan statistics";
+  const isG16Stats = statsFinding?.message === "1-6 scan statistics";
   const isG21Stats = statsFinding?.message === "2-1 scan statistics";
   const isG41Stats = statsFinding?.message === "4-1 scan statistics";
   const isG42Stats = statsFinding?.message === "4-2 scan statistics";
@@ -916,10 +1231,20 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const isG36Stats = statsFinding?.message === "3-6 scan statistics";
 
 
+  const severityStatus =
+    SEVERITY_STATUS_SECTIONS.has(report.section_id) &&
+    (report.status === "fail" || report.status === "warn")
+      ? highestFindingSeverity(findings)
+      : null;
+
   return (
     <div className="border-t border-cyber-border/40 bg-cyber-bg/30 px-4 py-3">
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <StatusBadge status={report.status} />
+        {severityStatus ? (
+          <SeverityStatusBadge severity={severityStatus} />
+        ) : (
+          <StatusBadge status={report.status} />
+        )}
         {report.checked_at ? (
           <span className="text-[10px] text-cyber-muted">{report.checked_at}</span>
         ) : null}
@@ -994,6 +1319,27 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
                   · CORS {(stats.cors as { issues?: number }).issues}
                 </span>
               ) : null}
+            </>
+          ) : null}
+          {isG16Stats ? (
+            <>
+              payload sources{" "}
+              <span className="font-mono text-cyan-300/90">
+                {Array.isArray(stats.payload_sources) ? stats.payload_sources.length : "—"}
+              </span>
+              {typeof stats.raw_findings_count === "number" ? (
+                <span> · raw findings {stats.raw_findings_count}</span>
+              ) : null}
+              {(() => {
+                const shots = stats.screenshots as
+                  | { enabled?: boolean; status?: string; stats?: { selected?: number; succeeded?: number } }
+                  | undefined;
+                if (!shots?.enabled) return <span className="text-amber-300/80"> · 스크린샷 비활성</span>;
+                if (shots.status === "error") return <span className="text-amber-300/80"> · 스크린샷 실패</span>;
+                const sel = shots.stats?.selected ?? 0;
+                const ok = shots.stats?.succeeded ?? 0;
+                return <span> · 스크린샷 {ok}/{sel}</span>;
+              })()}
             </>
           ) : null}
           {isG21Stats ? (
@@ -1572,7 +1918,11 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
         </div>
       ) : null}
 
-      {findings.length === 0 ? (
+      {report.section_id === "6-1" && report.g61_summary ? (
+        <G61FindingsPanel summary={report.g61_summary} status={report.status} />
+      ) : report.section_id === "1-6" ? (
+        <G16FindingsPanel findings={findings} status={report.status} />
+      ) : findings.length === 0 ? (
         <p className="text-xs text-cyber-muted">finding 없음</p>
       ) : report.section_id === "1-5" ? (
         <G15FindingsPanel findings={findings} />
@@ -1592,8 +1942,6 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
         <G45FindingsPanel findings={findings} />
       ) : report.section_id === "5-2" ? (
         <G52FindingsPanel findings={findings} stats={stats} />
-      ) : report.section_id === "6-1" && report.g61_summary ? (
-        <G61FindingsPanel summary={report.g61_summary} status={report.status} />
       ) : report.section_id === "6-2" ? (
         <G62FindingsPanel findings={findings} />
       ) : report.section_id === "7-1" ? (

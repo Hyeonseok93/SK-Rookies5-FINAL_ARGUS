@@ -49,9 +49,15 @@ def classify_unauth_page(
     }
     protected_marker = bool(PROTECTED_DATA_RE.search(anonymous.body[:500_000]))
 
-    # SPA 클라이언트측 가드: 공개 루트 셸과 동일 + 보호 데이터 마커 없음 → 서버 노출로 확정하지 않음
-    if kind == "frontend" and public_shell_sha256 and anon_fp["sha256"] == public_shell_sha256 and not protected_marker:
-        return "info", "client_side_guard_only", {**meta, "public_shell_identical": True}
+    # SPA 셸 가드: 익명 응답이 프론트 공개 루트 셸(index.html)과 바이트 동일하고 보호 데이터
+    # 마커도 없으면, 이는 SPA history fallback(존재하지 않는 경로에도 index.html을 200으로 반환)
+    # 이지 서버 측 노출이 아니다. 실제 API 데이터(JSON)는 셸과 절대 동일하지 않으므로 오탐만 걸러진다.
+    #   - 프론트 라우트: 클라이언트측 가드라는 사실을 info로 안내
+    #   - API 경로가 프론트 origin에서 셸로 떨어진 경우(타겟팅 잡음): 오탐이므로 finding 없음
+    if public_shell_sha256 and anon_fp["sha256"] == public_shell_sha256 and not protected_marker:
+        if kind == "frontend":
+            return "info", "client_side_guard_only", {**meta, "public_shell_identical": True}
+        return None
 
     # 공개 엔드포인트(로그인이 필요해야 한다는 긍정적 근거 없음) → 4-4 취약으로 보지 않음
     # 익명==인증 동일 응답은 오히려 '개인화·보호되지 않는 공개 자원'의 정상 특징

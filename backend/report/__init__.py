@@ -1,1 +1,1 @@
-"""Per-section report (PDF) rendering modules."""
+"""ARGUS diagnosis result report generators (PDF, etc.)."""

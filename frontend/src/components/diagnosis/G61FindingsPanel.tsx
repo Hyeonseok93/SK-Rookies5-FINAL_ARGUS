@@ -16,12 +16,6 @@ import {
   type G61SummaryGroup,
 } from "../../lib/g61ReportView";
 
-const SEVERITY_STYLES: Record<string, string> = {
-  high: "text-rose-300",
-  medium: "text-amber-300",
-  low: "text-sky-300",
-};
-
 const SEVERITY_BADGE: Record<string, string> = {
   high: "border-rose-400/40 bg-rose-500/15 text-rose-200",
   medium: "border-amber-400/40 bg-amber-500/15 text-amber-200",
@@ -47,13 +41,13 @@ function MatrixCell({ cell }: { cell?: { severity: string; count: number } }) {
 
 function G61Overview({ summary, status }: { summary: G61ReportSummary; status: string }) {
   const stats = summary.stats ?? {};
-  const k = summary.by_sk ?? {};
+  const sev = summary.by_severity ?? {};
   return (
     <div className="mb-3 rounded-lg border border-cyber-border/50 bg-cyber-bg/20 px-3 py-2.5">
       <p className="text-xs font-semibold text-white">{g61Headline(summary, status)}</p>
       <p className="mt-1 text-[10px] text-cyber-muted">
-        총 {summary.total_issues.toLocaleString()}건 · DBMS {(k.dbms ?? 0).toLocaleString()} · 익셉션{" "}
-        {(k.exception ?? 0).toLocaleString()} · HTTP/서버 {(k.http ?? 0).toLocaleString()}
+        총 {summary.total_issues.toLocaleString()}건 · 높음 {(sev.high ?? 0).toLocaleString()} · 중간{" "}
+        {(sev.medium ?? 0).toLocaleString()} · 낮음 {(sev.low ?? 0).toLocaleString()}
         {typeof stats.endpoints_probed === "number" ? (
           <> · API {String(stats.endpoints_probed)}개 · 요청 {String(stats.requests_sent ?? "—")}</>
         ) : null}
@@ -93,79 +87,6 @@ function G61SkMatrix({ summary }: { summary: G61ReportSummary }) {
                 </td>
               ))}
               <td className="px-3 py-1.5 text-right font-mono text-cyber-muted">{row.total.toLocaleString()}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function G61SummaryTable({ groups }: { groups: G61SummaryGroup[] }) {
-  if (groups.length === 0) {
-    return (
-      <div className="mb-3 rounded-lg border border-emerald-400/25 bg-emerald-500/5 px-3 py-2.5">
-        <p className="text-xs font-medium text-emerald-200/95">조치 필요 항목 없음</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="mb-3 overflow-x-auto rounded-lg border border-cyber-border/50 bg-cyber-bg/20">
-      <div className="border-b border-cyber-border/30 px-3 py-2">
-        <span className="text-xs font-semibold text-white">이슈 요약</span>
-        <p className="mt-0.5 text-[10px] text-cyber-muted">{groups.length}개 그룹</p>
-      </div>
-      <table className="w-full min-w-[44rem] table-fixed text-left text-[10px]">
-        <colgroup>
-          <col style={{ width: "12%" }} />
-          <col style={{ width: "10%" }} />
-          <col style={{ width: "10%" }} />
-          <col style={{ width: "22%" }} />
-          <col style={{ width: "10%" }} />
-          <col style={{ width: "8%" }} />
-          <col style={{ width: "8%" }} />
-          <col style={{ width: "6%" }} />
-        </colgroup>
-        <thead>
-          <tr className="border-b border-cyber-border/20 text-cyber-muted">
-            <th className="px-2 py-1.5 font-normal">SK 6-1</th>
-            <th className="px-2 py-1.5 font-normal">세부</th>
-            <th className="px-2 py-1.5 font-normal">Origin</th>
-            <th className="px-2 py-1.5 font-normal">문제</th>
-            <th className="px-2 py-1.5 font-normal">유발</th>
-            <th className="px-2 py-1.5 text-right font-normal">건수</th>
-            <th className="px-2 py-1.5 font-normal">Engine</th>
-            <th className="px-2 py-1.5 text-center font-normal">Sev</th>
-          </tr>
-        </thead>
-        <tbody>
-          {groups.map((g) => (
-            <tr key={g.group_key} className="border-b border-cyber-border/10 last:border-0">
-              <td className="px-2 py-1.5 align-middle text-cyan-300/90">
-                {SK_CLASS_LABELS[g.sk_class] ?? g.sk_label}
-              </td>
-              <td className="px-2 py-1.5 align-middle text-white/75">{g.category_label}</td>
-              <td className="truncate px-2 py-1.5 align-middle font-mono text-cyan-300/90">
-                {formatG61OriginLabel(g.origin)}
-              </td>
-              <td className="truncate px-2 py-1.5 align-middle text-white/90" title={g.rule_label}>
-                {g.rule_label}
-              </td>
-              <td className="truncate px-2 py-1.5 align-middle text-white/70">
-                {g.trigger_families[0] ? triggerFamilyLabel(g.trigger_families[0].family) : "—"}
-              </td>
-              <td className="px-2 py-1.5 text-right align-middle font-mono text-white/85">
-                {g.count.toLocaleString()}
-              </td>
-              <td className="px-2 py-1.5 align-middle text-cyber-muted">
-                {formatG61Engine(g.engine, g.engines)}
-              </td>
-              <td className="px-2 py-1.5 text-center align-middle">
-                <span className={`font-mono text-[9px] uppercase ${SEVERITY_STYLES[g.severity] ?? ""}`}>
-                  {severityLabelKo(g.severity)}
-                </span>
-              </td>
             </tr>
           ))}
         </tbody>
@@ -268,17 +189,20 @@ export function G61FindingsPanel({
   return (
     <>
       <G61Overview summary={summary} status={status} />
-      <G61SkMatrix summary={summary} />
-      <G61SummaryTable groups={groups} />
-      {groups.length > 0 ? (
-        <CollapsibleReportSection title="상세" defaultOpen={false}>
+      {groups.length === 0 ? (
+        <div className="rounded-lg border border-emerald-400/25 bg-emerald-500/5 px-3 py-2.5">
+          <p className="text-xs font-medium text-emerald-200/95">조치 필요 항목 없음</p>
+        </div>
+      ) : (
+        <CollapsibleReportSection title={`케이스별 결과 보기 (${groups.length}개 그룹)`} defaultOpen={false}>
+          <G61SkMatrix summary={summary} />
           <ul className="space-y-2">
             {groups.map((g) => (
               <G61DetailCard key={g.group_key} group={g} />
             ))}
           </ul>
         </CollapsibleReportSection>
-      ) : null}
+      )}
     </>
   );
 }

@@ -12,7 +12,7 @@ from typing import Any
 from app.config import BACKEND_ROOT
 from diagnosis.paths import section_evidence_dir, section_report_path
 
-_AUTO_CAPTURE_SECTIONS = frozenset({"1-2", "2-2", "6-1", "7-4"})
+_AUTO_CAPTURE_SECTIONS = frozenset({"1-2", "2-1", "2-2", "6-1", "7-4"})
 _CAPTURE_TIMEOUT_SECONDS = 300
 # 6-1 opens a real, visible browser window per capture (incl. login) instead of
 # the lighter-weight path the other sections use — give it more headroom.

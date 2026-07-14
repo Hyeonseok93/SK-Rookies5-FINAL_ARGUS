@@ -85,3 +85,9 @@ def test_url_list_query_pipe(tmp_path: Path):
     tree = load_txt_url_list_inventory(path, ["http://localhost:5173"])
     query = {p.name: p.sample for p in tree.endpoints[0].request_params if p.in_ == "query"}
     assert query == {"tab": "latest", "sort": "desc"}
+
+
+def test_relative_url_list_without_frontend_base_stays_unresolved(tmp_path: Path):
+    path = tmp_path / "url.txt"
+    path.write_text("/login\n", encoding="utf-8")
+    assert load_txt_url_list_inventory(path, []).endpoints == []

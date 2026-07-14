@@ -5,6 +5,7 @@ import re
 import uuid
 import json
 import yaml
+import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
@@ -32,7 +33,7 @@ from app.schemas import (
 )
 from app.services.auth_probe_service import account_access_for_endpoint
 from app.services.probe_report import filter_deduped_by_outcome, summarize_probe_results
-from app.services.base_urls_service import resolved_base_url_strings
+from app.services.base_urls_service import resolved_base_urls_by_kind
 from app.services.inventory_service import (
     build_inventory,
     compute_stats,
@@ -90,6 +91,22 @@ async def _save_upload(upload: UploadFile, dest: Path) -> None:
 def _ext_ok(filename: str, allowed: set[str]) -> bool:
     suffix = Path(filename or "").suffix.lower()
     return suffix in allowed
+
+
+def _invalidate_previous_target_artifacts() -> None:
+    """Remove data derived from the previous inventory, keeping user inputs."""
+    for name in ("api-tree-verified.json", "verify-report.json", "discover-progress.json"):
+        (DATA_DIR / name).unlink(missing_ok=True)
+
+    report_root = DATA_DIR / "report"
+    if report_root.is_dir():
+        for child in report_root.iterdir():
+            if child.name == ".gitignore":
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink(missing_ok=True)
 
 
 @router.get("/stats", response_model=InventoryStats)
@@ -507,20 +524,22 @@ async def build_attack_surface(
         )
 
     cfg = load_config()
-    saved_bases = resolved_base_url_strings()
-    if saved_bases:
-        build_bases = saved_bases
+    saved_api_bases, saved_frontend_bases = resolved_base_urls_by_kind()
+    if saved_api_bases or saved_frontend_bases:
+        api_bases = saved_api_bases
+        frontend_bases = saved_frontend_bases
     else:
         cfg_dict = cfg.model_dump()
         inv = cfg_dict.get("inventory") or {}
         md = inv.get("markdown") or {}
-        build_bases = []
+        frontend_bases = []
         if md.get("frontend_base_url"):
-            build_bases.append(str(md["frontend_base_url"]).rstrip("/"))
+            frontend_bases.append(str(md["frontend_base_url"]).rstrip("/"))
+        api_bases = []
         for t in cfg_dict.get("targets") or []:
             u = str(t.get("base_url", "")).rstrip("/")
-            if u and u not in build_bases:
-                build_bases.append(u)
+            if u and u not in api_bases:
+                api_bases.append(u)
 
     tree = build_inventory(
         cfg,
@@ -531,7 +550,8 @@ async def build_attack_surface(
         api_list_path=api_list_path,
         openapi_paths=openapi_paths,
         openapi_source_names=openapi_names,
-        base_urls=build_bases or None,
+        api_base_urls=api_bases,
+        frontend_base_urls=frontend_bases,
     )
 
     if not tree.endpoints and not gradle_dep_names:
@@ -541,6 +561,7 @@ async def build_attack_surface(
             message="No endpoints collected from uploaded files.",
         )
 
+    _invalidate_previous_target_artifacts()
     artifacts = persist_inventory(tree, DATA_DIR, openapi_paths)
     artifacts["upload_batch"] = f"uploads/{batch_id}"
     if openapi_paths:

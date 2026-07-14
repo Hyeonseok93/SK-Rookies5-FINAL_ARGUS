@@ -1,4 +1,4 @@
-app_name: onde-pilot
+app_name: ''
 targets:
 - name: target-1
   base_url: http://192.168.0.61
@@ -8,8 +8,8 @@ targets:
   base_url: http://192.168.0.61:8081
 inventory:
   markdown:
-    enabled: true
-    path: /workspace/2단계(정보 수집 및 자산 분석 - 엔드포인트 수집)_Onde_엔드포인트_구조_정의서_v2.md
+    enabled: false
+    path: ''
     include_frontend_routes: true
     frontend_base_url: http://localhost:5173
   openapi:
@@ -79,7 +79,7 @@ diagnosis_1_6:
   skip_spider: true
   skip_selenium: true
   timeout_sec: 36000
-  max_report_findings: 50
+  max_report_findings: 0
 diagnosis_4_1:
   probe_mode: sample
   sample_size: 40
@@ -137,11 +137,4 @@ diagnosis_4_2:
   probe_path: /api/v1/members/me
   relogin_enabled: true
   duplicate_login_enabled: true
-  duplicate_login_ip_enabled: true
-  probe_client_ips:
-  - 203.0.113.10
-  - 198.51.100.20
-  logout_enabled: true
-  logout_urls: []
-  client_logout_enabled: true
-  no_server_logout_finding: true
+  duplicate_login_ip_enabled: null

@@ -197,6 +197,7 @@ class SaveTestAccountsResponse(BaseModel):
 class BaseUrlEntry(BaseModel):
     id: str
     url: str = ""
+    kind: Literal["api", "frontend", "api-and-frontend"] = "api"
 
 
 class BaseUrlsResponse(BaseModel):
@@ -635,16 +636,6 @@ class DiagnosisG45RunOptions(BaseModel):
     max_endpoints: int | None = Field(default=None, ge=0, le=5000)
 
 
-class DiagnosisG21RunOptions(BaseModel):
-    """Per-run credentials for guideline 2-1 malicious file upload scan."""
-
-    seller_email: str = ""
-    seller_password: str = ""
-    user_email: str = ""
-    user_password: str = ""
-    timeout: float | None = Field(default=None, ge=3.0, le=60.0)
-
-
 class DiagnosisRunSectionRequest(BaseModel):
     g12: DiagnosisG12RunOptions | None = None
     g15: DiagnosisG15RunOptions | None = None
@@ -705,5 +696,4 @@ class ReplayRunSectionResponse(BaseModel):
     ok: bool
     section_id: str
     results: list[ReplayRunResultResponse] = Field(default_factory=list)
-
 

@@ -32,22 +32,26 @@ def build_inventory_from_dict(
     openapi_source_names: list[str] | None = None,
     json_url_list_path: Path | None = None,
     base_urls: list[str] | None = None,
+    api_base_urls: list[str] | None = None,
+    frontend_base_urls: list[str] | None = None,
 ) -> ApiTree:
     inv = cfg.get("inventory") or {}
     app_name = cfg.get("app_name", "")
     bases = base_urls if base_urls else _base_urls(cfg, inv)
+    api_bases = api_base_urls if api_base_urls is not None else bases
+    frontend_bases = frontend_base_urls if frontend_base_urls is not None else bases
     trees: list[ApiTree] = []
     missing: list[str] = []
 
     if url_list:
         if url_list_path and url_list_path.is_file():
-            trees.append(load_txt_url_list_inventory(url_list_path, bases))
+            trees.append(load_txt_url_list_inventory(url_list_path, frontend_bases))
         else:
             missing.append("url_list")
 
     if api_list:
         if api_list_path and api_list_path.is_file():
-            trees.append(load_txt_api_list_inventory(api_list_path, bases))
+            trees.append(load_txt_api_list_inventory(api_list_path, api_bases))
         else:
             missing.append("api_list")
 
@@ -68,7 +72,7 @@ def build_inventory_from_dict(
                 trees.append(
                     load_openapi_inventory(
                         path,
-                        bases,
+                        api_bases,
                         spec_base_url=spec_base,
                         source_tag=Path(original_name).stem if original_name else path.stem,
                     )
@@ -110,6 +114,8 @@ def build_inventory(
     openapi_source_names: list[str] | None = None,
     json_url_list_path: Path | None = None,
     base_urls: list[str] | None = None,
+    api_base_urls: list[str] | None = None,
+    frontend_base_urls: list[str] | None = None,
 ) -> ApiTree:
     return build_inventory_from_dict(
         config_to_inventory_dict(app_config),
@@ -123,6 +129,8 @@ def build_inventory(
         openapi_source_names=openapi_source_names,
         json_url_list_path=json_url_list_path,
         base_urls=base_urls,
+        api_base_urls=api_base_urls,
+        frontend_base_urls=frontend_base_urls,
     )
 
 

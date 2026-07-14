@@ -2,7 +2,6 @@
 api-tree.json
 api-tree-ready.json
 api-tree-verified.json
-api-tree-ready.json
 verify-report.json
 zap-inventory-bundle.json
 zap-requestor-seeds.json
@@ -13,3 +12,5 @@ uploads/
 test-accounts.json
 base-urls.json
 login-endpoints.json
+download-endpoints.json
+gradle_dep_files.json

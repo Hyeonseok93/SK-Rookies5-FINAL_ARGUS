@@ -248,16 +248,18 @@ def load_openapi_inventory(
     paths = spec.get("paths") or {}
     servers = spec.get("servers") or []
     spec_server = servers[0].get("url") if servers else None
-    fallback_base = spec_base_url or spec_server or "http://localhost"
-
-    # 대시보드/설정에서 받은 주소(base_urls)가 있으면 그걸 항상 우선한다. 스펙 파일
-    # 자체의 servers[].url은 스펙을 추출한 시점의 개발 환경 주소(흔히 localhost)일 뿐
-    # 실제 진단 대상 IP와 무관한 경우가 많다 — 이걸 최우선으로 두면 도커 환경에서
-    # localhost가 host.docker.internal로 치환되며 실제 타겟과 다른 죽은 엔드포인트가
-    # 인벤토리에 섞여 들어간다(2026-07-09 세션에서 이 문제로 XSS 탐지가 막혔던 사례).
-    # base_urls가 비어 있을 때만(입력이 아예 없는 부트스트랩 상황) 스펙/설정의 주소로
-    # 폴백한다.
-    bases = base_urls if base_urls else [str(fallback_base).rstrip("/")]
+    # A spec-owned absolute server is the most precise mapping. Otherwise use
+    # the API-role bases selected for this inventory build. Never invent a
+    # localhost fallback: an ambiguous target must remain unresolved.
+    spec_server_text = str(spec_server or "").strip()
+    if spec_server_text.startswith(("http://", "https://")):
+        bases = [spec_server_text.rstrip("/")]
+    elif base_urls:
+        bases = [str(base).rstrip("/") for base in base_urls]
+    elif spec_base_url:
+        bases = [str(spec_base_url).rstrip("/")]
+    else:
+        bases = []
     endpoints: list[Endpoint] = []
     source = f"openapi:{source_tag}" if source_tag else "openapi"
 

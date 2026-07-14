@@ -1,1 +1,1 @@
-"""Per-module report renderer folders (mirrors diagnosis/modules, screenshot/modules)."""
+"""Per-section report generators (directory names match diagnosis section ids)."""

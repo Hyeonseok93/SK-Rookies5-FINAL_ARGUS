@@ -28,7 +28,7 @@ class G11Module(DiagnosisModule):
     title = "XSS / CSRF attack surface"
     chapter = 1
     implemented = True
-    engine = "httpx+zap"
+    engine = "zap+custom"
 
     def __init__(self, module_dir: Path) -> None:
         self.module_dir = module_dir

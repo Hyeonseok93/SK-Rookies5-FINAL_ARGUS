@@ -267,7 +267,8 @@ def run_g16_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         raw_findings = refreshed_findings
         _relativize_screenshots(raw_findings, evidence_dir)
 
-    limit = max(0, int(cfg.get("max_report_findings", 50)))
+    # 0 = 무제한 (convert_findings는 limit이 falsy면 자르지 않음).
+    limit = max(0, int(cfg.get("max_report_findings", 0)))
     findings = convert_findings(raw_findings, limit)
     status = report_status(findings)
     message = (

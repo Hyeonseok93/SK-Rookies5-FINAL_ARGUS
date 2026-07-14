@@ -102,6 +102,40 @@ export function cancelDiagnosisRun(): Promise<{ ok: boolean; section_id: string 
   return request("/diagnosis/cancel", { method: "POST" });
 }
 
+/** 결과서(PDF) URL — 지원되는 섹션만 다운로드 버튼을 노출한다. */
+export const REPORT_PDF_SECTIONS = new Set<string>(["2-2", "5-2"]);
+
+export function diagnosisReportPdfUrl(sectionId: string): string {
+  return `${BASE}/diagnosis/modules/${encodeURIComponent(sectionId)}/report/pdf`;
+}
+
+/** 결과서 PDF 를 내려받는다(blob 로 받아 파일 저장). */
+export async function downloadDiagnosisReportPdf(sectionId: string): Promise<void> {
+  const res = await fetch(diagnosisReportPdfUrl(sectionId));
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(detail || `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(disposition);
+  const filename = match
+    ? decodeURIComponent(match[1].replace(/["']/g, ""))
+    : `ARGUS-${sectionId}-report.pdf`;
+  const href = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = filename;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(href);
+  }
+}
+
 const DEFAULT_DIAGNOSIS_WAIT_MS = 5 * 60 * 60 * 1000;
 
 export async function waitForDiagnosisComplete(
@@ -258,8 +292,48 @@ export function fetchDiagnosisReport(sectionId: string): Promise<DiagnosisSectio
   return request(`/diagnosis/modules/${encodeURIComponent(sectionId)}/report`);
 }
 
-export function diagnosisReportPdfUrl(sectionId: string): string {
-  return `${BASE}/diagnosis/modules/${encodeURIComponent(sectionId)}/report.pdf`;
+export async function downloadDiagnosisPdf(sectionId: string): Promise<void> {
+  const res = await fetch(`${BASE}/diagnosis/modules/${encodeURIComponent(sectionId)}/report.pdf`);
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(detail || `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `ARGUS_report_${sectionId}.pdf`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+export async function downloadDiagnosisFinalReport(sectionId: string): Promise<void> {
+  const encodedSectionId = encodeURIComponent(sectionId);
+  const res = await fetch(`${BASE}/diagnosis/modules/${encodedSectionId}/final-report.pdf`);
+  if (!res.ok) {
+    let detail = await res.text();
+    try {
+      const parsed = JSON.parse(detail) as { detail?: string };
+      detail = parsed.detail || detail;
+    } catch {
+      // Keep a non-JSON error response as-is.
+    }
+    if (res.status === 404) {
+      throw new Error("PDF 보고서가 아직 생성되지 않았습니다. 진단을 다시 실행해 주세요.");
+    }
+    throw new Error(detail || `PDF 보고서 다운로드 실패 (HTTP ${res.status})`);
+  }
+
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = `ARGUS-${sectionId}-report.pdf`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
 }
 
 export function runDiagnosisSection(

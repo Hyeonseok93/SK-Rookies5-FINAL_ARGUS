@@ -216,6 +216,7 @@ export interface SaveTestAccountsResponse {
 export interface BaseUrlEntry {
   id: string;
   url: string;
+  kind: "api" | "frontend" | "api-and-frontend";
 }
 
 export interface BaseUrlsResponse {
@@ -526,14 +527,6 @@ export interface DiagnosisG45RunOptionsPayload {
   sample_size?: number;
   timeout?: number;
   max_endpoints?: number;
-}
-
-export interface DiagnosisG21RunOptionsPayload {
-  seller_email?: string;
-  seller_password?: string;
-  user_email?: string;
-  user_password?: string;
-  timeout?: number;
 }
 
 export interface DiagnosisG41RunOptionsPayload {

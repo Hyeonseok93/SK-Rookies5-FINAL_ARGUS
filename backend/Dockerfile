@@ -4,7 +4,19 @@ WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+RUN rm -rf /var/lib/apt/lists/* \
+    && apt-get update -o Acquire::Retries=5 \
+    && apt-get install -y --no-install-recommends --fix-missing \
+        -o Acquire::Retries=5 \
+        fonts-noto-cjk \
+        fonts-nanum \
+        scrot \
+        xauth \
+        xvfb \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -19,6 +31,7 @@ RUN apt-get update \
 
 COPY app ./app
 COPY diagnosis ./diagnosis
+COPY report ./report
 COPY screenshot ./screenshot
 COPY report ./report
 COPY inventory ./inventory

@@ -116,7 +116,7 @@ def _resolve_web_target(line: str, base_urls: list[str]) -> list[tuple[str, str]
         return [(base.rstrip("/"), path_only)]
 
     path_only = line if line.startswith("/") else f"/{line}"
-    bases = base_urls or ["http://localhost:5173"]
+    bases = base_urls
     return [(base.rstrip("/"), path_only) for base in bases]
 
 
