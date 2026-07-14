@@ -367,6 +367,21 @@ function DiagnosisManualCheckButton({
   );
 }
 
+function DiagnosisReviewLaterButton({ compact = false }: { compact?: boolean }) {
+  const label = "추후 검토";
+  return (
+    <button
+      type="button"
+      disabled
+      title={label}
+      className={`${START_BTN} ${UNAVAILABLE_BTN} ${compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"}`}
+    >
+      <AlertCircle className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
+      {label}
+    </button>
+  );
+}
+
 function moduleBadgeLabel(mod: {
   implemented: boolean;
   diagnosable: boolean;
