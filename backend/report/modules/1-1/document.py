@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import yaml
 
 
-BACKEND_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_ROOT = Path(__file__).resolve().parents[3]
 SK_SHIELDUS_G11_GUIDE = (
     BACKEND_ROOT
     / "diagnosis"
@@ -272,6 +272,58 @@ def _guide_to_html(markdown: str) -> str:
     return "<div class='guide'>" + "".join(html_parts) + "</div>"
 
 
+def _detection_method_text(evidence: dict[str, Any]) -> str:
+    if _is_csrf_evidence(evidence):
+        return (
+            "상태 변경 요청에서 Origin/Referer 헤더를 제거하거나 변조한 요청을 재전송하고, "
+            "CSRF Token 누락 및 SameSite Cookie 설정 미흡 조건에서도 요청이 수락되는지 확인했습니다."
+        )
+    return (
+        "입력 파라미터에 XSS 페이로드를 주입한 뒤 데이터를 저장하고, 동일 리소스를 다시 조회하여 "
+        "응답 또는 화면에 스크립트가 실행 가능한 형태로 남아 있는지 확인했습니다."
+    )
+
+
+def _result_reason_text(finding: dict[str, Any], evidence: dict[str, Any]) -> str:
+    return _value(
+        evidence.get("validation_reason")
+        or evidence.get("evidence")
+        or evidence.get("vuln_description")
+        or evidence.get("description")
+        or finding.get("message"),
+        "탐지 요청 결과 취약 조건이 확인되었습니다.",
+    )
+
+
+def _result_table_html(finding: dict[str, Any], evidence: dict[str, Any]) -> str:
+    occurrences = evidence.get("csrf_occurrences")
+    if _is_csrf_evidence(evidence) and isinstance(occurrences, list) and occurrences:
+        rows = []
+        for item in occurrences:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                "<tr>"
+                f"<td>{_esc(item.get('url') or evidence.get('url'))}</td>"
+                f"<td>{_esc(item.get('param') or evidence.get('param'))}</td>"
+                "</tr>"
+            )
+        if rows:
+            return (
+                "<table>"
+                "<tr><th>URL</th><th>Parameter</th></tr>"
+                + "".join(rows)
+                + "</table>"
+            )
+
+    return f"""
+      <table>
+        <tr><th>URL</th><td>{_esc(evidence.get("url"))}</td></tr>
+        <tr><th>Parameter</th><td>{_esc(evidence.get("param"))}</td></tr>
+      </table>
+    """
+
+
 def _finding_html(
     index: int,
     finding: dict[str, Any],
@@ -300,6 +352,21 @@ def _finding_html(
     return f"""
     <section class="finding">
       <h2>{index}. {_esc(title)}</h2>
+      <h3>문제점</h3>
+      <p>{_esc(_detection_method_text(evidence))}</p>
+      <p>{_esc(_result_reason_text(finding, evidence))}</p>
+      {_result_table_html(finding, evidence)}
+      {_csrf_block(evidence)}
+      <h3>증거 이미지</h3>
+      {image_html}
+      <h3>대응방안 (SK 가이드라인)</h3>
+      {_guide_to_html(str(guide))}
+    </section>
+    """
+
+    return f"""
+    <section class="finding">
+      <h2>{index}. {_esc(title)}</h2>
       <table>
         <tr><th>URL</th><td>{_esc(evidence.get("url"))}</td></tr>
         <tr><th>Method</th><td>{_esc(evidence.get("method"))}</td></tr>
@@ -321,7 +388,29 @@ def _finding_html(
     """
 
 
-def generate_g11_report_document(report_dir: Path) -> Path:
+def _html_to_pdf(html_content: str, output_path: Path) -> None:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise RuntimeError("Playwright is required to generate PDF reports.") from exc
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 720})
+            page.set_content(html_content, wait_until="networkidle")
+            page.pdf(
+                path=str(output_path),
+                format="A4",
+                print_background=True,
+                margin={"top": "14mm", "right": "12mm", "bottom": "14mm", "left": "12mm"},
+            )
+        finally:
+            browser.close()
+
+
+def generate_report_document(report_dir: Path) -> Path:
     report_path = report_dir / "latest.yaml"
     if not report_path.is_file():
         raise FileNotFoundError(str(report_path))
@@ -343,9 +432,7 @@ def generate_g11_report_document(report_dir: Path) -> Path:
         for index, finding in enumerate(report_findings, start=1)
     )
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    output_path = report_dir / "diagnosis-result.html"
-    output_path.write_text(
-        f"""<!doctype html>
+    html_content = f"""<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
@@ -393,7 +480,10 @@ def generate_g11_report_document(report_dir: Path) -> Path:
   </main>
 </body>
 </html>
-""",
-        encoding="utf-8",
-    )
+"""
+    output_path = report_dir / "diagnosis-result.pdf"
+    _html_to_pdf(html_content, output_path)
     return output_path
+
+
+generate_g11_report_document = generate_report_document

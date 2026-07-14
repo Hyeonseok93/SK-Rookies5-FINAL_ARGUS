@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import subprocess
@@ -16,6 +17,17 @@ from diagnosis.context import DiagnosisContext
 from diagnosis.registry import get_module, get_modules, list_registered_ids
 from diagnosis.exceptions import DiagnosisCancelled
 from diagnosis.result import DiagnosisFinding, SectionReport
+
+
+def _generate_g11_report_document(report_dir: Path) -> Path:
+    module_path = BACKEND_ROOT / "report" / "modules" / "1-1" / "document.py"
+    spec = importlib.util.spec_from_file_location("argus_g11_report_document", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Failed to load 1-1 report document engine: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_report_document(report_dir)
+
 
 def _inject_gradle_dep_files(raw: dict) -> dict:
     """data/gradle_dep_files.json에 저장된 경로를 diagnosis_7_4.gradle_dep_files에 주입한다.
@@ -549,9 +561,7 @@ def _run_g11_screenshot_capture(mod: Any, ctx: DiagnosisContext, report: Section
         )
     )
     try:
-        from app.services.g11_report_document import generate_g11_report_document
-
-        result_payload["report_document"] = str(generate_g11_report_document(report_path.parent))
+        result_payload["report_document"] = str(_generate_g11_report_document(report_path.parent))
     except Exception as exc:
         result_payload["report_document_error"] = str(exc)
     mod.save_report(ctx, report)

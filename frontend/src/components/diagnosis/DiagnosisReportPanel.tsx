@@ -1181,7 +1181,6 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
         <div className="mb-3 flex justify-end">
           <a
             href="/api/diagnosis/modules/1-1/report/download"
-            download
             className="inline-flex items-center gap-1.5 rounded border border-cyber-border/50 px-2.5 py-1.5 text-xs text-cyan-200 transition hover:border-cyan-400/60 hover:bg-cyan-400/10"
           >
             <Download className="h-3.5 w-3.5" />
