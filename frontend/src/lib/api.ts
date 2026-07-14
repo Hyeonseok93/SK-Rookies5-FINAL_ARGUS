@@ -258,6 +258,34 @@ export function fetchDiagnosisReport(sectionId: string): Promise<DiagnosisSectio
   return request(`/diagnosis/modules/${encodeURIComponent(sectionId)}/report`);
 }
 
+export async function downloadDiagnosisFinalReport(sectionId: string): Promise<void> {
+  const encodedSectionId = encodeURIComponent(sectionId);
+  const res = await fetch(`${BASE}/diagnosis/modules/${encodedSectionId}/final-report.pdf`);
+  if (!res.ok) {
+    let detail = await res.text();
+    try {
+      const parsed = JSON.parse(detail) as { detail?: string };
+      detail = parsed.detail || detail;
+    } catch {
+      // Keep a non-JSON error response as-is.
+    }
+    if (res.status === 404) {
+      throw new Error("PDF 보고서가 아직 생성되지 않았습니다. 진단을 다시 실행해 주세요.");
+    }
+    throw new Error(detail || `PDF 보고서 다운로드 실패 (HTTP ${res.status})`);
+  }
+
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = `ARGUS-${sectionId}-report.pdf`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
 export function runDiagnosisSection(
   sectionId: string,
   body?: DiagnosisRunSectionRequest,

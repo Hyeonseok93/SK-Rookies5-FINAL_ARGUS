@@ -32,7 +32,13 @@ import {
 import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
 import { G74DiagnosisStartDialog } from "./G74DiagnosisStartDialog";
-import { fetchDiagnosisCatalog, fetchDiagnosisProgress, fetchDiagnosisReport, runDiagnosisSection } from "../lib/api";
+import {
+  downloadDiagnosisFinalReport,
+  fetchDiagnosisCatalog,
+  fetchDiagnosisProgress,
+  fetchDiagnosisReport,
+  runDiagnosisSection,
+} from "../lib/api";
 import {
   DEFAULT_G12_OPTIONS,
   g12OptionsSummary,
@@ -226,19 +232,51 @@ function DiagnosisStartButton({
   );
 }
 
-/** Placeholder until report export is wired — always disabled for now. */
-function DiagnosisDownloadButton({ compact = false }: { compact?: boolean }) {
+function DiagnosisDownloadButton({
+  sectionId,
+  compact = false,
+  onError,
+}: {
+  sectionId: string;
+  compact?: boolean;
+  onError: (message: string | null) => void;
+}) {
+  const [downloading, setDownloading] = useState(false);
+  const supported = sectionId === "1-2" || sectionId === "7-4";
+
+  const handleDownload = async () => {
+    if (!supported || downloading) return;
+    onError(null);
+    setDownloading(true);
+    try {
+      await downloadDiagnosisFinalReport(sectionId);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   return (
     <button
       type="button"
-      disabled
-      title="결과 다운로드 (준비 중)"
-      className={`flex shrink-0 cursor-not-allowed items-center gap-1 rounded-lg border border-cyan-400/35 bg-cyan-500/10 font-semibold text-cyan-200/75 ${
+      disabled={!supported || downloading}
+      onClick={handleDownload}
+      title={supported ? "PDF 보고서 다운로드" : "PDF 보고서 지원 준비 중"}
+      className={`flex shrink-0 items-center gap-1 rounded-lg border border-cyan-400/35 bg-cyan-500/10 font-semibold text-cyan-200/75 transition ${
+        supported
+          ? "cursor-pointer hover:border-cyan-300/60 hover:bg-cyan-500/20 hover:text-cyan-100 disabled:cursor-wait disabled:opacity-60"
+          : "cursor-not-allowed opacity-60"
+      } ${
         compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"
       }`}
     >
-      <Download className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
-      다운로드
+      {downloading ? (
+        <Loader2 className={`animate-spin ${compact ? "h-3 w-3" : "h-3.5 w-3.5"}`} />
+      ) : (
+        <Download className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
+      )}
+      {downloading ? "다운로드 중…" : "PDF 다운로드"}
     </button>
   );
 }
@@ -901,7 +939,11 @@ export function DiagnosisPage() {
                     ) : null}
                     {open && report ? (
                       <div className="flex items-center justify-start gap-2 border-t border-cyber-border/40 bg-cyber-bg/20 px-4 py-2">
-                        <DiagnosisDownloadButton compact />
+                        <DiagnosisDownloadButton
+                          sectionId={section.id}
+                          compact
+                          onError={setError}
+                        />
                       </div>
                     ) : null}
                     {open && !running && report ? <DiagnosisReportPanel report={report} /> : null}

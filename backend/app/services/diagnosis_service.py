@@ -575,6 +575,25 @@ def _run_module(mod: Any, ctx: DiagnosisContext, section_id: str) -> SectionRepo
                 message=f"{section_id}: 스크린샷 생성 실패 — 진단 결과는 저장됨",
                 percent=99,
             )
+        else:
+            from app.services.report_generation_service import (
+                generate_after_capture,
+                supports as supports_final_report,
+            )
+
+            if supports_final_report(section_id):
+                dp.update(
+                    phase="report",
+                    message=f"{section_id}: 최종 보고서 생성 중…",
+                    percent=99,
+                )
+                report_result = generate_after_capture(section_id, ctx.data_dir)
+                if not report_result.get("ok"):
+                    dp.update(
+                        phase="report",
+                        message=f"{section_id}: 보고서 생성 실패 — 진단 및 증거는 저장됨",
+                        percent=99,
+                    )
 
     # 1-1: XSS/CSRF 증거 스크린샷 캡처 
     # 내부에서 section_id != "1-1"이면 즉시 return 하므로 무조건 호출해도 안전

@@ -23,6 +23,7 @@ from app.schemas import (
     ReplayStepResult,
 )
 from app.services import diagnosis_service
+from app.services.report_generation_service import resolve_report_file
 
 router = APIRouter(prefix="/diagnosis", tags=["diagnosis"])
 
@@ -102,6 +103,34 @@ def get_evidence_file(section_id: str, path: str) -> FileResponse:
     if resolved is None:
         raise HTTPException(status_code=404, detail="Evidence file not found")
     return FileResponse(resolved)
+
+
+@router.get("/modules/{section_id}/final-report")
+def get_final_report(section_id: str) -> FileResponse:
+    resolved = resolve_report_file(section_id, "report.html")
+    if resolved is None:
+        raise HTTPException(status_code=404, detail=f"No final report for module {section_id}")
+    return FileResponse(resolved, media_type="text/html; charset=utf-8")
+
+
+@router.get("/modules/{section_id}/final-report.pdf")
+def get_final_report_pdf(section_id: str) -> FileResponse:
+    resolved = resolve_report_file(section_id, "report.pdf")
+    if resolved is None:
+        raise HTTPException(status_code=404, detail=f"No final PDF report for module {section_id}")
+    return FileResponse(
+        resolved,
+        media_type="application/pdf",
+        filename=f"ARGUS-{section_id}-report.pdf",
+    )
+
+
+@router.get("/modules/{section_id}/final-report/manifest")
+def get_final_report_manifest(section_id: str) -> FileResponse:
+    resolved = resolve_report_file(section_id, "report-manifest.json")
+    if resolved is None:
+        raise HTTPException(status_code=404, detail=f"No final report manifest for module {section_id}")
+    return FileResponse(resolved, media_type="application/json")
 
 
 @router.post("/modules/{section_id}/run", response_model=DiagnosisRunSectionResponse)
