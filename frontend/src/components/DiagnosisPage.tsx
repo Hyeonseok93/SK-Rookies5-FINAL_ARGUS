@@ -32,7 +32,13 @@ import {
 import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
 import { G74DiagnosisStartDialog } from "./G74DiagnosisStartDialog";
-import { fetchDiagnosisCatalog, fetchDiagnosisProgress, fetchDiagnosisReport, runDiagnosisSection } from "../lib/api";
+import {
+  downloadDiagnosisFinalReport,
+  fetchDiagnosisCatalog,
+  fetchDiagnosisProgress,
+  fetchDiagnosisReport,
+  runDiagnosisSection,
+} from "../lib/api";
 import {
   DEFAULT_G12_OPTIONS,
   g12OptionsSummary,
@@ -226,26 +232,90 @@ function DiagnosisStartButton({
   );
 }
 
-/** Placeholder until report export is wired — always disabled for now. */
-function DiagnosisDownloadButton({ compact = false, sectionId }: { compact?: boolean; sectionId: string }) {
-  const enabled = sectionId === "1-1";
+function DiagnosisDownloadButton({
+  sectionId,
+  compact = false,
+  onError,
+}: {
+  sectionId: string;
+  compact?: boolean;
+  onError: (message: string | null) => void;
+}) {
+  const [downloading, setDownloading] = useState(false);
+
+  const supported =
+    sectionId === "1-1" ||
+    sectionId === "1-2" ||
+    sectionId === "7-4";
+
+  const handleDownload = async () => {
+    if (!supported || downloading) return;
+
+    onError(null);
+
+    // 1-1은 기존 다운로드 API 사용
+    if (sectionId === "1-1") {
+      window.location.href =
+        "/api/diagnosis/modules/1-1/report/download";
+      return;
+    }
+
+    // 1-2와 7-4는 최종 PDF 보고서 API 사용
+    setDownloading(true);
+
+    try {
+      await downloadDiagnosisFinalReport(sectionId);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   return (
     <button
       type="button"
-      disabled={!enabled}
-      onClick={() => {
-        if (!enabled) return;
-        window.location.href = "/api/diagnosis/modules/1-1/report/download";
-      }}
-      title="결과 다운로드 (준비 중)"
-      className={`flex shrink-0 items-center gap-1 rounded-lg border font-semibold ${
-        enabled
-          ? "border-cyan-400/45 bg-cyan-500/10 text-cyan-200 transition hover:border-cyan-300/70 hover:bg-cyan-400/10"
-          : "cursor-not-allowed border-cyan-400/35 bg-cyan-500/10 text-cyan-200/75"
-      } ${compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"}`}
+      disabled={!supported || downloading}
+      onClick={handleDownload}
+      title={
+        supported
+          ? "PDF 보고서 다운로드"
+          : "PDF 보고서 지원 준비 중"
+      }
+      className={`flex shrink-0 items-center gap-1 rounded-lg border font-semibold transition ${
+        supported
+          ? "cursor-pointer border-cyan-400/45 bg-cyan-500/10 text-cyan-200 hover:border-cyan-300/70 hover:bg-cyan-500/20 disabled:cursor-wait disabled:opacity-60"
+          : "cursor-not-allowed border-cyan-400/35 bg-cyan-500/10 text-cyan-200/75 opacity-60"
+      } ${
+        compact
+          ? "px-2.5 py-1 text-[10px]"
+          : "px-4 py-1.5 text-xs"
+      }`}
     >
-      <Download className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
-      다운로드
+      {downloading ? (
+        <Loader2
+          className={`animate-spin ${
+            compact ? "h-3 w-3" : "h-3.5 w-3.5"
+          }`}
+        />
+      ) : (
+        <Download
+          className={compact ? "h-3 w-3" : "h-3.5 w-3.5"}
+        />
+      )}
+
+      {downloading ? "다운로드 중…" : "PDF 다운로드"}
+    </button>
+  );
+}
+
+    >
+      {downloading ? (
+        <Loader2 className={`animate-spin ${compact ? "h-3 w-3" : "h-3.5 w-3.5"}`} />
+      ) : (
+        <Download className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
+      )}
+      {downloading ? "다운로드 중…" : "PDF 다운로드"}
     </button>
   );
 }
@@ -908,7 +978,11 @@ export function DiagnosisPage() {
                     ) : null}
                     {open && report ? (
                       <div className="flex items-center justify-start gap-2 border-t border-cyber-border/40 bg-cyber-bg/20 px-4 py-2">
-                        <DiagnosisDownloadButton compact sectionId={section.id} />
+                        <DiagnosisDownloadButton
+                          sectionId={section.id}
+                          compact
+                          onError={setError}
+                        />
                       </div>
                     ) : null}
                     {open && !running && report ? <DiagnosisReportPanel report={report} /> : null}

@@ -25,6 +25,7 @@ COPY app ./app
 COPY diagnosis ./diagnosis
 COPY report ./report
 COPY screenshot ./screenshot
+COPY report ./report
 COPY inventory ./inventory
 COPY integrations ./integrations
 COPY parsers ./parsers
