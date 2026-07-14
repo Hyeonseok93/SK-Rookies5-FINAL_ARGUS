@@ -33,6 +33,7 @@ import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
 import { G74DiagnosisStartDialog } from "./G74DiagnosisStartDialog";
 import {
+  downloadDiagnosisPdf,
   downloadDiagnosisFinalReport,
   downloadDiagnosisReportPdf,
   fetchDiagnosisCatalog,
@@ -246,11 +247,13 @@ function DiagnosisDownloadButton({
   const [downloading, setDownloading] = useState(false);
 
   const usesLegacyReportDownload = sectionId === "1-1";
+  const usesG16ReportDownload = sectionId === "1-6";
   const usesFinalReportDownload = sectionId === "1-2" || sectionId === "7-4";
   const usesReportPdfDownload = REPORT_PDF_SECTIONS.has(sectionId);
 
   const supported =
     usesLegacyReportDownload ||
+    usesG16ReportDownload ||
     usesFinalReportDownload ||
     usesReportPdfDownload;
 
@@ -267,7 +270,9 @@ function DiagnosisDownloadButton({
     setDownloading(true);
 
     try {
-      if (usesReportPdfDownload) {
+      if (usesG16ReportDownload) {
+        await downloadDiagnosisPdf(sectionId);
+      } else if (usesReportPdfDownload) {
         await downloadDiagnosisReportPdf(sectionId);
       } else {
         await downloadDiagnosisFinalReport(sectionId);
@@ -283,6 +288,7 @@ function DiagnosisDownloadButton({
     sectionId,
     onError,
     usesLegacyReportDownload,
+    usesG16ReportDownload,
     usesReportPdfDownload,
   ]);
 
