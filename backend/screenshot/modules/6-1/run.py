@@ -10,7 +10,7 @@ Content-Type the scanner used) and rendering the real response plainly.
 Usage:
     python screenshot/modules/6-1/run.py
     python screenshot/modules/6-1/run.py --severities high,medium --max-per-group 2
-    python screenshot/modules/6-1/run.py --base-url http://192.168.0.55
+    python screenshot/modules/6-1/run.py --base-url http://localhost
     # 아무 인증 옵션도 안 주면 report(latest.yaml)에서 스캐너가 실제로 쓴 계정을
     # 자동으로 읽어 그 계정으로 로그인한다. 다른 계정을 쓰거나 로그인을 끄려면:
     python screenshot/modules/6-1/run.py --auth-account admin@travel.com
@@ -58,12 +58,25 @@ def main() -> int:
     parser.add_argument("--max-per-group", type=int, default=3, help="captures per rule group (default: 3)")
     parser.add_argument(
         "--base-url",
-        help="report의 host.docker.internal 주소를 치환할 실제 접속 가능한 API 서버 주소 (기본: http://192.168.0.55)",
+        help="report의 host.docker.internal 주소를 치환할 실제 접속 가능한 API 서버 주소 "
+        "(기본: ARGUS_CAPTURE_BASE_URL 환경변수, 없으면 http://localhost)",
     )
     parser.add_argument(
         "--frontend-url",
         help="STEP1(공격 전 홈 화면)/STEP2(non-GET 대기 화면)에 띄울 실제 프론트엔드 주소 "
         "(생략 시 --base-url과 동일 — API 서버와 프론트가 다른 포트일 때 지정, 예: http://localhost:5173)",
+    )
+    parser.add_argument(
+        "--page-wait",
+        type=float,
+        default=None,
+        help="페이지 이동 후 캡처 전까지 대기 시간(초) (기본: 1.0)",
+    )
+    parser.add_argument(
+        "--nav-timeout-ms",
+        type=int,
+        default=None,
+        help="Playwright 페이지 이동/로그인 폼 제출 타임아웃(ms) (기본: 15000)",
     )
 
     # 인증 옵션 — 아무것도 지정하지 않으면 report(latest.yaml)에 남은
@@ -112,6 +125,8 @@ def main() -> int:
         public_base_url=args.base_url,
         frontend_base_url=args.frontend_url,
         auth_config=auth_config,
+        page_wait=args.page_wait if args.page_wait is not None else capture.DEFAULT_PAGE_WAIT_SECONDS,
+        nav_timeout_ms=args.nav_timeout_ms if args.nav_timeout_ms is not None else capture.DEFAULT_NAV_TIMEOUT_MS,
     )
     print(json.dumps({"count": len(results), "captures": results}, ensure_ascii=False, indent=2))
     return 0

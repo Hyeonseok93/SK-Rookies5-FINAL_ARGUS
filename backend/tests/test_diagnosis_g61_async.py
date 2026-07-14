@@ -42,6 +42,15 @@ def test_start_section_run_background_completes(monkeypatch):
 
     mod.run.side_effect = slow_run
     monkeypatch.setattr(diagnosis_service, "_resolve_module", lambda _sid: mod)
+    # 6-1 is auto-capture-enabled: avoid actually shelling out to the real
+    # (browser-based) screenshot capture / PDF build for this fake run.
+    monkeypatch.setattr(
+        diagnosis_service, "_build_report_pdf_best_effort", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        "app.services.evidence_capture_service.capture_after_diagnosis",
+        lambda *_a, **_kw: {"attempted": False, "ok": True},
+    )
 
     diagnosis_service.start_section_run_background("6-1", g61_options={"probe_mode": "sample"})
     time.sleep(0.02)
@@ -71,6 +80,13 @@ def test_start_section_run_background_rejects_concurrent(monkeypatch):
 
     mod.run.side_effect = slow_run
     monkeypatch.setattr(diagnosis_service, "_resolve_module", lambda _sid: mod)
+    monkeypatch.setattr(
+        diagnosis_service, "_build_report_pdf_best_effort", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        "app.services.evidence_capture_service.capture_after_diagnosis",
+        lambda *_a, **_kw: {"attempted": False, "ok": True},
+    )
 
     diagnosis_service.start_section_run_background("6-1")
     with pytest.raises(RuntimeError, match="already running"):

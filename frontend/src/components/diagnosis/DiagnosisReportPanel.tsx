@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ChevronDown, Terminal, Copy, AlertTriangle } from "lucide-react";
+import { ChevronDown, Terminal, Copy, AlertTriangle, Download } from "lucide-react";
+import { diagnosisReportPdfUrl } from "../../lib/api";
 import type { DiagnosisSectionReport } from "../../types";
 import { G15FindingsPanel } from "./G15FindingsPanel";
 import { G16FindingsPanel } from "./G16FindingsPanel";
@@ -1250,6 +1251,14 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
         {report.message ? (
           <span className="text-xs text-cyber-muted">{report.message}</span>
         ) : null}
+        <a
+          href={diagnosisReportPdfUrl(report.section_id)}
+          download={`argus-${report.section_id}-report.pdf`}
+          className="ml-auto flex items-center gap-1 rounded border border-cyber-border/50 px-2 py-1 text-[10px] text-cyber-muted transition hover:border-cyan-400/50 hover:text-cyan-300"
+        >
+          <Download className="h-3 w-3" />
+          PDF 다운로드
+        </a>
       </div>
 
       {report.section_id === "7-4" ? <Gradle74Guide /> : null}

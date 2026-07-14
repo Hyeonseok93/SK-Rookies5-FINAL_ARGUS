@@ -1,9 +1,11 @@
 app_name: ''
 targets:
-- name: api
-  base_url: http://localhost:8080
+- name: target-1
+  base_url: http://192.168.0.61
+- name: api-2
+  base_url: http://192.168.0.61:8080
 - name: admin-api
-  base_url: http://localhost:8081
+  base_url: http://192.168.0.61:8081
 inventory:
   markdown:
     enabled: false
@@ -13,14 +15,14 @@ inventory:
   openapi:
     enabled: false
     path: ''
-    base_url: http://localhost:8080
+    base_url: http://192.168.0.61
   url_list:
     enabled: false
     path: data/inventory-urls.json
   base_urls:
-  - http://localhost:8080
-  - http://localhost:8081
-  - http://localhost:5173
+  - http://192.168.0.61
+  - http://192.168.0.61:8080
+  - http://192.168.0.61:8081
 zap:
   proxy: http://127.0.0.1:8090
   api_key: ''

@@ -59,6 +59,7 @@ import ctypes
 import html
 import importlib.util
 import json as json_lib
+import os
 import re
 import sys
 import time
@@ -67,6 +68,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+
+# Run directly (e.g. `python capture.py --report ... --output ...`, as
+# app/services/evidence_capture_service.py's subprocess call does) rather than
+# imported via run.py's importlib loader — backend root isn't on sys.path yet
+# in that case, so the `diagnosis.*` imports below would fail.
+_MODULE_DIR = Path(__file__).resolve().parent
+_BACKEND_ROOT = _MODULE_DIR.parents[2]
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
 
 import yaml
 from PIL import Image
@@ -129,13 +139,20 @@ DEFAULT_MAX_PER_GROUP = 3
 
 # report의 finding url은 스캐너가 돌던 환경 기준(host.docker.internal 등 컨테이너
 # 전용 호스트)이라 사람이 실제로 열어볼 수 있는 주소가 아니다. 실제 접속 가능한
-# 서버 주소로 치환해서 "진짜 웹페이지를 캡처한" 사진이 되게 한다.
-DEFAULT_PUBLIC_BASE_URL = "http://192.168.0.55"
+# 서버 주소로 치환해서 "진짜 웹페이지를 캡처한" 사진이 되게 한다. 이 값은 특정
+# 개발 환경(사설 IP)에 묶여 있으므로 ARGUS_CAPTURE_BASE_URL 환경변수나
+# --base-url로 항상 재정의할 수 있게 하고, 코드 내 fallback은 최후 수단으로만 쓴다.
+DEFAULT_PUBLIC_BASE_URL = os.environ.get("ARGUS_CAPTURE_BASE_URL", "http://localhost")
 
 # 모든 캡처는 이 크기로 고정된 실제 브라우저 창을 그대로 찍는다.
 CANVAS_WIDTH = 1280
 CANVAS_HEIGHT = 720
 WINDOW_SIZE = {"width": CANVAS_WIDTH, "height": CANVAS_HEIGHT}
+
+# 페이지 이동/오버레이 렌더링이 안정될 때까지 대기하는 시간과 Playwright 네비게이션
+# 타임아웃 — 느린 서버·네트워크 환경에서는 --page-wait/--nav-timeout-ms로 조정한다.
+DEFAULT_PAGE_WAIT_SECONDS = 1.0
+DEFAULT_NAV_TIMEOUT_MS = 15000
 
 
 def _our_descendant_pids() -> set[int]:
@@ -430,28 +447,32 @@ _OVERLAY_CSS = """
   pointer-events: none !important; font-family: Arial, "Noto Sans KR", sans-serif !important; }
 #argus-evidence-bottom { position: absolute !important; top: 260px !important; left: 0 !important;
   width: 100vw !important; height: calc(100vh - 260px) !important; background: #111315 !important;
-  color: #e4e8ec !important; border-top: 4px solid #e7782f !important; }
-#argus-evidence-tabs { height: 32px !important; padding: 7px 12px !important; background: #25282c !important;
+  color: #e4e8ec !important; border-top: 4px solid #e7782f !important;
+  display: flex !important; flex-direction: column !important; overflow: hidden !important; }
+#argus-evidence-tabs { flex: 0 0 auto !important; padding: 6px 12px !important; background: #25282c !important;
   color: #aaa !important; font-size: 12px !important; font-weight: 700 !important; }
 #argus-evidence-tabs b { color: #ef873e !important; margin-right: 22px !important; }
-#argus-evidence-target { height: 34px !important; padding: 8px 12px !important; background: #191b1e !important;
+#argus-evidence-target { flex: 0 0 auto !important; padding: 6px 12px !important; background: #191b1e !important;
   border-top: 1px solid #393d42 !important; border-bottom: 1px solid #393d42 !important;
-  color: #d4d8dd !important; font: 12px ui-monospace, monospace !important; white-space: nowrap !important;
-  overflow: hidden !important; text-overflow: ellipsis !important; }
-#argus-evidence-verdict { padding: 6px 12px !important; font-size: 12px !important; font-weight: 700 !important; }
+  color: #d4d8dd !important; font: 12px ui-monospace, monospace !important; line-height: 1.35 !important;
+  white-space: normal !important; overflow-wrap: anywhere !important; word-break: break-all !important;
+  max-height: 54px !important; overflow: hidden !important; }
+#argus-evidence-verdict { flex: 0 0 auto !important; padding: 6px 12px !important; font-size: 12px !important;
+  font-weight: 700 !important; }
 #argus-evidence-verdict.hit { background: #3a1414 !important; color: #ff8a80 !important; }
 #argus-evidence-verdict.miss { background: #141a14 !important; color: #8bd18b !important; }
-#argus-evidence-panels { display: grid !important; height: calc(100vh - 330px) !important; }
+#argus-evidence-panels { flex: 1 1 auto !important; min-height: 0 !important; display: grid !important; }
 #argus-evidence-panels.two-col { grid-template-columns: 1fr 1fr !important; }
 #argus-evidence-panels.one-col { grid-template-columns: 1fr !important; }
-.argus-evidence-panel { min-width: 0 !important; border-right: 1px solid #383c41 !important;
-  background: #111315 !important; }
+.argus-evidence-panel { min-width: 0 !important; min-height: 0 !important; display: flex !important;
+  flex-direction: column !important; border-right: 1px solid #383c41 !important; background: #111315 !important; }
 .argus-evidence-panel:last-child { border-right: none !important; }
-.argus-evidence-heading { height: 30px !important; padding: 8px 11px !important; background: #25282c !important;
+.argus-evidence-heading { flex: 0 0 auto !important; padding: 7px 11px !important; background: #25282c !important;
   color: #72d68b !important; font-size: 12px !important; font-weight: 700 !important; }
-.argus-evidence-pre { height: calc(100vh - 360px) !important; margin: 0 !important; padding: 12px !important;
-  overflow: hidden !important; color: #d8dde2 !important; white-space: pre-wrap !important;
-  overflow-wrap: anywhere !important; font: 10.5px/1.42 ui-monospace, SFMono-Regular, Menlo, monospace !important; }
+.argus-evidence-pre { flex: 1 1 auto !important; min-height: 0 !important; margin: 0 !important;
+  padding: 10px 12px !important; overflow: hidden !important; color: #d8dde2 !important;
+  white-space: pre-wrap !important; overflow-wrap: anywhere !important;
+  font: 10px/1.38 ui-monospace, SFMono-Regular, Menlo, monospace !important; }
 .argus-evidence-pre mark { background: #e0a000 !important; color: #1a1200 !important; padding: 0 2px !important;
   border-radius: 2px !important; font-weight: 700 !important; }
 """
@@ -537,8 +558,6 @@ def _load_raw_config() -> dict[str, Any]:
     환경변수 우선, 없으면 backend 루트의 ``config.yaml``)을 따르되, private 헬퍼를 모듈
     경계 너머로 그대로 끌어다 쓰지 않도록 이 모듈 안에 동일한 로직을 둔다.
     """
-    import os
-
     import yaml
 
     env_path = os.environ.get("CONFIG_PATH")
@@ -626,7 +645,12 @@ def get_auth_via_api(
 
 
 def get_auth_via_form(
-    login_url: str, id_field: str, pw_field: str, test_id: str, test_pw: str, nav_timeout_ms: int = 15000
+    login_url: str,
+    id_field: str,
+    pw_field: str,
+    test_id: str,
+    test_pw: str,
+    nav_timeout_ms: int = DEFAULT_NAV_TIMEOUT_MS,
 ) -> list[dict[str, Any]]:
     """Form 로그인 — 실제 화면이 있는 브라우저로 로그인 폼을 제출하고 세션 쿠키를 추출."""
     if not _PLAYWRIGHT_AVAILABLE:
@@ -658,8 +682,8 @@ class G61ScreenshotCapture:
         self,
         output_dir: Path,
         *,
-        page_wait: float = 1.0,
-        nav_timeout_ms: int = 15000,
+        page_wait: float = DEFAULT_PAGE_WAIT_SECONDS,
+        nav_timeout_ms: int = DEFAULT_NAV_TIMEOUT_MS,
         raw_config: dict[str, Any] | None = None,
         public_base_url: str | None = None,
         frontend_base_url: str | None = None,
@@ -1002,14 +1026,17 @@ def run_capture(
     public_base_url: str | None = None,
     frontend_base_url: str | None = None,
     auth_config: dict[str, Any] | None = None,
+    page_wait: float = DEFAULT_PAGE_WAIT_SECONDS,
+    nav_timeout_ms: int = DEFAULT_NAV_TIMEOUT_MS,
 ) -> list[dict[str, Any]]:
     """report 로드 → 캡처 대상 산출 → 스크린샷 캡처까지 한 번에 실행.
 
     output_dir 기본값은 ``data/report/6-1/evidence/webcapture`` — 다른 진단
     모듈들이 ReplaySession 증거를 저장하는 ``diagnosis.paths.section_evidence_dir``
     관례를 그대로 따른다. ``public_base_url`` 기본값은 ``DEFAULT_PUBLIC_BASE_URL``
-    (http://192.168.0.55) — report의 host.docker.internal 주소를 실제 접속 가능한
-    API 서버 주소로 치환할 때 쓴다. ``frontend_base_url``을 생략하면 STEP1(공격 전
+    (``ARGUS_CAPTURE_BASE_URL`` 환경변수, 없으면 http://localhost) — report의
+    host.docker.internal 주소를 실제 접속 가능한 API 서버 주소로 치환할 때 쓴다.
+    ``frontend_base_url``을 생략하면 STEP1(공격 전
     홈 화면)/STEP2(non-GET pending)에도 그 API 서버 주소를 그대로 쓰는데, 프론트
     엔드(SPA)가 API와 다른 포트에서 서비스된다면 그 API 루트는 raw JSON이라
     "평소 화면" 캡처로 부적절하다 — 이때 ``frontend_base_url``로 실제 프론트엔드
@@ -1083,10 +1110,13 @@ def run_capture(
                 pw_field=auth_config["pw_field"],
                 test_id=auth_config["test_id"],
                 test_pw=auth_config["test_pw"],
+                nav_timeout_ms=nav_timeout_ms,
             )
 
     with G61ScreenshotCapture(
         out_dir,
+        page_wait=page_wait,
+        nav_timeout_ms=nav_timeout_ms,
         raw_config=raw_config,
         public_base_url=public_base_url,
         frontend_base_url=frontend_base_url,
@@ -1094,3 +1124,32 @@ def run_capture(
         auth_headers=auth_headers,
     ) as cap:
         return cap.capture_all(targets)
+
+
+# ---------------------------------------------------------------------------
+# CLI entrypoint — matches the generic ``--report``/``--output`` contract that
+# app/services/evidence_capture_service.py invokes for every auto-captured
+# section, so 6-1 can join that allowlist without any change on that side.
+# For the full flag set (severities, auth overrides, base-url, ...), use
+# run.py directly instead.
+# ---------------------------------------------------------------------------
+def _main() -> int:
+    import argparse
+
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
+    parser = argparse.ArgumentParser(description="ARGUS 6-1 screenshot capture (defaults only)")
+    parser.add_argument("--report", type=Path, help="6-1 report yaml (default: data/report/6-1/latest.yaml)")
+    parser.add_argument("--output", type=Path, help="output dir (default: data/report/6-1/evidence/webcapture)")
+    args = parser.parse_args()
+
+    results = run_capture(report_path=args.report, output_dir=args.output)
+    print(json_lib.dumps({"count": len(results), "captures": results}, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

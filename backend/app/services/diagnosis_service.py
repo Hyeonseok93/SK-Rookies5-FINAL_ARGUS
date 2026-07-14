@@ -365,6 +365,7 @@ def get_g61_report_summary() -> dict[str, Any] | None:
             "by_trigger_family": summary.get("by_trigger_family", {}),
             "by_origin": summary.get("by_origin", []),
             "groups": summary.get("groups", []),
+            "endpoints": summary.get("endpoints", []),
             "stats": stats,
         },
     }
@@ -663,18 +664,19 @@ def _run_module(mod: Any, ctx: DiagnosisContext, section_id: str) -> SectionRepo
     if section_id in {"1-2", "2-1", "2-2", "7-4"} and report.status != "cancelled":
         from app.services.evidence_capture_service import capture_after_diagnosis
 
-        dp.update(
-            phase="evidence",
-            message=f"{section_id}: 증거 스크린샷 생성 중…",
-            percent=99,
-        )
-        capture_result = capture_after_diagnosis(section_id, ctx.data_dir)
-        if not capture_result.get("ok"):
+        if supports(section_id):
             dp.update(
                 phase="evidence",
-                message=f"{section_id}: 스크린샷 생성 실패 — 진단 결과는 저장됨",
+                message=f"{section_id}: 증거 스크린샷 생성 중…",
                 percent=99,
             )
+            capture_result = capture_after_diagnosis(section_id, ctx.data_dir)
+            if not capture_result.get("ok"):
+                dp.update(
+                    phase="evidence",
+                    message=f"{section_id}: 스크린샷 생성 실패 — 진단 결과는 저장됨",
+                    percent=99,
+                )
         else:
             from app.services.report_generation_service import (
                 generate_after_capture,
@@ -702,6 +704,12 @@ def _run_module(mod: Any, ctx: DiagnosisContext, section_id: str) -> SectionRepo
     # 5-2: 진단 결과서(PDF) 생성 — 진단을 다시 하면 덮어쓴다.
     if section_id == "5-2" and report.status != "cancelled":
         _generate_section_report(section_id, ctx, report)
+
+            # Report generation is sequenced strictly after screenshot capture
+            # finishes (whether it succeeded or not) — only sections with
+            # auto-capture get an auto-built report; everything else still
+            # renders on-demand at download time.
+            _build_report_pdf_best_effort(section_id, ctx)
 
     _finish_progress(section_id, report)
     return report
@@ -733,6 +741,33 @@ def _generate_section_report(section_id: str, ctx: DiagnosisContext, report: Sec
             message=f"{section_id}: 결과서 생성 실패 — 진단 결과는 저장됨",
             percent=99,
         )
+
+
+def _build_report_pdf_best_effort(section_id: str, ctx: DiagnosisContext) -> None:
+    """Pre-build data/report/{id}/latest.pdf right after screenshot capture
+    finishes, so the download button just serves an already-generated file
+    instead of rendering on click.
+
+    Only runs for sections with their own report/modules/{id}/renderer.py
+    (loaded dynamically since e.g. "6-1" isn't a valid Python import segment).
+    Never fails the diagnosis run."""
+    import importlib.util
+
+    from app.config import BACKEND_ROOT
+
+    renderer_path = BACKEND_ROOT / "report" / "modules" / section_id / "renderer.py"
+    if not renderer_path.is_file():
+        return
+    try:
+        mod_name = f"report_renderer_{section_id.replace('-', '_')}"
+        spec = importlib.util.spec_from_file_location(mod_name, renderer_path)
+        if spec is None or spec.loader is None:
+            return
+        renderer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(renderer)
+        renderer.render_pdf(ctx=ctx)
+    except Exception:
+        pass
 
 
 def start_section_run_background(
