@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, Terminal, Copy, AlertTriangle, Download } from "lucide-react";
+import { ChevronDown, Terminal, Copy, AlertTriangle } from "lucide-react";
 import type { DiagnosisSectionReport } from "../../types";
 import { G15FindingsPanel } from "./G15FindingsPanel";
 import { G16FindingsPanel } from "./G16FindingsPanel";
@@ -1238,17 +1238,6 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
 
   return (
     <div className="border-t border-cyber-border/40 bg-cyber-bg/30 px-4 py-3">
-      {report.section_id === "1-1" ? (
-        <div className="mb-3 flex justify-end">
-          <a
-            href="/api/diagnosis/modules/1-1/report/download"
-            className="inline-flex items-center gap-1.5 rounded border border-cyber-border/50 px-2.5 py-1.5 text-xs text-cyan-200 transition hover:border-cyan-400/60 hover:bg-cyan-400/10"
-          >
-            <Download className="h-3.5 w-3.5" />
-            진단 결과 다운로드
-          </a>
-        </div>
-      ) : null}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {severityStatus ? (
           <SeverityStatusBadge severity={severityStatus} />

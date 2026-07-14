@@ -227,15 +227,22 @@ function DiagnosisStartButton({
 }
 
 /** Placeholder until report export is wired — always disabled for now. */
-function DiagnosisDownloadButton({ compact = false }: { compact?: boolean }) {
+function DiagnosisDownloadButton({ compact = false, sectionId }: { compact?: boolean; sectionId: string }) {
+  const enabled = sectionId === "1-1";
   return (
     <button
       type="button"
-      disabled
+      disabled={!enabled}
+      onClick={() => {
+        if (!enabled) return;
+        window.location.href = "/api/diagnosis/modules/1-1/report/download";
+      }}
       title="결과 다운로드 (준비 중)"
-      className={`flex shrink-0 cursor-not-allowed items-center gap-1 rounded-lg border border-cyan-400/35 bg-cyan-500/10 font-semibold text-cyan-200/75 ${
-        compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"
-      }`}
+      className={`flex shrink-0 items-center gap-1 rounded-lg border font-semibold ${
+        enabled
+          ? "border-cyan-400/45 bg-cyan-500/10 text-cyan-200 transition hover:border-cyan-300/70 hover:bg-cyan-400/10"
+          : "cursor-not-allowed border-cyan-400/35 bg-cyan-500/10 text-cyan-200/75"
+      } ${compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"}`}
     >
       <Download className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
       다운로드
@@ -833,26 +840,6 @@ export function DiagnosisPage() {
                           </span>
                         ) : null}
                         {report ? <StatusBadge status={report.status} /> : null}
-                        {section.id === "1-1" && report ? (
-                          <span
-                            role="link"
-                            tabIndex={0}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              window.location.href = "/api/diagnosis/modules/1-1/report/download";
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key !== "Enter" && event.key !== " ") return;
-                              event.preventDefault();
-                              event.stopPropagation();
-                              window.location.href = "/api/diagnosis/modules/1-1/report/download";
-                            }}
-                            className="inline-flex shrink-0 items-center gap-1 rounded border border-cyber-border/50 px-1.5 py-0.5 text-[10px] text-cyan-200 transition hover:border-cyan-400/60 hover:bg-cyan-400/10"
-                          >
-                            <Download className="h-3 w-3" />
-                            진단 결과 다운로드
-                          </span>
-                        ) : null}
                       </button>
                       {reviewLater || (!diagnosable && !statusLabel) ? (
                         <DiagnosisReviewLaterButton compact />
@@ -921,7 +908,7 @@ export function DiagnosisPage() {
                     ) : null}
                     {open && report ? (
                       <div className="flex items-center justify-start gap-2 border-t border-cyber-border/40 bg-cyber-bg/20 px-4 py-2">
-                        <DiagnosisDownloadButton compact />
+                        <DiagnosisDownloadButton compact sectionId={section.id} />
                       </div>
                     ) : null}
                     {open && !running && report ? <DiagnosisReportPanel report={report} /> : null}
