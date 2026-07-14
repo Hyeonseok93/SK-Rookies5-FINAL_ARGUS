@@ -1,7 +1,9 @@
 app_name: ''
+
 targets:
 - name: api
   base_url: http://host.docker.internal:8080
+
 inventory:
   markdown:
     enabled: false
@@ -18,11 +20,13 @@ inventory:
   base_urls:
   - http://host.docker.internal:8080
   - http://localhost:5173
+
 zap:
   proxy: http://zap:8090
   api_key: ''
   auto_wait: true
   wait_seconds: 90
+
 discover:
   openapi_import: true
   seed_requestor: true
@@ -31,14 +35,14 @@ discover:
   spider_max_seconds: 120
   ajax_spider_enabled: true
   ajax_spider_max_seconds: 120
+
 auth:
   id_field: email
   pw_field: password
   token_field: data.accessToken
   delivery: header
   cookie_name: accessToken
-  login_urls:
-  - http://host.docker.internal:8080/api/v1/auth/login
+
 diagnosis_1_3:
   min_score: 2
   max_candidates: 80
@@ -48,6 +52,7 @@ diagnosis_1_3:
   llm_interpret_enabled: true
   ollama_base_url: http://host.docker.internal:11434
   ollama_model: qwen2.5:7b
+
 diagnosis_2_1:
   timeout: 15.0
   max_targets: 20
@@ -62,6 +67,7 @@ diagnosis_2_1:
   - png
   - gif
   - webp
+
 diagnosis_1_5:
   redirect_sink_base: http://host.docker.internal:8001/argus-redirect-sink
   probe_mode: full
@@ -69,6 +75,7 @@ diagnosis_1_5:
   max_phase_a_jobs: 5000
   max_phase_b_jobs: 10000
   zap_enabled: false
+
 diagnosis_1_6:
   ui_target: http://host.docker.internal:5174
   zap_host: zap
@@ -77,10 +84,7 @@ diagnosis_1_6:
   skip_selenium: true
   timeout_sec: 36000
   max_report_findings: 0
-  role_login_targets:
-    admin: http://host.docker.internal:8080
-  role_login_paths:
-    admin: /api/v1/auth/login
+
 diagnosis_4_1:
   probe_mode: sample
   sample_size: 40
@@ -101,6 +105,7 @@ diagnosis_4_1:
   - cookie_refresh
   - dual
   - browser_full
+
 diagnosis_5_2:
   probe_mode: sample
   sample_size: 40
@@ -112,6 +117,7 @@ diagnosis_5_2:
   check_response_body: true
   check_http_plain: true
   enable_auth_modes: true
+
 diagnosis_6_1:
   probe_mode: sample
   sample_size: 40
@@ -130,6 +136,7 @@ diagnosis_6_1:
   enable_header_fuzz: true
   enable_auth_modes: true
   httpx_enabled: true
+
 diagnosis_4_2:
   timeout: 10.0
   max_token_lifetime_minutes: 30

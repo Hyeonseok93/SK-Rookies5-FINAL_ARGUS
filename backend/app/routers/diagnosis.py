@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from app.config import BACKEND_ROOT
 from app.schemas import (
     DiagnosisCatalogModule,
     DiagnosisCatalogResponse,
@@ -104,6 +107,15 @@ def get_module_report_document(section_id: str) -> HTMLResponse:
     items = report_service.build_report_items(section_id, data_dir=BACKEND_ROOT / "data")
     html_doc = report_service.render_report_html(section_id, report.title, items)
     return HTMLResponse(content=html_doc)
+
+
+@router.get("/modules/1-1/evidence/{relative_path:path}")
+def get_g11_evidence_file(relative_path: str) -> FileResponse:
+    evidence_root = (BACKEND_ROOT / "data" / "report" / "1-1" / "evidence").resolve()
+    target = (evidence_root / Path(relative_path)).resolve()
+    if not target.is_file() or evidence_root not in target.parents:
+        raise HTTPException(status_code=404, detail="Evidence file not found")
+    return FileResponse(target)
 
 
 @router.get("/modules/{section_id}/evidence")

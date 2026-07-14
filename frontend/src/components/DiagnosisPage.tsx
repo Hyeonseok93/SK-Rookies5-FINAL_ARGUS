@@ -1,6 +1,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, ChevronDown, FileDown, Loader2, Stethoscope } from "lucide-react";
+import { AlertCircle, ChevronDown, Download, FileDown, Loader2, Stethoscope } from "lucide-react";
 import { G12DiagnosisStartDialog } from "./G12DiagnosisStartDialog";
 import { G32DiagnosisStartDialog } from "./G32DiagnosisStartDialog";
 import { G34DiagnosisStartDialog } from "./G34DiagnosisStartDialog";
@@ -25,6 +25,10 @@ import { G12SectionInfoPopover } from "./diagnosis/G12SectionInfoPopover";
 import { G74SectionInfoPopover } from "./diagnosis/G74SectionInfoPopover";
 import { G52SectionInfoPopover } from "./diagnosis/G52SectionInfoPopover";
 import { G61SectionInfoPopover } from "./diagnosis/G61SectionInfoPopover";
+import {
+  hasRegistrySectionInfo,
+  RegistrySectionInfoPopover,
+} from "./diagnosis/RegistrySectionInfoPopover";
 import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
 import { G74DiagnosisStartDialog } from "./G74DiagnosisStartDialog";
@@ -252,6 +256,23 @@ function DiagnosisReportDownloadButton({
   );
 }
 
+/** Placeholder until report export is wired — always disabled for now. */
+function DiagnosisDownloadButton({ compact = false }: { compact?: boolean }) {
+  return (
+    <button
+      type="button"
+      disabled
+      title="결과 다운로드 (준비 중)"
+      className={`flex shrink-0 cursor-not-allowed items-center gap-1 rounded-lg border border-cyan-400/35 bg-cyan-500/10 font-semibold text-cyan-200/75 ${
+        compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"
+      }`}
+    >
+      <Download className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
+      다운로드
+    </button>
+  );
+}
+
 function DiagnosisReviewLaterButton({ compact = false }: { compact?: boolean }) {
   return (
     <button
@@ -263,6 +284,41 @@ function DiagnosisReviewLaterButton({ compact = false }: { compact?: boolean }) 
       <AlertCircle className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
       추후 검토
     </button>
+  );
+}
+
+function SectionTitleInfoIcon({ sectionId }: { sectionId: string }) {
+  const Existing =
+    sectionId === "1-2"
+      ? G12SectionInfoPopover
+      : sectionId === "1-6"
+        ? G16SectionInfoPopover
+        : sectionId === "2-2"
+          ? G22SectionInfoPopover
+          : sectionId === "3-2"
+            ? G32SectionInfoPopover
+            : sectionId === "4-4"
+              ? G44SectionInfoPopover
+              : sectionId === "4-5"
+                ? G45SectionInfoPopover
+                : sectionId === "5-2"
+                  ? G52SectionInfoPopover
+                  : sectionId === "6-1"
+                    ? G61SectionInfoPopover
+                    : sectionId === "7-4"
+                      ? G74SectionInfoPopover
+                      : null;
+
+  if (!Existing && !hasRegistrySectionInfo(sectionId)) return null;
+
+  return (
+    <span
+      className="shrink-0"
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      {Existing ? <Existing /> : <RegistrySectionInfoPopover sectionId={sectionId} />}
+    </span>
   );
 }
 
@@ -414,14 +470,12 @@ export function DiagnosisPage() {
         setRunningSummary(g12OptionsSummary(options as G12DiagnosisOptions));
       } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
         setRunningSummary(g15OptionsSummary(options as G15DiagnosisOptions));
-      } else if (sectionId === "2-1" && options && "sellerEmail" in options) {
+      } else if (sectionId === "2-1" && options && "maxTargets" in options) {
         setRunningSummary(g21OptionsSummary(options as G21DiagnosisOptions));
       } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
         setRunningSummary(g41OptionsSummary(options as G41DiagnosisOptions));
       } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
         setRunningSummary(g42OptionsSummary(options as G42DiagnosisOptions));
-      } else if (sectionId === "2-1" && options && "maxTargets" in options) {
-        setRunningSummary(g21OptionsSummary(options as G21DiagnosisOptions));
       } else if (sectionId === "2-2" && options && "useHttpx" in options) {
         setRunningSummary(g22OptionsSummary(options as G22DiagnosisOptions));
       } else if (sectionId === "7-1" && options && "strictRisky" in options) {
@@ -458,14 +512,12 @@ export function DiagnosisPage() {
           body = g12OptionsToPayload(options as G12DiagnosisOptions);
         } else if (sectionId === "1-5" && options && "corsEnabled" in options) {
           body = g15OptionsToPayload(options as G15DiagnosisOptions);
-        } else if (sectionId === "2-1" && options && "sellerEmail" in options) {
+        } else if (sectionId === "2-1" && options && "maxTargets" in options) {
           body = g21OptionsToPayload(options as G21DiagnosisOptions);
         } else if (sectionId === "4-1" && options && "crossCookieEnabled" in options) {
           body = g41OptionsToPayload(options as G41DiagnosisOptions);
         } else if (sectionId === "4-2" && options && "reloginEnabled" in options) {
           body = g42OptionsToPayload(options as G42DiagnosisOptions);
-        } else if (sectionId === "2-1" && options && "maxTargets" in options) {
-          body = g21OptionsToPayload(options as G21DiagnosisOptions);
         } else if (sectionId === "2-2" && options && "useHttpx" in options) {
           body = g22OptionsToPayload(options as G22DiagnosisOptions);
         } else if (sectionId === "7-1" && options && "strictRisky" in options) {
@@ -531,10 +583,6 @@ export function DiagnosisPage() {
       }
       if (sectionId === "4-2") {
         setG42DialogOpen(true);
-        return;
-      }
-      if (sectionId === "2-1") {
-        setG21DialogOpen(true);
         return;
       }
       if (sectionId === "2-2") {
@@ -801,87 +849,7 @@ export function DiagnosisPage() {
                         </span>
                         <span className="flex min-w-0 flex-1 items-center gap-1.5">
                           <span className="text-sm text-white">{section.title}</span>
-                          {section.id === "1-2" ? (
-                            <span
-                              className="shrink-0"
-                              onClick={(e) => e.stopPropagation()}
-                              onMouseDown={(e) => e.stopPropagation()}
-                            >
-                              <G12SectionInfoPopover />
-                            </span>
-                          ) : section.id === "1-6" ? (
-                            <span
-                              className="shrink-0"
-                              onClick={(e) => e.stopPropagation()}
-                              onMouseDown={(e) => e.stopPropagation()}
-                            >
-                              <G16SectionInfoPopover />
-                            </span>
-                          ) : section.id === "6-1" ? (
-                            <span
-                              className="shrink-0"
-                              onClick={(e) => e.stopPropagation()}
-                              onMouseDown={(e) => e.stopPropagation()}
-                            >
-                              <G61SectionInfoPopover />
-                            </span>
-                          ) : section.id === "2-2" ? (
-                            <span
-                              className="shrink-0"
-                              onClick={(e) => e.stopPropagation()}
-                              onMouseDown={(e) => e.stopPropagation()}
-                            >
-                              <G22SectionInfoPopover />
-                            </span>
-                          ) : section.id === "3-2" ? (
-                            <span
-                              className="shrink-0"
-                              onClick={(e) => e.stopPropagation()}
-                              onMouseDown={(e) => e.stopPropagation()}
-                            >
-                              <G32SectionInfoPopover />
-                            </span>
-                          ) : section.id === "4-5" ? (
-                            <span
-                              className="shrink-0"
-                              onClick={(e) => e.stopPropagation()}
-                              onMouseDown={(e) => e.stopPropagation()}
-                            >
-                              <G45SectionInfoPopover />
-                            </span>
-                          ) : section.id === "7-4" ? (
-                            <span
-                              className="shrink-0"
-                              onClick={(e) => e.stopPropagation()}
-                              onMouseDown={(e) => e.stopPropagation()}
-                            >
-                              <G74SectionInfoPopover />
-                            </span>
-                          ) : section.id === "4-4" ? (
-                            <span
-                              className="shrink-0"
-                              onClick={(e) => e.stopPropagation()}
-                              onMouseDown={(e) => e.stopPropagation()}
-                            >
-                              <G44SectionInfoPopover />
-                            </span>
-                          ) : section.id === "5-2" ? (
-                            <span
-                              className="shrink-0"
-                              onClick={(e) => e.stopPropagation()}
-                              onMouseDown={(e) => e.stopPropagation()}
-                            >
-                              <G52SectionInfoPopover />
-                            </span>
-                          ) : section.description ? (
-                            <div className="group relative flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
-                              <AlertCircle className="h-3.5 w-3.5 text-cyber-muted transition group-hover:text-cyan-400" />
-                              <div className="absolute left-1/2 top-full mt-2 hidden w-72 -translate-x-1/2 rounded border border-cyber-border/80 bg-cyber-bg px-3 py-2 text-xs text-white/90 shadow-xl group-hover:block z-50 whitespace-pre-wrap text-left leading-relaxed">
-                                {section.description}
-                                <div className="absolute -top-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-t border-l border-cyber-border/80 bg-cyber-bg"></div>
-                              </div>
-                            </div>
-                          ) : null}
+                          <SectionTitleInfoIcon sectionId={section.id} />
                         </span>
                         {badgeLabel ? (
                           <span
@@ -964,6 +932,11 @@ export function DiagnosisPage() {
                         ) : null}
                       </div>
                     ) : null}
+                    {open && report && !_EVIDENCE_REPORT_SECTIONS.has(section.id) ? (
+                      <div className="flex items-center justify-start gap-2 border-t border-cyber-border/40 bg-cyber-bg/20 px-4 py-2">
+                        <DiagnosisDownloadButton compact />
+                      </div>
+                    ) : null}
                     {open && !running && report ? <DiagnosisReportPanel report={report} /> : null}
                     {open && !report && !running && reviewLater ? (
                       <div className="border-t border-amber-400/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200/90">
@@ -1018,12 +991,6 @@ export function DiagnosisPage() {
         initialOptions={g42Options}
         onClose={() => setG42DialogOpen(false)}
         onStart={handleG42Start}
-      />
-      <G21DiagnosisStartDialog
-        open={g21DialogOpen && !runningId}
-        initialOptions={g21Options}
-        onClose={() => setG21DialogOpen(false)}
-        onStart={handleG21Start}
       />
       <G22DiagnosisStartDialog
         open={g22DialogOpen && !runningId}

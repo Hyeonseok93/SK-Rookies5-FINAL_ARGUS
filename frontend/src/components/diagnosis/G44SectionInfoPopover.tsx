@@ -1,14 +1,23 @@
 import { useCallback, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import {
+  computeSectionInfoPopoverPos,
+  sectionInfoPopoverStyle,
+  type SectionInfoPopoverPos,
+} from "./sectionInfoPopoverLayout";
 
-const CARD_WIDTH = 352;
 const HOVER_LEAVE_MS = 140;
 
 export function G44SectionInfoPopover() {
   const anchorRef = useRef<HTMLButtonElement>(null);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const [pos, setPos] = useState<SectionInfoPopoverPos>({
+    top: 0,
+    left: 0,
+    maxHeight: 360,
+    placement: "below",
+  });
 
   const clearLeaveTimer = useCallback(() => {
     if (leaveTimer.current != null) {
@@ -20,11 +29,7 @@ export function G44SectionInfoPopover() {
   const updatePosition = useCallback(() => {
     const el = anchorRef.current;
     if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const margin = 12;
-    let left = rect.left + rect.width / 2 - CARD_WIDTH / 2;
-    left = Math.max(margin, Math.min(left, window.innerWidth - CARD_WIDTH - margin));
-    setPos({ top: rect.bottom + 8, left });
+    setPos(computeSectionInfoPopoverPos(el.getBoundingClientRect()));
   }, []);
 
   const showCard = useCallback(() => {
@@ -54,8 +59,8 @@ export function G44SectionInfoPopover() {
     open && typeof document !== "undefined"
       ? createPortal(
           <div
-            className="pointer-events-auto fixed z-[300] w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-xl border border-cyan-400/25 bg-[#0a1219]/98 shadow-[0_12px_40px_rgba(0,0,0,0.55)] backdrop-blur-md"
-            style={{ top: pos.top, left: pos.left }}
+            className="pointer-events-auto fixed z-[300] overflow-y-auto overflow-x-hidden rounded-xl border border-cyan-400/25 bg-[#0a1219]/98 shadow-[0_12px_40px_rgba(0,0,0,0.55)] backdrop-blur-md"
+            style={sectionInfoPopoverStyle(pos)}
             onMouseEnter={showCard}
             onMouseLeave={scheduleHide}
             role="tooltip"
@@ -112,6 +117,12 @@ export function G44SectionInfoPopover() {
                       중간
                     </span>
                     <span>로그인이 필요해 보이는 페이지가 익명 2xx로 접근됨 — 인증 적용 여부 수동 확인 권장</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="inline-flex h-4 shrink-0 items-center rounded border border-emerald-400/35 bg-emerald-500/10 px-1.5 text-[9px] leading-none text-emerald-200">
+                      양호
+                    </span>
+                    <span>로그인 없이 접근되는 보호 대상 페이지·API 없음 — 조치 불필요</span>
                   </li>
                 </ul>
                 <p className="mt-2 text-[9px] leading-relaxed text-white/50">

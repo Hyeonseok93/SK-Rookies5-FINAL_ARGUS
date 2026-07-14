@@ -146,7 +146,6 @@ def default_value_for_schema(schema: dict, components: dict | None = None, param
     # 2. Integer 범위 고려 검사
     if schema_type == "integer":
         min_val = schema.get("minimum", 1)
-        max_val = schema.get("maximum", 99999)
         return min_val if min_val <= 1 else min_val
         
     # 3. Number 범위 고려 검사
@@ -173,20 +172,6 @@ def build_default_payload_from_schema(schema: dict, components: dict | None = No
     for key, child_schema in (schema.get("properties") or {}).items():
         payload[key] = default_value_for_schema(child_schema, components, key)
     return payload
-
-
-def find_readable_endpoints_for_post(post_path: str, validated_endpoints: dict) -> list[tuple[str, str]]:
-    candidates = []
-    normalized_post_path = post_path.rstrip("/")
-    for ep_path, ep_methods in (validated_endpoints or {}).items():
-        if "get" not in ep_methods:
-            continue
-        normalized_ep_path = ep_path.rstrip("/")
-        if normalized_ep_path == normalized_post_path:
-            candidates.append(("list", ep_path))
-        elif normalized_ep_path.startswith(normalized_post_path) and "{" in ep_path:
-            candidates.append(("single", ep_path))
-    return candidates
 
 
 def extract_id_from_response(resp_json, depth: int = 0):
@@ -228,31 +213,3 @@ def resource_tokens_from_path(path_value: str) -> set[str]:
     return tokens
 
 
-def admin_read_candidates_for_mutation(post_path: str, resource_id, admin_accounts: list[dict], fallback_base_url: str, fallback_endpoints: dict) -> list[tuple[dict, str, str]]:
-    post_tokens = resource_tokens_from_path(post_path)
-    candidates = []
-    for admin_account in admin_accounts:
-        admin_base = admin_account.get("base_url", fallback_base_url).rstrip("/")
-        admin_endpoints = admin_account.get("validated_endpoints", fallback_endpoints)
-        for get_path, get_methods in (admin_endpoints or {}).items():
-            if "get" not in get_methods or "admin" not in get_path.lower():
-                continue
-            get_tokens = resource_tokens_from_path(get_path)
-            if post_tokens and not (post_tokens & get_tokens):
-                continue
-            if "{" in get_path:
-                if not resource_id:
-                    continue
-                resolved_path = re.sub(r"\{[^}]+\}", str(resource_id), get_path)
-            else:
-                resolved_path = get_path
-            candidates.append((admin_account, get_path, f"{admin_base}/{resolved_path.lstrip('/')}"))
-
-    deduped = []
-    seen = set()
-    for item in candidates:
-        key = (item[0].get("role"), item[2])
-        if key not in seen:
-            seen.add(key)
-            deduped.append(item)
-    return deduped[:20]

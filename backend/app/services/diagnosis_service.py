@@ -463,7 +463,12 @@ def _run_g11_screenshot_capture(mod: Any, ctx: DiagnosisContext, report: Section
         mod.save_report(ctx, report)
         return
 
-    dp.update(phase="screenshot", message="1-1 generating evidence screenshots...", percent=98)
+    # Force running=True for the capture phase: the scan engine may have already
+    # flipped running=False (a benign end-of-scan auth-reverify message routes
+    # through dp.fail), and dp.update alone won't undo that. The run isn't done
+    # until screenshots exist, so re-assert running here; _finish_progress does
+    # the real finish only after capture returns.
+    dp.update(phase="screenshot", message="1-1 generating evidence screenshots...", percent=98, running=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable,

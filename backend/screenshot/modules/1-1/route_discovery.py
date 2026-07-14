@@ -729,6 +729,93 @@ def _brute_force_click_discovery(
     return best_exact_hit
 
 
+def _target_path_id(case: EvidenceCase) -> str | None:
+    """The concrete resource id sitting in the target URL path, e.g.
+    /api/v1/posts/2/comments -> '2'. That's the parent record (post 2) whose
+    detail page must be opened to reach the nested content (its comments)."""
+    segs = _segments(_canonical_api_path(_path_of(case.exchange.url)))
+    ids = [s for s in segs if s.isdigit()]
+    return ids[-1] if ids else None
+
+
+def _parent_collection_path(case: EvidenceCase) -> str | None:
+    """The collection endpoint the target id belongs to: strip the trailing
+    /{id}/<sub...> so /api/v1/posts/2/comments -> /api/v1/posts. That list
+    response names each record's own text, letting us find which card to click."""
+    segs = _segments(_canonical_api_path(_path_of(case.exchange.url)))
+    for i in range(len(segs) - 1, -1, -1):
+        if segs[i].isdigit():
+            return ("/" + "/".join(segs[:i])) if i else None
+    return None
+
+
+def _iter_record_dicts(body: Any):
+    """Yield record dicts from a list response of any common envelope shape,
+    including *nested* ones (a bare list, {data:[...]}, or a paginated
+    {data:{content:[...]}} / {result:{items:[...]}}). App-agnostic: only
+    conventional wrapper keys are unwrapped, no record field name assumed."""
+    for _ in range(4):  # bounded unwrap for nested envelopes
+        if isinstance(body, list):
+            break
+        if not isinstance(body, dict):
+            return
+        nxt = None
+        for key in ("data", "content", "items", "results", "list", "posts", "rows"):
+            val = body.get(key)
+            if isinstance(val, (list, dict)):
+                nxt = val
+                break
+        if nxt is None:
+            body = [body]
+            break
+        body = nxt
+    if isinstance(body, list):
+        for item in body:
+            if isinstance(item, dict):
+                yield item
+
+
+def _record_matches_id(rec: dict, target_id: str) -> bool:
+    """True if the record's id-ish field equals target_id — the REST
+    convention that a primary key lives in a key named ``id`` or ``*Id``
+    (a generic naming pattern, not any one app's schema), matched by value."""
+    for key, val in rec.items():
+        kl = str(key).lower()
+        if (kl == "id" or kl.endswith("id")) and str(val) == str(target_id):
+            return True
+    return False
+
+
+def _list_text_needles(api_bodies: list[tuple[str, Any]], case: EvidenceCase) -> list[str]:
+    """Bridge a nested-resource target to the card that opens it: from the
+    parent collection's captured response, find the record whose id matches the
+    target's path id, and return its distinctive visible text (title/body/
+    author). That text lets ``_click_matching`` reach the right card by
+    ``get_by_text`` — the id itself is usually absent from the DOM for
+    onClick-navigated SPAs, which is why clicking by id alone fails."""
+    target_id = _target_path_id(case)
+    parent = _parent_collection_path(case)
+    if not target_id or not parent:
+        return []
+    parent = parent.rstrip("/")
+    needles: list[str] = []
+    for url, body in api_bodies:
+        if _canonical_api_path(_path_of(url)).rstrip("/") != parent:
+            continue
+        for rec in _iter_record_dicts(body):
+            if not _record_matches_id(rec, target_id):
+                continue
+            for val in rec.values():
+                if isinstance(val, str):
+                    text = val.strip()
+                    # Skip empty/huge, injected payloads and any HTML — those
+                    # don't render as clean, matchable visible text.
+                    if 4 <= len(text) <= 120 and "ARGUS_" not in text and "<" not in text:
+                        needles.append(text)
+    # De-dup, longest (most distinctive) first, capped.
+    return list(dict.fromkeys(sorted(needles, key=len, reverse=True)))[:3]
+
+
 def _discover_via_click(context, page_url: str, case: EvidenceCase, resource_ids: list[str]) -> dict[str, Any] | None:
     """Second-pass discovery for content that only appears after navigating
     into a specific list item (e.g. a post's comments) — page-load-only
@@ -739,17 +826,39 @@ def _discover_via_click(context, page_url: str, case: EvidenceCase, resource_ids
     an id nor the payload text — a "manage profile" tab, an un-id'd card)."""
     page = context.new_page()
     observed: list[dict[str, str]] = []
+    api_bodies: list[tuple[str, Any]] = []
 
     def on_request(req) -> None:
         observed.append({"method": req.method, "url": req.url})
 
+    def on_response(resp) -> None:
+        # Capture parent-list JSON so a nested-resource target can be reached by
+        # the record's visible text (see _list_text_needles). Best-effort only.
+        try:
+            if "/api/" not in resp.url:
+                return
+            if "json" not in str(resp.headers.get("content-type", "")).lower():
+                return
+            api_bodies.append((resp.url, resp.json()))
+        except Exception:
+            pass
+
     page.on("request", on_request)
+    page.on("response", on_response)
     try:
         page.goto(page_url, wait_until="domcontentloaded", timeout=15_000)
         page.wait_for_timeout(1_000)
-        candidates = [("id", rid) for rid in resource_ids] + [
-            ("text", needle) for needle in _content_needles(case)
-        ]
+        # Try, in order: the URL resource id, then the parent record's own text
+        # (bridges an un-id'd feed card to the post the payload lives in), then
+        # the payload/marker text.
+        # Try, in order: the URL resource id, then the parent record's own text
+        # (bridges an un-id'd feed card to the post the payload lives in), then
+        # the payload/marker text.
+        candidates = (
+            [("id", rid) for rid in resource_ids]
+            + [("text", needle) for needle in _list_text_needles(api_bodies, case)]
+            + [("text", needle) for needle in _content_needles(case)]
+        )
         for kind, needle in candidates:
             observed.clear()
             clicked = _click_matching(page, needle)
@@ -778,6 +887,7 @@ def _discover_via_click(context, page_url: str, case: EvidenceCase, resource_ids
         pass
     finally:
         page.remove_listener("request", on_request)
+        page.remove_listener("response", on_response)
         page.close()
 
     # Nothing matched a specific id/text handle — sweep the page's clickable
