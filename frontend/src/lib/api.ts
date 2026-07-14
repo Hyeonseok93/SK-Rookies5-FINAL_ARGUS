@@ -102,6 +102,31 @@ export function cancelDiagnosisRun(): Promise<{ ok: boolean; section_id: string 
   return request("/diagnosis/cancel", { method: "POST" });
 }
 
+/** 결과서(PDF) URL — 지원되는 섹션만 다운로드 버튼을 노출한다. */
+export const REPORT_PDF_SECTIONS = new Set<string>(["5-2"]);
+
+export function diagnosisReportPdfUrl(sectionId: string): string {
+  return `${BASE}/diagnosis/modules/${encodeURIComponent(sectionId)}/report/pdf`;
+}
+
+/** 결과서 PDF 를 내려받는다(blob 로 받아 파일 저장). */
+export async function downloadDiagnosisReportPdf(sectionId: string): Promise<void> {
+  const res = await fetch(diagnosisReportPdfUrl(sectionId));
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(detail || `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = `argus_${sectionId}_report.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(href);
+}
+
 const DEFAULT_DIAGNOSIS_WAIT_MS = 5 * 60 * 60 * 1000;
 
 export async function waitForDiagnosisComplete(
