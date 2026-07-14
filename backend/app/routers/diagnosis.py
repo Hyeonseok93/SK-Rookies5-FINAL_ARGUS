@@ -96,6 +96,21 @@ def get_g11_evidence_file(relative_path: str) -> FileResponse:
     return FileResponse(target)
 
 
+@router.get("/modules/{section_id}/report/pdf")
+def download_module_report_pdf(section_id: str) -> FileResponse:
+    pdf_path = diagnosis_service.get_report_pdf(section_id)
+    if pdf_path is None or not pdf_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No report PDF for module {section_id}. Run the diagnosis first.",
+        )
+    return FileResponse(
+        pdf_path,
+        media_type="application/pdf",
+        filename=f"argus_{section_id}_report.pdf",
+    )
+
+
 @router.get("/modules/{section_id}/evidence")
 def get_evidence_file(section_id: str, path: str) -> FileResponse:
     resolved = diagnosis_service.resolve_evidence_file(section_id, path)

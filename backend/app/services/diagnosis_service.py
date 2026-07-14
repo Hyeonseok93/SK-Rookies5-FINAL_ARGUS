@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import sys
@@ -16,6 +17,9 @@ from diagnosis.context import DiagnosisContext
 from diagnosis.registry import get_module, get_modules, list_registered_ids
 from diagnosis.exceptions import DiagnosisCancelled
 from diagnosis.result import DiagnosisFinding, SectionReport
+
+logger = logging.getLogger(__name__)
+
 
 def _inject_gradle_dep_files(raw: dict) -> dict:
     """data/gradle_dep_files.json에 저장된 경로를 diagnosis_7_4.gradle_dep_files에 주입한다.
@@ -191,6 +195,31 @@ def get_report(section_id: str) -> SectionReport | None:
         return None
     ctx = _context()
     return mod.load_report(ctx)
+
+
+def get_report_pdf(section_id: str, *, generate_if_missing: bool = True) -> Path | None:
+    """섹션 결과서 PDF 경로를 반환. 없으면(옵션) 최신 진단 결과로 즉석 생성."""
+    if section_id not in SECTION_BY_ID:
+        return None
+    ctx = _context()
+    try:
+        from report.service import report_pdf_path, generate_report
+    except Exception:
+        logger.exception("결과서 서비스 로드 실패")
+        return None
+
+    pdf_path = report_pdf_path(section_id, ctx.data_dir)
+    if pdf_path is None:
+        return None
+    if pdf_path.is_file():
+        return pdf_path
+    if not generate_if_missing:
+        return None
+    try:
+        return generate_report(section_id, ctx.data_dir)
+    except Exception:
+        logger.exception("%s 결과서 즉석 생성 실패", section_id)
+        return None
 
 
 def resolve_evidence_file(section_id: str, rel_path: str) -> Path | None:
@@ -576,12 +605,44 @@ def _run_module(mod: Any, ctx: DiagnosisContext, section_id: str) -> SectionRepo
                 percent=99,
             )
 
-    # 1-1: XSS/CSRF 증거 스크린샷 캡처 
+    # 1-1: XSS/CSRF 증거 스크린샷 캡처
     # 내부에서 section_id != "1-1"이면 즉시 return 하므로 무조건 호출해도 안전
     _run_g11_screenshot_capture(mod, ctx, report)
 
+    # 5-2: 진단 결과서(PDF) 생성 — 진단을 다시 하면 덮어쓴다.
+    if section_id == "5-2" and report.status != "cancelled":
+        _generate_section_report(section_id, ctx, report)
+
     _finish_progress(section_id, report)
     return report
+
+
+def _generate_section_report(section_id: str, ctx: DiagnosisContext, report: SectionReport) -> None:
+    """섹션 결과서 PDF 생성. 실패해도 진단 결과 자체는 유지한다."""
+    from app.services import diagnosis_progress as dp
+
+    dp.update(
+        phase="report",
+        message=f"{section_id}: 결과서(PDF) 생성 중…",
+        percent=99,
+    )
+    try:
+        from report.service import generate_report
+
+        out = generate_report(section_id, ctx.data_dir)
+        if out is None:
+            dp.update(
+                phase="report",
+                message=f"{section_id}: 결과서 빌더 없음 — 진단 결과는 저장됨",
+                percent=99,
+            )
+    except Exception as exc:  # 결과서 실패가 진단을 막지 않도록
+        logger.exception("%s 결과서 생성 실패", section_id)
+        dp.update(
+            phase="report",
+            message=f"{section_id}: 결과서 생성 실패 — 진단 결과는 저장됨",
+            percent=99,
+        )
 
 
 def start_section_run_background(
