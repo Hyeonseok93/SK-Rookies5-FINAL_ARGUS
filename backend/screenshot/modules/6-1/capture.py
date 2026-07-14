@@ -69,6 +69,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+# Run directly (e.g. `python capture.py --report ... --output ...`, as
+# app/services/evidence_capture_service.py's subprocess call does) rather than
+# imported via run.py's importlib loader — backend root isn't on sys.path yet
+# in that case, so the `diagnosis.*` imports below would fail.
+_MODULE_DIR = Path(__file__).resolve().parent
+_BACKEND_ROOT = _MODULE_DIR.parents[2]
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
+
 import yaml
 from PIL import Image
 
@@ -438,28 +447,32 @@ _OVERLAY_CSS = """
   pointer-events: none !important; font-family: Arial, "Noto Sans KR", sans-serif !important; }
 #argus-evidence-bottom { position: absolute !important; top: 260px !important; left: 0 !important;
   width: 100vw !important; height: calc(100vh - 260px) !important; background: #111315 !important;
-  color: #e4e8ec !important; border-top: 4px solid #e7782f !important; }
-#argus-evidence-tabs { height: 32px !important; padding: 7px 12px !important; background: #25282c !important;
+  color: #e4e8ec !important; border-top: 4px solid #e7782f !important;
+  display: flex !important; flex-direction: column !important; overflow: hidden !important; }
+#argus-evidence-tabs { flex: 0 0 auto !important; padding: 6px 12px !important; background: #25282c !important;
   color: #aaa !important; font-size: 12px !important; font-weight: 700 !important; }
 #argus-evidence-tabs b { color: #ef873e !important; margin-right: 22px !important; }
-#argus-evidence-target { height: 34px !important; padding: 8px 12px !important; background: #191b1e !important;
+#argus-evidence-target { flex: 0 0 auto !important; padding: 6px 12px !important; background: #191b1e !important;
   border-top: 1px solid #393d42 !important; border-bottom: 1px solid #393d42 !important;
-  color: #d4d8dd !important; font: 12px ui-monospace, monospace !important; white-space: nowrap !important;
-  overflow: hidden !important; text-overflow: ellipsis !important; }
-#argus-evidence-verdict { padding: 6px 12px !important; font-size: 12px !important; font-weight: 700 !important; }
+  color: #d4d8dd !important; font: 12px ui-monospace, monospace !important; line-height: 1.35 !important;
+  white-space: normal !important; overflow-wrap: anywhere !important; word-break: break-all !important;
+  max-height: 54px !important; overflow: hidden !important; }
+#argus-evidence-verdict { flex: 0 0 auto !important; padding: 6px 12px !important; font-size: 12px !important;
+  font-weight: 700 !important; }
 #argus-evidence-verdict.hit { background: #3a1414 !important; color: #ff8a80 !important; }
 #argus-evidence-verdict.miss { background: #141a14 !important; color: #8bd18b !important; }
-#argus-evidence-panels { display: grid !important; height: calc(100vh - 330px) !important; }
+#argus-evidence-panels { flex: 1 1 auto !important; min-height: 0 !important; display: grid !important; }
 #argus-evidence-panels.two-col { grid-template-columns: 1fr 1fr !important; }
 #argus-evidence-panels.one-col { grid-template-columns: 1fr !important; }
-.argus-evidence-panel { min-width: 0 !important; border-right: 1px solid #383c41 !important;
-  background: #111315 !important; }
+.argus-evidence-panel { min-width: 0 !important; min-height: 0 !important; display: flex !important;
+  flex-direction: column !important; border-right: 1px solid #383c41 !important; background: #111315 !important; }
 .argus-evidence-panel:last-child { border-right: none !important; }
-.argus-evidence-heading { height: 30px !important; padding: 8px 11px !important; background: #25282c !important;
+.argus-evidence-heading { flex: 0 0 auto !important; padding: 7px 11px !important; background: #25282c !important;
   color: #72d68b !important; font-size: 12px !important; font-weight: 700 !important; }
-.argus-evidence-pre { height: calc(100vh - 360px) !important; margin: 0 !important; padding: 12px !important;
-  overflow: hidden !important; color: #d8dde2 !important; white-space: pre-wrap !important;
-  overflow-wrap: anywhere !important; font: 10.5px/1.42 ui-monospace, SFMono-Regular, Menlo, monospace !important; }
+.argus-evidence-pre { flex: 1 1 auto !important; min-height: 0 !important; margin: 0 !important;
+  padding: 10px 12px !important; overflow: hidden !important; color: #d8dde2 !important;
+  white-space: pre-wrap !important; overflow-wrap: anywhere !important;
+  font: 10px/1.38 ui-monospace, SFMono-Regular, Menlo, monospace !important; }
 .argus-evidence-pre mark { background: #e0a000 !important; color: #1a1200 !important; padding: 0 2px !important;
   border-radius: 2px !important; font-weight: 700 !important; }
 """
@@ -1111,3 +1124,32 @@ def run_capture(
         auth_headers=auth_headers,
     ) as cap:
         return cap.capture_all(targets)
+
+
+# ---------------------------------------------------------------------------
+# CLI entrypoint — matches the generic ``--report``/``--output`` contract that
+# app/services/evidence_capture_service.py invokes for every auto-captured
+# section, so 6-1 can join that allowlist without any change on that side.
+# For the full flag set (severities, auth overrides, base-url, ...), use
+# run.py directly instead.
+# ---------------------------------------------------------------------------
+def _main() -> int:
+    import argparse
+
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
+    parser = argparse.ArgumentParser(description="ARGUS 6-1 screenshot capture (defaults only)")
+    parser.add_argument("--report", type=Path, help="6-1 report yaml (default: data/report/6-1/latest.yaml)")
+    parser.add_argument("--output", type=Path, help="output dir (default: data/report/6-1/evidence/webcapture)")
+    args = parser.parse_args()
+
+    results = run_capture(report_path=args.report, output_dir=args.output)
+    print(json_lib.dumps({"count": len(results), "captures": results}, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

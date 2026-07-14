@@ -9,9 +9,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import yaml
+
 from diagnosis.result import DiagnosisFinding
 
-SUMMARY_VERSION = 4
+SUMMARY_VERSION = 5
 
 _SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1, "info": 0}
 
@@ -130,6 +132,7 @@ def _parse_finding_chunk(chunk: str) -> dict[str, Any] | None:
         "url": _field(chunk, "url"),
         "base_url": _field(chunk, "base_url"),
         "method": _field(chunk, "method"),
+        "endpoint_id": _field(chunk, "endpoint_id"),
         "engine": _field(chunk, "engine") or _field(chunk, "source"),
         "source": _field(chunk, "source"),
         "trigger_family": _field(chunk, "trigger_family"),
@@ -162,6 +165,22 @@ def _iter_finding_chunks(text: str):
 
 def _group_key(severity: str, sk: str, category: str, rule_id: str, origin: str) -> str:
     return "|".join([severity, sk, category, rule_id, origin])
+
+
+# Endpoint.endpoint_id (inventory/schema.py) is built as
+# f"{scheme}://{host}[:{port}]:{METHOD}:{path}" — the scheme's own "://" and
+# optional port colon mean this can't be split on ":" naively.
+_ENDPOINT_ID_RE = re.compile(r"^(https?)://([^:/]+)(?::(\d+))?:([A-Z]+):(/.*)$")
+
+
+def _parse_endpoint_id(endpoint_id: str) -> tuple[str, str, str] | None:
+    """endpoint_id -> (origin, method, path), or None if it doesn't match the expected shape."""
+    m = _ENDPOINT_ID_RE.match(endpoint_id or "")
+    if not m:
+        return None
+    scheme, host, port, method, path = m.groups()
+    origin = f"{scheme}://{host}:{port}" if port else f"{scheme}://{host}"
+    return origin, method, path
 
 
 def _issue_label(category: str, rule_id: str, hint: str | None) -> str:
@@ -204,6 +223,7 @@ def _aggregate_issue_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     by_sk: Counter[str] = Counter()
     by_trigger: Counter[str] = Counter()
     groups: dict[str, dict[str, Any]] = {}
+    endpoints: dict[str, dict[str, Any]] = {}
 
     for row in rows:
         if row.get("kind") != "issue":
@@ -222,6 +242,24 @@ def _aggregate_issue_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         by_sk[sk] += 1
         if ev.get("trigger_family"):
             by_trigger[str(ev["trigger_family"])] += 1
+
+        parsed_endpoint = _parse_endpoint_id(str(ev.get("endpoint_id") or ""))
+        if parsed_endpoint:
+            ep_origin, ep_method, ep_path = parsed_endpoint
+            ep_key = f"{ep_origin}:{ep_method}:{ep_path}"
+            ep = endpoints.get(ep_key)
+            if not ep:
+                ep = endpoints[ep_key] = {
+                    "origin": _origin_label(ep_origin),
+                    "method": ep_method,
+                    "path": ep_path,
+                    "count": 0,
+                    "severities": Counter(),
+                    "rule_ids": set(),
+                }
+            ep["count"] += 1
+            ep["severities"][sev] += 1
+            ep["rule_ids"].add(rule_id)
 
         key = _group_key(sev, sk, category, rule_id, origin)
         g = groups.get(key)
@@ -306,12 +344,32 @@ def _aggregate_issue_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             }
         )
 
+    total_patterns = len({str(g.get("rule_id")) for g in groups.values()})
+    endpoint_list = []
+    for ep in endpoints.values():
+        top_severity = max(ep["severities"], key=lambda s: (_SEVERITY_RANK.get(s, 0), ep["severities"][s]))
+        endpoint_list.append(
+            {
+                "origin": ep["origin"],
+                "method": ep["method"],
+                "path": ep["path"],
+                "count": ep["count"],
+                "severity": top_severity,
+                "matched_patterns": len(ep["rule_ids"]),
+                "total_patterns": total_patterns,
+            }
+        )
+    endpoint_list.sort(
+        key=lambda e: (-_SEVERITY_RANK.get(str(e["severity"]), 0), -int(e["count"]), str(e["path"]))
+    )
+
     return {
         "summary_version": SUMMARY_VERSION,
         "total_issues": sum(by_severity.values()),
         "by_severity": dict(by_severity),
         "by_sk": dict(by_sk),
         "by_category": dict(by_category),
+        "endpoints": endpoint_list,
         "by_trigger_family": dict(by_trigger.most_common()),
         "by_origin": by_origin,
         "groups": group_list,
@@ -368,25 +426,26 @@ def build_g61_summary_from_yaml(path: Path) -> dict[str, Any]:
 
 
 def _extract_stats_from_chunk(chunk: str) -> dict[str, Any] | None:
+    """Pull the ``stats:`` sub-block (the one "6-1 scan statistics" finding
+    near the top of the file) out and parse *just that* with a real YAML
+    parser instead of scanning it line by line.
+
+    A flat ``key: value`` line scan can't represent list fields
+    (``base_urls``) or nested dicts (``by_severity``, ``requests_by_family``)
+    — it silently drops them. This block is only ~60 lines, so a real parse
+    here is cheap; unlike a full-document parse (~74k findings / 120MB) it
+    won't blow up memory.
+    """
     m = re.search(r"\n    stats:\n(.*?)(?=\n- severity:|\Z)", chunk, re.S)
     if not m:
         return None
     block = m.group(1)
-    stats: dict[str, Any] = {}
-    for line in block.splitlines():
-        mm = re.match(r"      ([\w_]+): (.+)$", line)
-        if not mm:
-            continue
-        key, raw = mm.group(1), mm.group(2).strip()
-        if raw in ("true", "false"):
-            stats[key] = raw == "true"
-        elif raw == "null":
-            stats[key] = None
-        elif re.match(r"^-?\d+$", raw):
-            stats[key] = int(raw)
-        else:
-            stats[key] = raw.strip("'\"")
-    return stats or None
+    dedented = "\n".join(line[6:] if line.startswith(" " * 6) else line for line in block.splitlines())
+    try:
+        parsed = yaml.safe_load(dedented)
+    except yaml.YAMLError:
+        return None
+    return parsed if isinstance(parsed, dict) and parsed else None
 
 
 def _extract_stats_from_header(header: str) -> dict[str, Any] | None:
@@ -422,6 +481,14 @@ def save_summary_cache(report_path: Path, summary: dict[str, Any]) -> Path:
 
 
 def load_or_build_summary(report_path: Path) -> dict[str, Any]:
+    """Cache-miss path uses the lightweight per-line regex scan
+    (``build_g61_summary_from_yaml``), NOT a full ``yaml.load()`` of the
+    report — for a 74k-finding / 120MB+ report a full parse can use enough
+    memory to get OOM-killed in a constrained container (observed in
+    practice). The stats sub-block is parsed correctly regardless (see
+    ``_extract_stats_from_chunk``); only per-finding fields go through the
+    cheap line scan, which is fine for the flat fields used here.
+    """
     cached = load_cached_summary(report_path)
     if cached is not None:
         return cached

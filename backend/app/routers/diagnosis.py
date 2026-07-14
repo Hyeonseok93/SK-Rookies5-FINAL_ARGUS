@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -92,22 +94,54 @@ def get_evidence_file(section_id: str, path: str) -> FileResponse:
     return FileResponse(resolved)
 
 
-@router.get("/modules/{section_id}/report.pdf")
-def download_module_report_pdf(section_id: str) -> Response:
-    from app.services.report_pdf_service import report_pdf_filename
+def _report_pdf_filename(section_id: str) -> str:
+    stamp = datetime.now(UTC).strftime("%Y%m%d")
+    return f"argus-{section_id}-report-{stamp}.pdf"
 
+
+def _load_module_report_renderer(section_id: str):
+    """report/modules/{id}/renderer.py owns that section's whole report-PDF
+    pipeline — loaded by path since e.g. "6-1" isn't a valid Python import
+    segment (same convention as diagnosis/modules/{id}, screenshot/modules/{id})."""
+    import importlib.util
+
+    from app.config import BACKEND_ROOT
+
+    renderer_path = BACKEND_ROOT / "report" / "modules" / section_id / "renderer.py"
+    if not renderer_path.is_file():
+        return None
+    mod_name = f"report_renderer_{section_id.replace('-', '_')}"
+    spec = importlib.util.spec_from_file_location(mod_name, renderer_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load report renderer from {renderer_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _dedicated_report_pdf_response(section_id: str) -> Response:
+    renderer = _load_module_report_renderer(section_id)
+    if renderer is None:
+        raise HTTPException(status_code=404, detail=f"No PDF renderer for module {section_id}")
     try:
-        pdf_bytes = diagnosis_service.build_report_pdf(section_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        pdf_bytes = renderer.render_pdf()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    filename = report_pdf_filename(section_id)
+    filename = _report_pdf_filename(section_id)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/modules/{section_id}/report.pdf")
+def download_module_report_pdf(section_id: str) -> Response:
+    """Dispatches to report/modules/{id}/renderer.py if that module owns one
+    (e.g. 6-1) — 404s otherwise. Each module owns its own renderer file; there
+    is no shared/generic renderer here to avoid every module owner editing
+    the same common file."""
+    return _dedicated_report_pdf_response(section_id)
 
 
 @router.post("/modules/{section_id}/run", response_model=DiagnosisRunSectionResponse)
