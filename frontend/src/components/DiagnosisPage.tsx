@@ -41,7 +41,6 @@ import {
   runDiagnosisSection,
   REPORT_PDF_SECTIONS,
 } from "../lib/api";
-
 import {
   DEFAULT_G12_OPTIONS,
   g12OptionsSummary,

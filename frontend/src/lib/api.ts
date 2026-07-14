@@ -103,7 +103,7 @@ export function cancelDiagnosisRun(): Promise<{ ok: boolean; section_id: string 
 }
 
 /** 결과서(PDF) URL — 지원되는 섹션만 다운로드 버튼을 노출한다. */
-export const REPORT_PDF_SECTIONS = new Set<string>(["5-2"]);
+export const REPORT_PDF_SECTIONS = new Set<string>(["2-2", "5-2"]);
 
 export function diagnosisReportPdfUrl(sectionId: string): string {
   return `${BASE}/diagnosis/modules/${encodeURIComponent(sectionId)}/report/pdf`;
@@ -117,14 +117,23 @@ export async function downloadDiagnosisReportPdf(sectionId: string): Promise<voi
     throw new Error(detail || `HTTP ${res.status}`);
   }
   const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(disposition);
+  const filename = match
+    ? decodeURIComponent(match[1].replace(/["']/g, ""))
+    : `ARGUS-${sectionId}-report.pdf`;
   const href = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = href;
-  a.download = `argus_${sectionId}_report.pdf`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(href);
+  try {
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = filename;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(href);
+  }
 }
 
 const DEFAULT_DIAGNOSIS_WAIT_MS = 5 * 60 * 60 * 1000;

@@ -99,17 +99,25 @@ def get_module_report(section_id: str) -> DiagnosisSectionReportResponse:
     return _report_to_response(report)
 
 
-@router.get("/modules/1-1/evidence/{relative_path:path}")
-def get_g11_evidence_file(relative_path: str) -> FileResponse:
-    evidence_root = (BACKEND_ROOT / "data" / "report" / "1-1" / "evidence").resolve()
-    target = (evidence_root / Path(relative_path)).resolve()
-    if not target.is_file() or evidence_root not in target.parents:
-        raise HTTPException(status_code=404, detail="Evidence file not found")
-    return FileResponse(target)
-
-
 @router.get("/modules/{section_id}/report/pdf")
 def download_module_report_pdf(section_id: str) -> FileResponse:
+    """Download section PDF. Prefer on-demand generators (e.g. 2-2); else cached report PDF."""
+    if diagnosis_service.supports_pdf_export(section_id):
+        try:
+            pdf_path = diagnosis_service.build_section_pdf(section_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to build PDF for module {section_id}: {exc}",
+            ) from exc
+        return FileResponse(
+            path=pdf_path,
+            media_type="application/pdf",
+            filename=f"ARGUS-{section_id}-report.pdf",
+        )
+
     pdf_path = diagnosis_service.get_report_pdf(section_id)
     if pdf_path is None or not pdf_path.is_file():
         raise HTTPException(
@@ -121,6 +129,15 @@ def download_module_report_pdf(section_id: str) -> FileResponse:
         media_type="application/pdf",
         filename=f"argus_{section_id}_report.pdf",
     )
+
+
+@router.get("/modules/1-1/evidence/{relative_path:path}")
+def get_g11_evidence_file(relative_path: str) -> FileResponse:
+    evidence_root = (BACKEND_ROOT / "data" / "report" / "1-1" / "evidence").resolve()
+    target = (evidence_root / Path(relative_path)).resolve()
+    if not target.is_file() or evidence_root not in target.parents:
+        raise HTTPException(status_code=404, detail="Evidence file not found")
+    return FileResponse(target)
 
 
 @router.get("/modules/1-1/report/download")
