@@ -118,6 +118,18 @@ export function G52SectionInfoPopover() {
                     </span>
                     <span>이름·은행명 등이 평문 노출, 또는 경로·구조 노출 — 마스킹·검토 권장</span>
                   </li>
+                  <li className="flex items-start gap-2">
+                    <span className="inline-flex h-4 shrink-0 items-center rounded border border-sky-400/35 bg-sky-500/10 px-1.5 text-[9px] leading-none text-sky-200">
+                      낮음
+                    </span>
+                    <span>경미한 노출·참고 항목 — 참고 수준으로 확인 권장</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="inline-flex h-4 shrink-0 items-center rounded border border-emerald-400/35 bg-emerald-500/10 px-1.5 text-[9px] leading-none text-emerald-200">
+                      양호
+                    </span>
+                    <span>요청·응답에 마스킹 없이 노출된 개인정보 없음 — 조치 불필요</span>
+                  </li>
                 </ul>
                 <p className="mt-2 text-[9px] leading-relaxed text-white/50">
                   참고: <code className="text-cyan-300/70">argus-probe@example.com</code> 같은 값은 점검 도구가 넣은

@@ -46,6 +46,44 @@ export function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
+
+const SEVERITY_STATUS_STYLES: Record<string, string> = {
+  high: "border-rose-400/50 bg-rose-500/10 text-rose-300",
+  medium: "border-amber-400/50 bg-amber-500/10 text-amber-300",
+  low: "border-sky-400/50 bg-sky-500/10 text-sky-300",
+};
+
+const SEVERITY_RANK: Record<string, number> = { high: 3, medium: 2, low: 1, info: 0 };
+
+// Sections that report a fail/warn status but should surface it as a
+// severity-graded badge (HIGH/MEDIUM/LOW) instead of the raw FAIL/WARN label.
+const SEVERITY_STATUS_SECTIONS = new Set(["3-2", "4-4", "5-2"]);
+
+function highestFindingSeverity(
+  findings: { severity: string }[],
+): "high" | "medium" | "low" | null {
+  let best: string | null = null;
+  let bestRank = 0;
+  for (const f of findings) {
+    const sev = (f.severity ?? "").toLowerCase();
+    const rank = SEVERITY_RANK[sev] ?? 0;
+    if (rank > bestRank) {
+      bestRank = rank;
+      best = sev;
+    }
+  }
+  if (best === "high" || best === "medium" || best === "low") return best;
+  return null;
+}
+
+function SeverityStatusBadge({ severity }: { severity: string }) {
+  const cls = SEVERITY_STATUS_STYLES[severity] ?? STATUS_STYLES.fail;
+  return (
+    <span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase ${cls}`}>
+      {severity}
+    </span>
+  );
+}
 export function FindingEvidence({
   evidence,
   sectionId,
@@ -394,10 +432,18 @@ type FindingSummary = {
 type G11Artifact = {
   kind: string;
   path: string;
+  occurrenceIndex?: number;
+  occurrenceUrl?: string;
+  occurrenceParam?: string;
 };
 
 type G11CaptureResult = {
   finding_id?: string;
+  parent_finding_id?: string;
+  occurrence_index?: number;
+  url?: string;
+  param?: string;
+  payload?: string;
   ok?: boolean;
   artifacts?: G11Artifact[];
   error?: string;
@@ -407,6 +453,20 @@ function textValue(value: unknown, fallback = "-") {
   if (value === undefined || value === null || value === "") return fallback;
   return String(value);
 }
+
+const G11_XSS_MANUAL_VERIFICATION_NOTE =
+  "Stored XSS 자동 진단은 페이로드 저장 및 재조회 응답을 기준으로 취약 가능성을 판단합니다. 다만 프론트엔드 렌더링 방식, HTML escaping/sanitizing 처리, CSP 정책, 사용자 권한에 따라 실제 스크립트 실행 여부가 달라질 수 있으므로 수동 진단이 필요합니다. 브라우저에서 해당 URL을 열어 저장된 값이 DOM에 반영되는지, alert 등 스크립트가 실제 실행되는지, 다른 사용자 계정에서도 노출되는지 확인하세요.";
+
+const G11_CSRF_MANUAL_VERIFICATION_NOTE =
+  "CSRF 자동 진단은 Origin/Referer 제거 또는 변조, CSRF Token 누락, SameSite Cookie 미흡 조건에서 상태 변경 요청이 수락되는지를 기준으로 취약 가능성을 판단합니다. 다만 인증 방식, 세션 쿠키의 SameSite 설정, CORS preflight 발생 여부, 요청 Content-Type에 따라 실제 악용 가능성이 달라질 수 있으므로 수동 진단이 필요합니다. Burp Suite Repeater 또는 CSRF PoC로 피해자 로그인 세션에서 동일 요청이 성공하는지 확인하세요.";
+
+const G11_CSRF_REMEDIATION_GUIDE =
+  "1. 상태 변경 요청에는 예측 불가능한 CSRF Token을 발급하고 서버에서 매 요청마다 검증합니다.\n" +
+  "2. POST, PUT, PATCH, DELETE 등 상태 변경 API는 Origin 또는 Referer를 검증하고, 허용되지 않은 도메인이나 누락된 헤더 요청을 차단합니다.\n" +
+  "3. 세션 쿠키에는 SameSite=Lax 또는 SameSite=Strict를 설정하고, Secure와 HttpOnly 옵션을 함께 적용합니다.\n" +
+  "4. Access-Control-Allow-Credentials: true를 사용하는 경우 Access-Control-Allow-Origin: *를 사용하지 말고 허용 Origin을 명시합니다.\n" +
+  "5. 비밀번호 변경, 결제, 예약, 권한 변경 등 민감 기능은 CSRF Token 외에도 재인증, OTP, 확인 팝업 같은 추가 확인 절차를 둡니다.\n" +
+  "6. GET 요청은 조회 용도로만 사용하고, 상태 변경은 명확한 상태 변경 메서드로 처리한 뒤 CSRF 방어를 적용합니다.";
 
 function slugG11Part(value: string) {
   const slug = String(value || "")
@@ -454,6 +514,18 @@ function g11CaptureResults(findings: FindingSummary[]) {
 
 function g11ArtifactsForFinding(finding: FindingSummary, results: G11CaptureResult[]) {
   const prefix = g11FindingIdPrefix(finding);
+  const childRows = results.filter((item) => String(item.parent_finding_id ?? "").startsWith(prefix));
+  if (childRows.length > 0) {
+    return {
+      result: childRows.find((item) => item.ok === false) ?? childRows[0],
+      images: childRows.flatMap((row) =>
+        (row.artifacts ?? [])
+          .filter((item) => /\.(png|jpe?g|webp)$/i.test(item.path))
+          .map((item) => ({ ...item, occurrenceIndex: row.occurrence_index, occurrenceUrl: row.url, occurrenceParam: row.param }))
+      ),
+    };
+  }
+
   const row = results.find((item) => String(item.finding_id ?? "").startsWith(prefix));
   return {
     result: row,
@@ -478,6 +550,40 @@ function G11DetailBlock({ title, value }: { title: string; value: unknown }) {
   );
 }
 
+function G11CsrfOccurrenceTable({ occurrences }: { occurrences: unknown }) {
+  if (!Array.isArray(occurrences) || occurrences.length === 0) return null;
+
+  return (
+    <div className="mt-3 overflow-x-auto rounded border border-cyber-border/30">
+      <table className="min-w-full text-left text-[11px]">
+        <thead className="bg-cyber-bg/60 text-cyber-muted">
+          <tr>
+            <th className="px-2 py-1.5 font-medium">Method</th>
+            <th className="px-2 py-1.5 font-medium">URL</th>
+            <th className="px-2 py-1.5 font-medium">Param</th>
+            <th className="px-2 py-1.5 font-medium">Payload</th>
+            <th className="px-2 py-1.5 font-medium">HTTP</th>
+          </tr>
+        </thead>
+        <tbody>
+          {occurrences.map((item, index) => {
+            const row = (item ?? {}) as Record<string, unknown>;
+            return (
+              <tr key={`${textValue(row.method)}-${textValue(row.url)}-${textValue(row.param)}-${index}`} className="border-t border-cyber-border/20">
+                <td className="whitespace-nowrap px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.method)}</td>
+                <td className="min-w-56 break-all px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.url)}</td>
+                <td className="break-all px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.param)}</td>
+                <td className="max-w-72 break-all px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.attack)}</td>
+                <td className="whitespace-nowrap px-2 py-1.5 font-mono text-cyan-200/85">{textValue(row.status_code)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function G11FindingCard({
   finding,
   results,
@@ -490,6 +596,9 @@ function G11FindingCard({
   const { result, images } = g11ArtifactsForFinding(finding, results);
   const isCsrf = String(ev.vuln_type ?? "").toLowerCase().includes("csrf");
   const csrf = ev.csrf_defenses as Record<string, unknown> | undefined;
+  const csrfOccurrences = ev.csrf_occurrences;
+  const remediationGuide = isCsrf ? G11_CSRF_REMEDIATION_GUIDE : ev.remediation_guide ?? ev.remediation_summary;
+  const manualVerificationNote = isCsrf ? G11_CSRF_MANUAL_VERIFICATION_NOTE : G11_XSS_MANUAL_VERIFICATION_NOTE;
 
   return (
     <li className="rounded border border-cyber-border/35 bg-cyber-panel/25 p-3">
@@ -514,6 +623,7 @@ function G11FindingCard({
             <dt className="text-cyber-muted">페이로드</dt>
             <dd className="break-all font-mono text-cyan-200/85">{textValue(ev.attack)}</dd>
           </dl>
+          {isCsrf ? <G11CsrfOccurrenceTable occurrences={csrfOccurrences} /> : null}
         </div>
         <button
           type="button"
@@ -551,7 +661,8 @@ function G11FindingCard({
             </div>
           ) : null}
           <G11DetailBlock title="판정 근거" value={ev.validation_reason ?? ev.description} />
-          <G11DetailBlock title="조치 가이드" value={ev.remediation_guide ?? ev.remediation_summary} />
+          <G11DetailBlock title="수동 진단 필요" value={manualVerificationNote} />
+          <G11DetailBlock title="조치 가이드" value={remediationGuide} />
           <G11DetailBlock title="원인" value={ev.remediation_cause} />
           <G11DetailBlock title="예시 코드" value={ev.remediation_code} />
           <G11DetailBlock title="Evidence Request" value={ev.evidence_request} />
@@ -1119,10 +1230,20 @@ export function DiagnosisReportPanel({ report }: { report: DiagnosisSectionRepor
   const isG36Stats = statsFinding?.message === "3-6 scan statistics";
 
 
+  const severityStatus =
+    SEVERITY_STATUS_SECTIONS.has(report.section_id) &&
+    (report.status === "fail" || report.status === "warn")
+      ? highestFindingSeverity(findings)
+      : null;
+
   return (
     <div className="border-t border-cyber-border/40 bg-cyber-bg/30 px-4 py-3">
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <StatusBadge status={report.status} />
+        {severityStatus ? (
+          <SeverityStatusBadge severity={severityStatus} />
+        ) : (
+          <StatusBadge status={report.status} />
+        )}
         {report.checked_at ? (
           <span className="text-[10px] text-cyber-muted">{report.checked_at}</span>
         ) : null}

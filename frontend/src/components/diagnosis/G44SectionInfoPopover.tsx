@@ -118,6 +118,12 @@ export function G44SectionInfoPopover() {
                     </span>
                     <span>로그인이 필요해 보이는 페이지가 익명 2xx로 접근됨 — 인증 적용 여부 수동 확인 권장</span>
                   </li>
+                  <li className="flex items-start gap-2">
+                    <span className="inline-flex h-4 shrink-0 items-center rounded border border-emerald-400/35 bg-emerald-500/10 px-1.5 text-[9px] leading-none text-emerald-200">
+                      양호
+                    </span>
+                    <span>로그인 없이 접근되는 보호 대상 페이지·API 없음 — 조치 불필요</span>
+                  </li>
                 </ul>
                 <p className="mt-2 text-[9px] leading-relaxed text-white/50">
                   참고: SPA 프론트는 어떤 경로든 <code className="text-cyan-300/70">index.html</code>(200)을 돌려주므로,
