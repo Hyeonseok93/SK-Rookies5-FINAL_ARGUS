@@ -56,6 +56,8 @@ services:
       - ./backend/diagnosis:/app/diagnosis
       # 증거 스크린샷 코드 → 호스트와 동기화
       - ./backend/screenshot:/app/screenshot
+      # 결과서(PDF) 생성 코드 → 호스트와 동기화
+      - ./backend/report:/app/report
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

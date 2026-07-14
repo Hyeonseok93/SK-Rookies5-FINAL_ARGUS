@@ -245,9 +245,9 @@ function DiagnosisReportDownloadButton({
   return (
     <a
       href={diagnosisEvidenceReportUrl(sectionId)}
-      download={`argus-${sectionId}-report-${today}.html`}
+      download={`argus-${sectionId}-report-${today}.pdf`}
       onClick={(e) => e.stopPropagation()}
-      title="이 항목의 취약점 결과서(스크린샷 포함) HTML 파일을 다운로드합니다 — 받은 파일을 브라우저로 열어 인쇄하면 PDF로도 저장 가능"
+      title="이 항목의 취약점 결과서(스크린샷 포함) PDF 파일을 다운로드합니다"
       className={`${START_BTN} ${START_BTN_IDLE} ${compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"}`}
     >
       <FileDown className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />

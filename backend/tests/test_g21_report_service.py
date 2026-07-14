@@ -6,6 +6,7 @@ import base64
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from app.services import report_service
@@ -132,19 +133,41 @@ def test_missing_screenshot_evidence_yields_empty_list(tmp_path: Path):
 
     assert len(items) == 1
     assert items[0]["screenshots"] == []
+    # No capture-summary.json at all in this test dir — capture has never run.
+    assert items[0]["capture_status"] == "no_capture_run"
+
+
+def _backend_root() -> Path:
+    return Path(report_service.__file__).resolve().parents[2]
 
 
 def _load_real_selector():
     import importlib.util
     import sys
 
-    selector_path = Path(report_service.__file__).resolve().parents[2] / "screenshot" / "modules" / "2-1" / "selector.py"
+    selector_path = _backend_root() / "screenshot" / "modules" / "2-1" / "selector.py"
     spec = importlib.util.spec_from_file_location("test_g21_report_selector", selector_path)
     assert spec and spec.loader
     selector = importlib.util.module_from_spec(spec)
     sys.modules["test_g21_report_selector"] = selector
     spec.loader.exec_module(selector)
     return selector
+
+
+def _load_report_module():
+    """Load report/modules/2-1/report.py directly — used by tests that need
+    its private helpers (_load_guideline/_guideline_lookup), which no longer
+    live on the thin app.services.report_service dispatcher."""
+    import importlib.util
+    import sys
+
+    report_path = _backend_root() / "report" / "modules" / "2-1" / "report.py"
+    spec = importlib.util.spec_from_file_location("test_g21_report_module", report_path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["test_g21_report_module"] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def test_screenshot_is_embedded_and_recompressed_to_jpeg(tmp_path: Path):
@@ -205,9 +228,52 @@ def test_findings_with_same_vulnerability_are_merged_by_finding_id(tmp_path: Pat
     }
 
 
+def _write_capture_summary(tmp_path: Path, results: list[dict]) -> None:
+    evidence_dir = tmp_path / "report" / "2-1" / "evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    (evidence_dir / "capture-summary.json").write_text(
+        json.dumps({"section_id": "2-1", "results": results}),
+        encoding="utf-8",
+    )
+
+
+def test_capture_status_not_selected_when_capture_ran_but_skipped_this_finding(tmp_path: Path):
+    """A capture run happened (capture-summary.json exists) but this
+    finding_id wasn't among the representative sample — distinct from an
+    actual failure."""
+    _write_latest_yaml(tmp_path, [_TRUE_POSITIVE_FINDING])
+    _write_capture_summary(tmp_path, results=[])  # ran, but selected nothing matching this finding
+
+    items = report_service.build_report_items("2-1", data_dir=tmp_path)
+
+    assert len(items) == 1
+    assert items[0]["capture_status"] == "not_selected"
+    html_doc = report_service.render_report_html("2-1", "악성코드파일 업로드", items)
+    assert "대표 사례로 선정되지 않아" in html_doc
+    assert "실패" not in html_doc
+
+
+def test_capture_status_failed_shows_the_actual_error(tmp_path: Path):
+    _write_latest_yaml(tmp_path, [_TRUE_POSITIVE_FINDING])
+    selector = _load_real_selector()
+    finding_id = selector.stable_finding_id(_TRUE_POSITIVE_FINDING)
+    _write_capture_summary(
+        tmp_path,
+        results=[{"finding_id": finding_id, "ok": False, "error": "Timeout 30000ms exceeded"}],
+    )
+
+    items = report_service.build_report_items("2-1", data_dir=tmp_path)
+
+    assert len(items) == 1
+    assert items[0]["capture_status"] == "failed"
+    html_doc = report_service.render_report_html("2-1", "악성코드파일 업로드", items)
+    assert "Timeout 30000ms exceeded" in html_doc
+
+
 def test_guideline_lookup_extension_bypass_matches_technique_detail():
-    guideline = report_service._load_guideline("2-1")
-    result = report_service._guideline_lookup(guideline, "disallowed_extension_accepted:double_extension")
+    mod = _load_report_module()
+    guideline = mod._load_guideline()
+    result = mod._guideline_lookup(guideline, "disallowed_extension_accepted:double_extension")
 
     assert "2-1" in result["guideline_ref"]
     assert "double_extension" not in result["guideline_ref"]  # sanity: ref text, not the key itself
@@ -215,16 +281,18 @@ def test_guideline_lookup_extension_bypass_matches_technique_detail():
 
 
 def test_guideline_lookup_path_exposure_stack_trace_cites_6_1():
-    guideline = report_service._load_guideline("2-1")
-    result = report_service._guideline_lookup(guideline, "path_exposure:stack_trace")
+    mod = _load_report_module()
+    guideline = mod._load_guideline()
+    result = mod._guideline_lookup(guideline, "path_exposure:stack_trace")
 
     assert "6-1" in result["guideline_ref"]
     assert "remediation" in result
 
 
 def test_guideline_lookup_baseline_rejected_has_no_guideline_ref():
-    guideline = report_service._load_guideline("2-1")
-    result = report_service._guideline_lookup(guideline, "baseline_upload_rejected")
+    mod = _load_report_module()
+    guideline = mod._load_guideline()
+    result = mod._guideline_lookup(guideline, "baseline_upload_rejected")
 
     assert result.get("guideline_ref") is None
     assert "note" in result
@@ -244,3 +312,12 @@ def test_render_report_html_shows_missing_screenshot_placeholder(tmp_path: Path)
 def test_render_report_html_empty_state_when_no_items():
     html_doc = report_service.render_report_html("2-1", "악성코드파일 업로드", [])
     assert "finding이 없습니다" in html_doc
+
+
+def test_render_report_pdf_produces_a_real_pdf_file():
+    pytest.importorskip("playwright")
+
+    pdf_bytes = report_service.render_report_pdf("2-1", "악성코드파일 업로드", [])
+
+    assert pdf_bytes.startswith(b"%PDF-")
+    assert len(pdf_bytes) > 1000

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.config import BACKEND_ROOT
 from app.schemas import (
@@ -87,26 +87,27 @@ def get_module_report(section_id: str) -> DiagnosisSectionReportResponse:
     return _report_to_response(report)
 
 
-_EVIDENCE_REPORT_SECTIONS = {"2-1"}
-
-
-@router.get("/modules/{section_id}/report/document", response_class=HTMLResponse)
-def get_module_report_document(section_id: str) -> HTMLResponse:
-    """Per-finding downloadable evidence report (확정 취약 + 잠재적 취약), with
+@router.get("/modules/{section_id}/report/document")
+def get_module_report_document(section_id: str) -> Response:
+    """Per-finding downloadable evidence report PDF (확정 취약 + 잠재적 취약), with
     captured screenshots embedded and remediation text from the section's
     guideline.yaml. Currently only implemented for 2-1."""
-    if section_id not in _EVIDENCE_REPORT_SECTIONS:
+    from app.services import report_service
+
+    if section_id not in report_service.EVIDENCE_REPORT_SECTIONS:
         raise HTTPException(status_code=404, detail=f"Evidence report not supported for module {section_id}")
     report = diagnosis_service.get_report(section_id)
     if report is None:
         raise HTTPException(status_code=404, detail=f"No report for module {section_id}")
 
-    from app.config import BACKEND_ROOT
-    from app.services import report_service
-
     items = report_service.build_report_items(section_id, data_dir=BACKEND_ROOT / "data")
-    html_doc = report_service.render_report_html(section_id, report.title, items)
-    return HTMLResponse(content=html_doc)
+    pdf_bytes = report_service.render_report_pdf(section_id, report.title, items)
+    filename = f"argus-{section_id}-report.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/modules/1-1/evidence/{relative_path:path}")

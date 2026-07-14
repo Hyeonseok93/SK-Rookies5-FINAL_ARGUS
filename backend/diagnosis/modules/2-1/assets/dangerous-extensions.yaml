@@ -36,6 +36,12 @@ disallowed_extensions:
   - ext: asp
     mime: application/octet-stream
     category: server_script
+  - ext: cgi
+    mime: application/x-httpd-cgi
+    category: server_script
+  - ext: pl
+    mime: application/x-perl
+    category: server_script
   - ext: aspx
     mime: application/octet-stream
     category: server_script
