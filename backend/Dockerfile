@@ -12,6 +12,7 @@ RUN rm -rf /var/lib/apt/lists/* \
     && apt-get install -y --no-install-recommends --fix-missing \
         -o Acquire::Retries=5 \
         fonts-noto-cjk \
+        fonts-nanum \
         scrot \
         xauth \
         xvfb \

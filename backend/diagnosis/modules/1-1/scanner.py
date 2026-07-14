@@ -306,6 +306,114 @@ def _dedupe_findings(findings: list[dict]) -> list[dict]:
     return deduped
 
 
+def _is_csrf_finding(finding: dict) -> bool:
+    label = f"{finding.get('vuln_type') or ''} {finding.get('alert') or ''}"
+    return "csrf" in label.lower()
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _csrf_group_key(finding: dict) -> tuple:
+    defenses = finding.get("csrf_defenses") if isinstance(finding.get("csrf_defenses"), dict) else {}
+    return (
+        str(finding.get("vuln_type") or "CSRF"),
+        str(finding.get("alert") or ""),
+        str(finding.get("risk") or finding.get("severity") or ""),
+        str(finding.get("confidence") or ""),
+        bool(defenses.get("origin_referer_bypass")),
+        bool(defenses.get("csrf_token_absent")),
+        bool(defenses.get("unsafe_samesite")),
+        _safe_int(defenses.get("failed_count")),
+    )
+
+
+def _group_csrf_findings(findings: list[dict]) -> list[dict]:
+    """Collapse repeated CSRF findings into one diagnosis item.
+
+    CSRF findings usually share the same root cause and remediation; the useful
+    per-endpoint data is the URL/method/parameter/status. Keep one
+    representative finding for request/response evidence and carry every
+    affected endpoint in structured fields for the frontend/report document.
+    """
+    groups: dict[tuple, list[dict]] = {}
+    passthrough: list[dict] = []
+    for finding in findings:
+        if isinstance(finding, dict) and _is_csrf_finding(finding):
+            groups.setdefault(_csrf_group_key(finding), []).append(finding)
+        else:
+            passthrough.append(finding)
+
+    grouped: list[dict] = []
+    for rows in groups.values():
+        representative = dict(rows[0])
+        occurrences = []
+        affected_urls: list[str] = []
+        affected_parameters: list[str] = []
+        methods: set[str] = set()
+        statuses: set[str] = set()
+        roles: set[str] = set()
+        for row in rows:
+            method = str(row.get("method") or "").upper()
+            url = str(row.get("url") or "")
+            param = str(row.get("param") or "")
+            attack = str(row.get("attack") or "")
+            status = row.get("status_code")
+            role = str(row.get("account_role") or "")
+            if method:
+                methods.add(method)
+            if url:
+                affected_urls.append(f"{method} {url}".strip())
+            if param and param not in affected_parameters:
+                affected_parameters.append(param)
+            if status is not None:
+                statuses.add(str(status))
+            if role:
+                roles.add(role)
+            occurrences.append(
+                {
+                    "method": method,
+                    "url": url,
+                    "param": param,
+                    "attack": attack,
+                    "status_code": status,
+                    "account_role": role,
+                    "csrf_defenses": row.get("csrf_defenses") or {},
+                    "evidence_request": row.get("evidence_request", ""),
+                    "evidence_response": row.get("evidence_response", ""),
+                    "validation_status": row.get("validation_status", ""),
+                    "validation_reason": row.get("validation_reason", ""),
+                    "confidence": row.get("confidence", ""),
+                    "risk": row.get("risk", ""),
+                }
+            )
+
+        representative["message"] = "CSRF"
+        representative["vuln_type"] = "CSRF"
+        representative["grouped"] = True
+        representative["grouping_reason"] = "CSRF findings share the same defense failure; affected endpoints are listed together."
+        representative["occurrence_count"] = len(rows)
+        representative["csrf_occurrences"] = occurrences
+        representative["affected_urls"] = affected_urls
+        representative["affected_parameters"] = affected_parameters
+        representative["affected_methods"] = sorted(methods)
+        representative["account_roles"] = sorted(roles)
+        representative["status_codes"] = sorted(statuses)
+        if len(rows) > 1:
+            representative["url_summary"] = f"{len(rows)} affected endpoints"
+            representative["param_summary"] = ", ".join(affected_parameters) if affected_parameters else "Referer/Token"
+            representative["attack_summary"] = "CSRF defense bypass across multiple endpoints"
+            representative["evidence_request"] = rows[0].get("evidence_request", "")
+            representative["evidence_response"] = rows[0].get("evidence_response", "")
+        grouped.append(representative)
+
+    return passthrough + grouped
+
+
 def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
     raw_config = getattr(ctx, "raw_config", {}) or {}
     g11_config = raw_config.get("diagnosis_1_1") or raw_config.get("g11") or {}
@@ -453,7 +561,7 @@ def run_g11_scan(ctx, module_dir: Path) -> ScanResult:
             # by several accounts (or re-seen in the cross-account pass) should
             # not produce duplicate findings — but keep genuinely distinct ones
             # (same URL, *different account role* = a real separate finding).
-            findings = _dedupe_findings(findings)
+            findings = _group_csrf_findings(_dedupe_findings(findings))
             _log(f"[G11] finished_at={time.strftime('%Y-%m-%dT%H:%M:%S%z')}")
     source_msg = f" api_tree={source_name}" if source_name else ""
     status = "fail" if findings else "pass"
