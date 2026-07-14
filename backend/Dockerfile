@@ -23,6 +23,7 @@ RUN playwright install --with-deps chromium
 
 COPY app ./app
 COPY diagnosis ./diagnosis
+COPY report ./report
 COPY screenshot ./screenshot
 COPY report ./report
 COPY inventory ./inventory

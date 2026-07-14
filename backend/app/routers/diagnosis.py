@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -26,6 +27,16 @@ from app.services import diagnosis_service
 from app.services.report_generation_service import resolve_report_file
 
 router = APIRouter(prefix="/diagnosis", tags=["diagnosis"])
+
+
+def _generate_g11_report_document(report_dir: Path) -> Path:
+    module_path = BACKEND_ROOT / "report" / "modules" / "1-1" / "document.py"
+    spec = importlib.util.spec_from_file_location("argus_g11_report_document", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Failed to load 1-1 report document engine: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_report_document(report_dir)
 
 
 @router.get("/catalog", response_model=DiagnosisCatalogResponse)
@@ -95,6 +106,22 @@ def get_g11_evidence_file(relative_path: str) -> FileResponse:
     if not target.is_file() or evidence_root not in target.parents:
         raise HTTPException(status_code=404, detail="Evidence file not found")
     return FileResponse(target)
+
+
+@router.get("/modules/1-1/report/download")
+def download_g11_report_document() -> FileResponse:
+    report_dir = BACKEND_ROOT / "data" / "report" / "1-1"
+    try:
+        target = _generate_g11_report_document(report_dir)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="No 1-1 report found") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to generate report: {exc}") from exc
+    return FileResponse(
+        target,
+        media_type="application/pdf",
+        filename="ARGUS-1-1-diagnosis-result.pdf",
+    )
 
 
 @router.get("/modules/{section_id}/evidence")
