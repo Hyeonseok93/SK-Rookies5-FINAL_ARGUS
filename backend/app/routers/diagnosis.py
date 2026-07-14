@@ -24,8 +24,19 @@ from app.schemas import (
     ReplayStepResult,
 )
 from app.services import diagnosis_service
+from app.services.report_generation_service import resolve_report_file
 
 router = APIRouter(prefix="/diagnosis", tags=["diagnosis"])
+
+
+def _generate_g11_report_document(report_dir: Path) -> Path:
+    module_path = BACKEND_ROOT / "report" / "modules" / "1-1" / "document.py"
+    spec = importlib.util.spec_from_file_location("argus_g11_report_document", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Failed to load 1-1 report document engine: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_report_document(report_dir)
 
 
 @router.get("/catalog", response_model=DiagnosisCatalogResponse)
@@ -104,6 +115,38 @@ def download_g16_pdf_report() -> FileResponse:
     return FileResponse(output, media_type="application/pdf", filename="ARGUS_결과서_1-6.pdf")
 
 
+@router.get("/modules/{section_id}/report/pdf")
+def download_module_report_pdf(section_id: str) -> FileResponse:
+    """Download section PDF. Prefer on-demand generators (e.g. 2-2); else cached report PDF."""
+    if diagnosis_service.supports_pdf_export(section_id):
+        try:
+            pdf_path = diagnosis_service.build_section_pdf(section_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to build PDF for module {section_id}: {exc}",
+            ) from exc
+        return FileResponse(
+            path=pdf_path,
+            media_type="application/pdf",
+            filename=f"ARGUS-{section_id}-report.pdf",
+        )
+
+    pdf_path = diagnosis_service.get_report_pdf(section_id)
+    if pdf_path is None or not pdf_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No report PDF for module {section_id}. Run the diagnosis first.",
+        )
+    return FileResponse(
+        pdf_path,
+        media_type="application/pdf",
+        filename=f"argus_{section_id}_report.pdf",
+    )
+
+
 @router.get("/modules/1-1/evidence/{relative_path:path}")
 def get_g11_evidence_file(relative_path: str) -> FileResponse:
     evidence_root = (BACKEND_ROOT / "data" / "report" / "1-1" / "evidence").resolve()
@@ -113,12 +156,56 @@ def get_g11_evidence_file(relative_path: str) -> FileResponse:
     return FileResponse(target)
 
 
+@router.get("/modules/1-1/report/download")
+def download_g11_report_document() -> FileResponse:
+    report_dir = BACKEND_ROOT / "data" / "report" / "1-1"
+    try:
+        target = _generate_g11_report_document(report_dir)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="No 1-1 report found") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to generate report: {exc}") from exc
+    return FileResponse(
+        target,
+        media_type="application/pdf",
+        filename="ARGUS-1-1-diagnosis-result.pdf",
+    )
+
+
 @router.get("/modules/{section_id}/evidence")
 def get_evidence_file(section_id: str, path: str) -> FileResponse:
     resolved = diagnosis_service.resolve_evidence_file(section_id, path)
     if resolved is None:
         raise HTTPException(status_code=404, detail="Evidence file not found")
     return FileResponse(resolved)
+
+
+@router.get("/modules/{section_id}/final-report")
+def get_final_report(section_id: str) -> FileResponse:
+    resolved = resolve_report_file(section_id, "report.html")
+    if resolved is None:
+        raise HTTPException(status_code=404, detail=f"No final report for module {section_id}")
+    return FileResponse(resolved, media_type="text/html; charset=utf-8")
+
+
+@router.get("/modules/{section_id}/final-report.pdf")
+def get_final_report_pdf(section_id: str) -> FileResponse:
+    resolved = resolve_report_file(section_id, "report.pdf")
+    if resolved is None:
+        raise HTTPException(status_code=404, detail=f"No final PDF report for module {section_id}")
+    return FileResponse(
+        resolved,
+        media_type="application/pdf",
+        filename=f"ARGUS-{section_id}-report.pdf",
+    )
+
+
+@router.get("/modules/{section_id}/final-report/manifest")
+def get_final_report_manifest(section_id: str) -> FileResponse:
+    resolved = resolve_report_file(section_id, "report-manifest.json")
+    if resolved is None:
+        raise HTTPException(status_code=404, detail=f"No final report manifest for module {section_id}")
+    return FileResponse(resolved, media_type="application/json")
 
 
 @router.post("/modules/{section_id}/run", response_model=DiagnosisRunSectionResponse)

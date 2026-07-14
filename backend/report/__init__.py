@@ -1,1 +1,1 @@
-"""Report generation package."""
+﻿"""ARGUS diagnosis result report generators (PDF, etc.)."""

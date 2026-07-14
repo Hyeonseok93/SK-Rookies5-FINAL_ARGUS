@@ -32,7 +32,16 @@ import {
 import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
 import { G74DiagnosisStartDialog } from "./G74DiagnosisStartDialog";
-import { downloadDiagnosisPdf, fetchDiagnosisCatalog, fetchDiagnosisProgress, fetchDiagnosisReport, runDiagnosisSection } from "../lib/api";
+import {
+  downloadDiagnosisPdf,
+  downloadDiagnosisFinalReport,
+  downloadDiagnosisReportPdf,
+  fetchDiagnosisCatalog,
+  fetchDiagnosisProgress,
+  fetchDiagnosisReport,
+  runDiagnosisSection,
+  REPORT_PDF_SECTIONS,
+} from "../lib/api";
 import {
   DEFAULT_G12_OPTIONS,
   g12OptionsSummary,
@@ -226,50 +235,84 @@ function DiagnosisStartButton({
   );
 }
 
-function DiagnosisDownloadButton({ compact = false }: { compact?: boolean }) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+function DiagnosisDownloadButton({
+  sectionId,
+  compact = false,
+  onError,
+}: {
+  sectionId: string;
+  compact?: boolean;
+  onError: (message: string | null) => void;
+}) {
+  const [downloading, setDownloading] = useState(false);
 
-  const handleDownload = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      await downloadDiagnosisPdf("1-6");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "PDF 다운로드에 실패했습니다.");
-    } finally {
-      setLoading(false);
+  const usesLegacyReportDownload = sectionId === "1-1";
+  const usesG16ReportDownload = sectionId === "1-6";
+  const usesFinalReportDownload = sectionId === "1-2" || sectionId === "7-4";
+  const usesReportPdfDownload = REPORT_PDF_SECTIONS.has(sectionId);
+
+  const supported =
+    usesLegacyReportDownload ||
+    usesG16ReportDownload ||
+    usesFinalReportDownload ||
+    usesReportPdfDownload;
+
+  const handleDownload = useCallback(async () => {
+    if (!supported || downloading) return;
+
+    onError(null);
+
+    if (usesLegacyReportDownload) {
+      window.location.href = "/api/diagnosis/modules/1-1/report/download";
+      return;
     }
-  };
 
-  return (
-    <div className="flex items-center gap-2">
-      <button
-        type="button"
-        disabled={loading}
-        onClick={handleDownload}
-        title="1-6 PDF 결과서 다운로드"
-        className={`flex shrink-0 items-center gap-1 rounded-lg border border-cyan-400/35 bg-cyan-500/10 font-semibold text-cyan-200 transition hover:bg-cyan-500/20 disabled:cursor-wait disabled:opacity-60 ${
-          compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"
-        }`}
-      >
-        {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />}
-        {loading ? "PDF 생성 중" : "PDF 다운로드"}
-      </button>
-      {error ? <span className="text-[10px] text-rose-300">{error}</span> : null}
-    </div>
-  );
-}
-function DiagnosisReviewLaterButton({ compact = false }: { compact?: boolean }) {
+    setDownloading(true);
+
+    try {
+      if (usesG16ReportDownload) {
+        await downloadDiagnosisPdf(sectionId);
+      } else if (usesReportPdfDownload) {
+        await downloadDiagnosisReportPdf(sectionId);
+      } else {
+        await downloadDiagnosisFinalReport(sectionId);
+      }
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloading(false);
+    }
+  }, [
+    supported,
+    downloading,
+    sectionId,
+    onError,
+    usesLegacyReportDownload,
+    usesG16ReportDownload,
+    usesReportPdfDownload,
+  ]);
+
+  const size = compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs";
+  const icon = compact ? "h-3 w-3" : "h-3.5 w-3.5";
+
   return (
     <button
       type="button"
-      disabled
-      title="추후 검토 항목"
-      className={`${START_BTN} ${UNAVAILABLE_BTN} ${compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"}`}
+      disabled={!supported || downloading}
+      onClick={handleDownload}
+      title={supported ? "PDF 보고서 다운로드" : "PDF 보고서 지원 준비 중"}
+      className={`flex shrink-0 items-center gap-1 rounded-lg border font-semibold transition ${
+        supported
+          ? "cursor-pointer border-cyan-400/45 bg-cyan-500/10 text-cyan-200 hover:border-cyan-300/70 hover:bg-cyan-500/20 disabled:cursor-wait disabled:opacity-60"
+          : "cursor-not-allowed border-cyan-400/35 bg-cyan-500/10 text-cyan-200/75 opacity-60"
+      } ${size}`}
     >
-      <AlertCircle className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
-      추후 검토
+      {downloading ? (
+        <Loader2 className={`animate-spin ${icon}`} />
+      ) : (
+        <Download className={icon} />
+      )}
+      {downloading ? "다운로드 중…" : "PDF 다운로드"}
     </button>
   );
 }
@@ -316,6 +359,21 @@ function DiagnosisManualCheckButton({
   label: string;
   compact?: boolean;
 }) {
+  return (
+    <button
+      type="button"
+      disabled
+      title={label}
+      className={`${START_BTN} ${UNAVAILABLE_BTN} ${compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"}`}
+    >
+      <AlertCircle className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
+      {label}
+    </button>
+  );
+}
+
+function DiagnosisReviewLaterButton({ compact = false }: { compact?: boolean }) {
+  const label = "추후 검토";
   return (
     <button
       type="button"
@@ -918,7 +976,11 @@ export function DiagnosisPage() {
                     ) : null}
                     {open && report ? (
                       <div className="flex items-center justify-start gap-2 border-t border-cyber-border/40 bg-cyber-bg/20 px-4 py-2">
-                        {section.id === "1-6" ? <DiagnosisDownloadButton compact /> : null}
+                        <DiagnosisDownloadButton
+                          sectionId={section.id}
+                          compact
+                          onError={setError}
+                        />
                       </div>
                     ) : null}
                     {open && !running && report ? <DiagnosisReportPanel report={report} /> : null}
