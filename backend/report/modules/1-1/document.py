@@ -58,7 +58,7 @@ Token이 없거나 일치하지 않으면 요청을 거부해야 합니다.
 GET 요청은 조회 용도로만 사용합니다.
 상태 변경은 반드시 POST, PUT, PATCH, DELETE 등 명확한 메서드로 처리하고, 해당 요청에 CSRF 방어를 적용합니다.
 """
-
+ 
 
 def _value(value: Any, fallback: str = "-") -> str:
     if value is None or value == "":
@@ -304,6 +304,7 @@ def _result_table_html(finding: dict[str, Any], evidence: dict[str, Any]) -> str
                 continue
             rows.append(
                 "<tr>"
+                f"<td>{_esc(item.get('method') or evidence.get('method'))}</td>"
                 f"<td>{_esc(item.get('url') or evidence.get('url'))}</td>"
                 f"<td>{_esc(item.get('param') or evidence.get('param'))}</td>"
                 "</tr>"
@@ -311,16 +312,131 @@ def _result_table_html(finding: dict[str, Any], evidence: dict[str, Any]) -> str
         if rows:
             return (
                 "<table>"
-                "<tr><th>URL</th><th>Parameter</th></tr>"
+                "<tr><th>Method</th><th>URL</th><th>Parameter</th></tr>"
                 + "".join(rows)
                 + "</table>"
             )
 
     return f"""
       <table>
+        <tr><th>Method</th><td>{_esc(evidence.get("method"))}</td></tr>
         <tr><th>URL</th><td>{_esc(evidence.get("url"))}</td></tr>
         <tr><th>Parameter</th><td>{_esc(evidence.get("param"))}</td></tr>
       </table>
+    """
+
+
+def _manual_verification_html(evidence: dict[str, Any]) -> str:
+    if _is_csrf_evidence(evidence):
+        note = (
+            "CSRF 자동 진단은 Origin/Referer 제거 또는 변조, CSRF Token 누락, SameSite Cookie 미흡 조건에서 "
+            "상태 변경 요청이 수락되는지를 기준으로 취약 가능성을 판단합니다. 다만 인증 방식, 세션 쿠키의 SameSite 설정, "
+            "CORS preflight 발생 여부, 요청 Content-Type에 따라 실제 악용 가능성이 달라질 수 있으므로 수동 진단이 필요합니다."
+        )
+        reason = (
+            "CSRF는 브라우저의 SameSite 정책, 실제 프론트엔드 요청 방식, CORS preflight 발생 여부에 따라 "
+            "공격 성공 여부가 달라질 수 있습니다. 따라서 Burp Suite Repeater 또는 CSRF PoC로 피해자 로그인 세션에서 "
+            "Origin/Referer 제거·변조 및 CSRF Token 제거·변조 조건을 재현해야 합니다."
+        )
+    else:
+        note = (
+            "Stored XSS 자동 진단은 페이로드 저장 및 재조회 응답을 기준으로 취약 가능성을 판단합니다. "
+            "다만 프론트엔드 렌더링 방식, HTML escaping/sanitizing 처리, CSP 정책, 사용자 권한에 따라 "
+            "실제 스크립트 실행 여부가 달라질 수 있으므로 수동 진단이 필요합니다."
+        )
+        reason = (
+            "XSS는 응답에 페이로드가 남아 있어도 프론트엔드 렌더링 방식이나 escaping 정책에 따라 실제 실행 여부가 달라질 수 있습니다. "
+            "따라서 브라우저에서 해당 URL을 열어 스크립트 실행, DOM 반영, 저장 데이터 재조회 여부를 수동으로 확인해야 합니다."
+        )
+    return f"""
+      <div class="manual-check">
+        <strong>수동 진단 필요</strong>
+        <p>{_esc(note)}</p>
+        <p><b>근거:</b> {_esc(reason)}</p>
+      </div>
+    """
+
+
+def _severity_counts(findings: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for finding in findings:
+        severity = str(finding.get("severity") or "").lower()
+        if severity in counts:
+            counts[severity] += 1
+        elif severity in {"중요", "상", "높음"}:
+            counts["high"] += 1
+        elif severity in {"중", "보통"}:
+            counts["medium"] += 1
+        elif severity in {"하", "낮음"}:
+            counts["low"] += 1
+        else:
+            counts["info"] += 1
+    return counts
+
+
+def _vulnerability_counts(findings: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"XSS": 0, "CSRF": 0, "Other": 0}
+    for finding in findings:
+        evidence = dict(finding.get("evidence") or {})
+        label = str(evidence.get("vuln_type") or finding.get("message") or "")
+        if "csrf" in label.lower():
+            counts["CSRF"] += 1
+        elif "xss" in label.lower() or "script" in label.lower():
+            counts["XSS"] += 1
+        else:
+            counts["Other"] += 1
+    return counts
+
+
+def _cover_html(report: dict[str, Any], generated_at: str, finding_count: int) -> str:
+    return f"""
+    <section class="cover">
+      <div class="cover-kicker">ARGUS Security Diagnosis Report</div>
+      <h1>1-1 입력 데이터 검증 및 표현 취약점 진단 결과서</h1>
+      <p class="cover-subtitle">XSS / CSRF 진단 결과와 증거 이미지, 대응방안을 정리한 보고서입니다.</p>
+      <dl class="cover-meta">
+        <dt>진단 항목</dt><dd>1-1</dd>
+        <dt>진단 대상</dt><dd>XSS / CSRF attack surface</dd>
+        <dt>진단 상태</dt><dd>{_esc(report.get("status"))}</dd>
+        <dt>생성 일시</dt><dd>{_esc(generated_at)}</dd>
+        <dt>취약점 수</dt><dd>{finding_count}</dd>
+      </dl>
+    </section>
+    """
+
+
+def _summary_html(report_findings: list[dict[str, Any]]) -> str:
+    severity = _severity_counts(report_findings)
+    vuln = _vulnerability_counts(report_findings)
+    rows = []
+    for index, finding in enumerate(report_findings, start=1):
+        evidence = dict(finding.get("evidence") or {})
+        title = evidence.get("vuln_type") or finding.get("message") or "Finding"
+        rows.append(
+            "<tr>"
+            f"<td>{index}</td>"
+            f"<td>{_esc(title)}</td>"
+            f"<td>{_esc(finding.get('severity'))}</td>"
+            f"<td>{_esc(evidence.get('method'))}</td>"
+            f"<td>{_esc(evidence.get('url'))}</td>"
+            f"<td>{_esc(evidence.get('param'))}</td>"
+            "</tr>"
+        )
+
+    return f"""
+    <section class="summary">
+      <h2>진단 결과 요약</h2>
+      <div class="summary-grid">
+        <div class="summary-card"><strong>{len(report_findings)}</strong><span>전체 취약점</span></div>
+        <div class="summary-card"><strong>{vuln["XSS"]}</strong><span>XSS</span></div>
+        <div class="summary-card"><strong>{vuln["CSRF"]}</strong><span>CSRF</span></div>
+        <div class="summary-card"><strong>{severity["high"] + severity["critical"]}</strong><span>High 이상</span></div>
+      </div>
+      <table class="summary-table">
+        <tr><th>No</th><th>취약점명</th><th>Severity</th><th>Method</th><th>URL</th><th>Parameter</th></tr>
+        {"".join(rows) or "<tr><td colspan='6'>표시할 취약점이 없습니다.</td></tr>"}
+      </table>
+    </section>
     """
 
 
@@ -353,8 +469,12 @@ def _finding_html(
     <section class="finding">
       <h2>{index}. {_esc(title)}</h2>
       <h3>문제점</h3>
-      <p>{_esc(_detection_method_text(evidence))}</p>
-      <p>{_esc(_result_reason_text(finding, evidence))}</p>
+      <div class="problem">
+        <p>{_esc(_detection_method_text(evidence))}</p>
+        <p>{_esc(_result_reason_text(finding, evidence))}</p>
+      </div>
+      {_manual_verification_html(evidence)}
+      <h4 class="table-title">관련 URL</h4>
       {_result_table_html(finding, evidence)}
       {_csrf_block(evidence)}
       <h3>증거 이미지</h3>
@@ -363,30 +483,6 @@ def _finding_html(
       {_guide_to_html(str(guide))}
     </section>
     """
-
-    return f"""
-    <section class="finding">
-      <h2>{index}. {_esc(title)}</h2>
-      <table>
-        <tr><th>URL</th><td>{_esc(evidence.get("url"))}</td></tr>
-        <tr><th>Method</th><td>{_esc(evidence.get("method"))}</td></tr>
-        <tr><th>Parameter</th><td>{_esc(evidence.get("param"))}</td></tr>
-        <tr><th>Payload</th><td><code>{_esc(evidence.get("attack"))}</code></td></tr>
-        <tr><th>Severity</th><td>{_esc(finding.get("severity") or evidence.get("severity"))}</td></tr>
-        <tr><th>Validation</th><td>{_esc(evidence.get("validation_status"))}</td></tr>
-      </table>
-      <h3>문제점</h3>
-      <p>{_esc(evidence.get("vuln_description") or evidence.get("description") or finding.get("message"))}</p>
-      <h3>판정 근거</h3>
-      <p>{_esc(evidence.get("validation_reason") or evidence.get("evidence"))}</p>
-      {_csrf_block(evidence)}
-      <h3>캡처 증거</h3>
-      {image_html}
-      <h3>해결방안</h3>
-      {_guide_to_html(str(guide))}
-    </section>
-    """
-
 
 def _html_to_pdf(html_content: str, output_path: Path) -> None:
     try:
@@ -427,25 +523,47 @@ def generate_report_document(report_dir: Path) -> Path:
         if str(row.get("severity") or "").lower() not in {"info", "pass"}
     ] or findings
 
-    body = "\n".join(
+    detail_body = "\n".join(
         _finding_html(index, finding, evidence_root, capture_results)
         for index, finding in enumerate(report_findings, start=1)
     )
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    body = (
+        _cover_html(report, generated_at, len(report_findings))
+        + _summary_html(report_findings)
+        + (detail_body or "<p class='muted'>표시할 진단 결과가 없습니다.</p>")
+    )
     html_content = f"""<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
   <title>ARGUS 1-1 진단 결과서</title>
   <style>
-    body {{ margin: 0; background: #f6f8fb; color: #172033; font-family: Arial, 'Malgun Gothic', sans-serif; }}
+    body {{ margin: 0; background: #f6f8fb; color: #172033; font-family: Arial, 'Malgun Gothic', sans-serif; font-size: 14px; }}
     main {{ max-width: 980px; margin: 0 auto; padding: 32px 24px 56px; }}
     header {{ margin-bottom: 24px; border-bottom: 2px solid #172033; padding-bottom: 16px; }}
     h1 {{ margin: 0 0 8px; font-size: 28px; }}
-    h2 {{ margin: 0 0 16px; font-size: 20px; color: #991b1b; }}
-    h3 {{ margin: 18px 0 8px; font-size: 14px; color: #334155; }}
+    h2 {{ margin: 0 0 18px; font-size: 20px; color: #991b1b; }}
+    h3 {{ margin: 22px 0 9px; padding-bottom: 5px; border-bottom: 1px solid #e2e8f0; font-size: 15px; color: #1f2937; }}
+    h4.table-title {{ margin: 14px 0 7px; font-size: 12px; color: #64748b; }}
     .meta {{ color: #64748b; font-size: 13px; }}
-    .finding {{ margin: 24px 0; padding: 22px; background: #fff; border: 1px solid #d9e2ef; page-break-inside: avoid; }}
+    .cover {{ min-height: 820px; display: flex; flex-direction: column; justify-content: center; padding: 36px; background: #fff; border: 1px solid #d9e2ef; border-radius: 8px; page-break-after: always; }}
+    .cover-kicker {{ margin-bottom: 18px; color: #2563eb; font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }}
+    .cover h1 {{ max-width: 760px; margin: 0; color: #111827; font-size: 34px; line-height: 1.25; }}
+    .cover-subtitle {{ margin-top: 16px; color: #475569; font-size: 16px; }}
+    .cover-meta {{ display: grid; grid-template-columns: 120px 1fr; gap: 8px 16px; margin-top: 44px; max-width: 620px; }}
+    .cover-meta dt {{ color: #64748b; font-weight: 700; }}
+    .cover-meta dd {{ margin: 0; color: #172033; }}
+    .summary {{ margin: 24px 0; padding: 24px; background: #fff; border: 1px solid #d9e2ef; border-radius: 8px; page-break-after: always; }}
+    .summary-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0 20px; }}
+    .summary-card {{ padding: 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; }}
+    .summary-card strong {{ display: block; color: #0f172a; font-size: 24px; }}
+    .summary-card span {{ color: #64748b; font-size: 12px; }}
+    .summary-table th {{ width: auto; }}
+    .finding {{ margin: 24px 0; padding: 24px; background: #fff; border: 1px solid #d9e2ef; border-radius: 6px; page-break-inside: avoid; }}
+    .problem {{ display: grid; gap: 8px; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; }}
+    .manual-check {{ display: grid; gap: 7px; margin-top: 12px; padding: 12px 14px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; }}
+    .manual-check strong {{ color: #9a3412; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
     th {{ width: 130px; background: #eef3f8; text-align: left; color: #475569; }}
     th, td {{ border: 1px solid #d9e2ef; padding: 8px 10px; vertical-align: top; word-break: break-all; }}
@@ -453,7 +571,7 @@ def generate_report_document(report_dir: Path) -> Path:
     p {{ margin: 0; line-height: 1.65; white-space: pre-wrap; }}
     ul {{ margin: 8px 0 0 18px; padding: 0; line-height: 1.65; }}
     li {{ margin: 3px 0; }}
-    .images {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }}
+    .images {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 8px; }}
     figure {{ margin: 0; border: 1px solid #d9e2ef; background: #f8fafc; }}
     img {{ display: block; width: 100%; height: auto; }}
     figcaption {{ padding: 7px 9px; color: #64748b; font-size: 12px; border-top: 1px solid #d9e2ef; }}
@@ -472,10 +590,6 @@ def generate_report_document(report_dir: Path) -> Path:
 </head>
 <body>
   <main>
-    <header>
-      <h1>ARGUS 1-1 진단 결과서</h1>
-      <div class="meta">대상: XSS / CSRF attack surface · 상태: {_esc(report.get("status"))} · 생성: {_esc(generated_at)} · Finding: {len(report_findings)}</div>
-    </header>
     {body or "<p class='muted'>표시할 진단 결과가 없습니다.</p>"}
   </main>
 </body>

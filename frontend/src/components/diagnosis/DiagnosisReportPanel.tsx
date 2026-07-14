@@ -416,6 +416,20 @@ function textValue(value: unknown, fallback = "-") {
   return String(value);
 }
 
+const G11_XSS_MANUAL_VERIFICATION_NOTE =
+  "Stored XSS 자동 진단은 페이로드 저장 및 재조회 응답을 기준으로 취약 가능성을 판단합니다. 다만 프론트엔드 렌더링 방식, HTML escaping/sanitizing 처리, CSP 정책, 사용자 권한에 따라 실제 스크립트 실행 여부가 달라질 수 있으므로 수동 진단이 필요합니다. 브라우저에서 해당 URL을 열어 저장된 값이 DOM에 반영되는지, alert 등 스크립트가 실제 실행되는지, 다른 사용자 계정에서도 노출되는지 확인하세요.";
+
+const G11_CSRF_MANUAL_VERIFICATION_NOTE =
+  "CSRF 자동 진단은 Origin/Referer 제거 또는 변조, CSRF Token 누락, SameSite Cookie 미흡 조건에서 상태 변경 요청이 수락되는지를 기준으로 취약 가능성을 판단합니다. 다만 인증 방식, 세션 쿠키의 SameSite 설정, CORS preflight 발생 여부, 요청 Content-Type에 따라 실제 악용 가능성이 달라질 수 있으므로 수동 진단이 필요합니다. Burp Suite Repeater 또는 CSRF PoC로 피해자 로그인 세션에서 동일 요청이 성공하는지 확인하세요.";
+
+const G11_CSRF_REMEDIATION_GUIDE =
+  "1. 상태 변경 요청에는 예측 불가능한 CSRF Token을 발급하고 서버에서 매 요청마다 검증합니다.\n" +
+  "2. POST, PUT, PATCH, DELETE 등 상태 변경 API는 Origin 또는 Referer를 검증하고, 허용되지 않은 도메인이나 누락된 헤더 요청을 차단합니다.\n" +
+  "3. 세션 쿠키에는 SameSite=Lax 또는 SameSite=Strict를 설정하고, Secure와 HttpOnly 옵션을 함께 적용합니다.\n" +
+  "4. Access-Control-Allow-Credentials: true를 사용하는 경우 Access-Control-Allow-Origin: *를 사용하지 말고 허용 Origin을 명시합니다.\n" +
+  "5. 비밀번호 변경, 결제, 예약, 권한 변경 등 민감 기능은 CSRF Token 외에도 재인증, OTP, 확인 팝업 같은 추가 확인 절차를 둡니다.\n" +
+  "6. GET 요청은 조회 용도로만 사용하고, 상태 변경은 명확한 상태 변경 메서드로 처리한 뒤 CSRF 방어를 적용합니다.";
+
 function slugG11Part(value: string) {
   const slug = String(value || "")
     .trim()
@@ -545,6 +559,8 @@ function G11FindingCard({
   const isCsrf = String(ev.vuln_type ?? "").toLowerCase().includes("csrf");
   const csrf = ev.csrf_defenses as Record<string, unknown> | undefined;
   const csrfOccurrences = ev.csrf_occurrences;
+  const remediationGuide = isCsrf ? G11_CSRF_REMEDIATION_GUIDE : ev.remediation_guide ?? ev.remediation_summary;
+  const manualVerificationNote = isCsrf ? G11_CSRF_MANUAL_VERIFICATION_NOTE : G11_XSS_MANUAL_VERIFICATION_NOTE;
 
   return (
     <li className="rounded border border-cyber-border/35 bg-cyber-panel/25 p-3">
@@ -607,7 +623,8 @@ function G11FindingCard({
             </div>
           ) : null}
           <G11DetailBlock title="판정 근거" value={ev.validation_reason ?? ev.description} />
-          <G11DetailBlock title="조치 가이드" value={ev.remediation_guide ?? ev.remediation_summary} />
+          <G11DetailBlock title="수동 진단 필요" value={manualVerificationNote} />
+          <G11DetailBlock title="조치 가이드" value={remediationGuide} />
           <G11DetailBlock title="원인" value={ev.remediation_cause} />
           <G11DetailBlock title="예시 코드" value={ev.remediation_code} />
           <G11DetailBlock title="Evidence Request" value={ev.evidence_request} />
