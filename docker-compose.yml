@@ -54,11 +54,9 @@ services:
       - ./backend/app:/app/app
       # 진단 패키지 전체 → 호스트와 동기화 (modules 외 auth_session_pool 등 포함)
       - ./backend/diagnosis:/app/diagnosis
-      # 결과서(PDF) 생성 코드 → 호스트와 동기화
-      - ./backend/report:/app/report
       # 증거 스크린샷 코드 → 호스트와 동기화
       - ./backend/screenshot:/app/screenshot
-      # PDF 리포트 렌더러 코드 → 호스트와 동기화
+      # 결과서(PDF) 생성 코드 → 호스트와 동기화
       - ./backend/report:/app/report
     extra_hosts:
       - "host.docker.internal:host-gateway"

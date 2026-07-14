@@ -31,7 +31,6 @@ RUN apt-get update \
 
 COPY app ./app
 COPY diagnosis ./diagnosis
-COPY report ./report
 COPY screenshot ./screenshot
 COPY report ./report
 COPY inventory ./inventory

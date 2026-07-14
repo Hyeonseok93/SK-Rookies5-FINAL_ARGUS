@@ -29,6 +29,7 @@ from redaction import redact_headers, redact_text  # noqa: E402
 from replay import display_url, replay_case  # noqa: E402
 from selector import select_representatives, stable_finding_id  # noqa: E402
 
+
 _CONFIDENCE_BY_REASON = {
     "disallowed_extension_accepted": "high",
     "path_exposure": "medium",

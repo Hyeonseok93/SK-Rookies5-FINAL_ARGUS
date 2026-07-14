@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.config import BACKEND_ROOT
 from app.schemas import (
@@ -146,6 +146,29 @@ def download_module_report_pdf(section_id: str) -> FileResponse:
         pdf_path,
         media_type="application/pdf",
         filename=f"argus_{section_id}_report.pdf",
+    )
+
+
+@router.get("/modules/{section_id}/report/document")
+def get_module_report_document(section_id: str) -> Response:
+    """Per-finding downloadable evidence report PDF (확정 취약 + 잠재적 취약), with
+    captured screenshots embedded and remediation text from the section's
+    guideline.yaml. Currently only implemented for 2-1."""
+    from app.services import report_service
+
+    if section_id not in report_service.EVIDENCE_REPORT_SECTIONS:
+        raise HTTPException(status_code=404, detail=f"Evidence report not supported for module {section_id}")
+    report = diagnosis_service.get_report(section_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail=f"No report for module {section_id}")
+
+    items = report_service.build_report_items(section_id, data_dir=BACKEND_ROOT / "data")
+    pdf_bytes = report_service.render_report_pdf(section_id, report.title, items)
+    filename = f"argus-{section_id}-report.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
