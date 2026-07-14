@@ -251,6 +251,10 @@ export function fetchDiagnosisCatalog(): Promise<DiagnosisCatalogResponse> {
   return request("/diagnosis/catalog");
 }
 
+export function diagnosisEvidenceReportUrl(sectionId: string): string {
+  return `${BASE}/diagnosis/modules/${encodeURIComponent(sectionId)}/report/document`;
+}
+
 export function fetchDiagnosisReport(sectionId: string): Promise<DiagnosisSectionReport> {
   if (sectionId === "6-1") {
     return request("/diagnosis/modules/6-1/report/summary");

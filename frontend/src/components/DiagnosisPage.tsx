@@ -1,6 +1,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, ChevronDown, Loader2, Stethoscope } from "lucide-react";
+import { AlertCircle, ChevronDown, FileDown, Loader2, Stethoscope } from "lucide-react";
 import { G12DiagnosisStartDialog } from "./G12DiagnosisStartDialog";
 import { G32DiagnosisStartDialog } from "./G32DiagnosisStartDialog";
 import { G34DiagnosisStartDialog } from "./G34DiagnosisStartDialog";
@@ -28,7 +28,13 @@ import { G61SectionInfoPopover } from "./diagnosis/G61SectionInfoPopover";
 import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
 import { G74DiagnosisStartDialog } from "./G74DiagnosisStartDialog";
-import { fetchDiagnosisCatalog, fetchDiagnosisProgress, fetchDiagnosisReport, runDiagnosisSection } from "../lib/api";
+import {
+  diagnosisEvidenceReportUrl,
+  fetchDiagnosisCatalog,
+  fetchDiagnosisProgress,
+  fetchDiagnosisReport,
+  runDiagnosisSection,
+} from "../lib/api";
 import {
   DEFAULT_G12_OPTIONS,
   g12OptionsSummary,
@@ -219,6 +225,30 @@ function DiagnosisStartButton({
       )}
       {loading ? "실행 중…" : "진단 시작"}
     </button>
+  );
+}
+
+const _EVIDENCE_REPORT_SECTIONS = new Set(["2-1"]);
+
+function DiagnosisReportDownloadButton({
+  sectionId,
+  compact = false,
+}: {
+  sectionId: string;
+  compact?: boolean;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  return (
+    <a
+      href={diagnosisEvidenceReportUrl(sectionId)}
+      download={`argus-${sectionId}-report-${today}.html`}
+      onClick={(e) => e.stopPropagation()}
+      title="이 항목의 취약점 결과서(스크린샷 포함) HTML 파일을 다운로드합니다 — 받은 파일을 브라우저로 열어 인쇄하면 PDF로도 저장 가능"
+      className={`${START_BTN} ${START_BTN_IDLE} ${compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"}`}
+    >
+      <FileDown className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
+      결과서
+    </a>
   );
 }
 
@@ -881,6 +911,9 @@ export function DiagnosisPage() {
                           onClick={() => handleStartClick(section.id)}
                         />
                       )}
+                      {_EVIDENCE_REPORT_SECTIONS.has(section.id) && report ? (
+                        <DiagnosisReportDownloadButton sectionId={section.id} compact />
+                      ) : null}
                       <button
                         type="button"
                         onClick={() => handleToggle(section.id)}
