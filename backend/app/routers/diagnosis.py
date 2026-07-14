@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -85,6 +86,22 @@ def get_module_report(section_id: str) -> DiagnosisSectionReportResponse:
     if report is None:
         raise HTTPException(status_code=404, detail=f"No report for module {section_id}")
     return _report_to_response(report)
+
+@router.get("/modules/1-6/report.pdf")
+def download_g16_pdf_report() -> FileResponse:
+    generator_path = BACKEND_ROOT / "report" / "modules" / "1-6" / "report.py"
+    spec = importlib.util.spec_from_file_location("argus_g16_pdf_report", generator_path)
+    if spec is None or spec.loader is None:
+        raise HTTPException(status_code=500, detail="1-6 PDF generator could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        output = module.generate_report(BACKEND_ROOT / "data" / "report" / "1-6")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"1-6 PDF generation failed: {exc}") from exc
+    return FileResponse(output, media_type="application/pdf", filename="ARGUS_결과서_1-6.pdf")
 
 
 @router.get("/modules/1-1/evidence/{relative_path:path}")

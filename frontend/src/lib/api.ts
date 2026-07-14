@@ -258,6 +258,23 @@ export function fetchDiagnosisReport(sectionId: string): Promise<DiagnosisSectio
   return request(`/diagnosis/modules/${encodeURIComponent(sectionId)}/report`);
 }
 
+export async function downloadDiagnosisPdf(sectionId: string): Promise<void> {
+  const res = await fetch(`${BASE}/diagnosis/modules/${encodeURIComponent(sectionId)}/report.pdf`);
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(detail || `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `ARGUS_report_${sectionId}.pdf`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function runDiagnosisSection(
   sectionId: string,
   body?: DiagnosisRunSectionRequest,

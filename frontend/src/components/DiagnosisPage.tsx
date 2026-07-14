@@ -32,7 +32,7 @@ import {
 import { G72DiagnosisStartDialog } from "./G72DiagnosisStartDialog";
 import { G73DiagnosisStartDialog } from "./G73DiagnosisStartDialog";
 import { G74DiagnosisStartDialog } from "./G74DiagnosisStartDialog";
-import { fetchDiagnosisCatalog, fetchDiagnosisProgress, fetchDiagnosisReport, runDiagnosisSection } from "../lib/api";
+import { downloadDiagnosisPdf, fetchDiagnosisCatalog, fetchDiagnosisProgress, fetchDiagnosisReport, runDiagnosisSection } from "../lib/api";
 import {
   DEFAULT_G12_OPTIONS,
   g12OptionsSummary,
@@ -226,23 +226,40 @@ function DiagnosisStartButton({
   );
 }
 
-/** Placeholder until report export is wired — always disabled for now. */
 function DiagnosisDownloadButton({ compact = false }: { compact?: boolean }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleDownload = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await downloadDiagnosisPdf("1-6");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "PDF 다운로드에 실패했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <button
-      type="button"
-      disabled
-      title="결과 다운로드 (준비 중)"
-      className={`flex shrink-0 cursor-not-allowed items-center gap-1 rounded-lg border border-cyan-400/35 bg-cyan-500/10 font-semibold text-cyan-200/75 ${
-        compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"
-      }`}
-    >
-      <Download className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
-      다운로드
-    </button>
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        disabled={loading}
+        onClick={handleDownload}
+        title="1-6 PDF 결과서 다운로드"
+        className={`flex shrink-0 items-center gap-1 rounded-lg border border-cyan-400/35 bg-cyan-500/10 font-semibold text-cyan-200 transition hover:bg-cyan-500/20 disabled:cursor-wait disabled:opacity-60 ${
+          compact ? "px-2.5 py-1 text-[10px]" : "px-4 py-1.5 text-xs"
+        }`}
+      >
+        {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />}
+        {loading ? "PDF 생성 중" : "PDF 다운로드"}
+      </button>
+      {error ? <span className="text-[10px] text-rose-300">{error}</span> : null}
+    </div>
   );
 }
-
 function DiagnosisReviewLaterButton({ compact = false }: { compact?: boolean }) {
   return (
     <button
@@ -901,7 +918,7 @@ export function DiagnosisPage() {
                     ) : null}
                     {open && report ? (
                       <div className="flex items-center justify-start gap-2 border-t border-cyber-border/40 bg-cyber-bg/20 px-4 py-2">
-                        <DiagnosisDownloadButton compact />
+                        {section.id === "1-6" ? <DiagnosisDownloadButton compact /> : null}
                       </div>
                     ) : null}
                     {open && !running && report ? <DiagnosisReportPanel report={report} /> : null}
