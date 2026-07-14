@@ -213,6 +213,61 @@ def resolve_evidence_file(section_id: str, rel_path: str) -> Path | None:
     return candidate
 
 
+# Sections with PDF result-export implementations under backend/report/modules/{id}/
+PDF_EXPORT_SECTIONS = frozenset({"2-2"})
+
+
+def supports_pdf_export(section_id: str) -> bool:
+    return section_id in PDF_EXPORT_SECTIONS
+
+
+def build_section_pdf(section_id: str) -> Path:
+    """Generate (or refresh) the section PDF under data/report/{id}/result.pdf."""
+    if section_id not in PDF_EXPORT_SECTIONS:
+        raise ValueError(f"PDF export not supported for section {section_id}")
+
+    import importlib.util
+
+    from diagnosis.paths import section_report_dir, section_report_path
+
+    ctx = _context()
+    report_dir = section_report_dir(ctx.data_dir, section_id)
+    yaml_path = section_report_path(ctx.data_dir, section_id)
+    if not yaml_path.is_file():
+        raise FileNotFoundError(f"No report for module {section_id}")
+
+    module_dir = BACKEND_ROOT / "report" / "modules" / section_id
+    generate_py = module_dir / "generate.py"
+    if not generate_py.is_file():
+        raise FileNotFoundError(f"PDF generator missing for section {section_id}")
+
+    # hyphen folder (e.g. 2-2) is not importable; load generate.py by path.
+    # generate.py pulls siblings (content/shots) via the same directory on sys.path.
+    inserted = str(module_dir)
+    path_was_present = inserted in sys.path
+    if not path_was_present:
+        sys.path.insert(0, inserted)
+    try:
+        mod_name = f"argus_report_{section_id.replace('-', '_')}_generate"
+        spec = importlib.util.spec_from_file_location(mod_name, generate_py)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load PDF generator: {generate_py}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        out = mod.build_pdf(report_dir)
+    finally:
+        if not path_was_present:
+            try:
+                sys.path.remove(inserted)
+            except ValueError:
+                pass
+
+    out_path = Path(out)
+    if not out_path.is_file():
+        raise RuntimeError(f"PDF was not written for section {section_id}")
+    return out_path
+
+
 def get_g61_report_summary() -> dict[str, Any] | None:
     """Compact 6-1 report for UI (aggregated groups, no raw 70k findings)."""
     import importlib.util
