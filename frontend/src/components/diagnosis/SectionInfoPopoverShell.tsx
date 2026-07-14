@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   computeSectionInfoPopoverPos,
@@ -8,7 +8,30 @@ import {
 
 const HOVER_LEAVE_MS = 140;
 
-export function G45SectionInfoPopover() {
+export type SectionInfoBadgeTone = "high" | "medium" | "low" | "note" | "pass";
+
+export type SectionInfoContent = {
+  ariaLabel: string;
+  title: string;
+  blurb: string;
+  /** Shown under the title when set (e.g. 수동 진단) */
+  modeBadge?: string;
+  finds: { label: string; text: ReactNode }[];
+  stepsTitle?: string;
+  steps: ReactNode[];
+  resultTitle?: string;
+  results: { tone: SectionInfoBadgeTone; label: string; text: ReactNode }[];
+};
+
+const BADGE_CLASS: Record<SectionInfoBadgeTone, string> = {
+  high: "border-rose-400/35 bg-rose-500/10 text-rose-200",
+  medium: "border-amber-400/35 bg-amber-500/10 text-amber-200",
+  low: "border-sky-400/35 bg-sky-500/10 text-sky-200",
+  note: "border-amber-400/35 bg-amber-500/10 text-amber-200",
+  pass: "border-emerald-400/35 bg-emerald-500/10 text-emerald-200",
+};
+
+export function SectionInfoPopoverShell({ content }: { content: SectionInfoContent }) {
   const anchorRef = useRef<HTMLButtonElement>(null);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [open, setOpen] = useState(false);
@@ -66,10 +89,15 @@ export function G45SectionInfoPopover() {
             role="tooltip"
           >
             <div className="border-b border-cyan-400/15 bg-gradient-to-r from-cyan-500/10 to-transparent px-3.5 py-2.5">
-              <p className="font-display text-xs font-semibold text-cyan-100">4-5 일반 계정 권한 상승가능성</p>
-              <p className="mt-0.5 text-[10px] leading-relaxed text-white/65">
-                일반 사용자 계정으로 로그인한 상태에서 파라미터 변조 등을 통해 관리자나 타 사용자의 권한을 획득/우회할 수 있는지 점검합니다.
-              </p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <p className="font-display text-xs font-semibold text-cyan-100">{content.title}</p>
+                {content.modeBadge ? (
+                  <span className="rounded border border-amber-400/35 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium leading-none text-amber-200">
+                    {content.modeBadge}
+                  </span>
+                ) : null}
+              </div>
+              <p className="mt-0.5 text-[10px] leading-relaxed text-white/65">{content.blurb}</p>
             </div>
 
             <div className="space-y-3 px-3.5 py-3 text-[10px] leading-relaxed text-white/80">
@@ -78,38 +106,40 @@ export function G45SectionInfoPopover() {
                   무엇을 찾나요?
                 </p>
                 <ul className="list-inside list-disc space-y-0.5 text-white/75">
-                  <li>
-                    <span className="text-white/90">IDOR(Insecure Direct Object Reference)</span> — 타겟 ID를 변조하여 타인의 정보 열람/수정
-                  </li>
-                  <li>
-                    <span className="text-white/90">권한 우회</span> — 인가되지 않은 일반 계정으로 관리자 전용 기능 호출
-                  </li>
+                  {content.finds.map((item) => (
+                    <li key={item.label}>
+                      <span className="text-white/90">{item.label}</span> — {item.text}
+                    </li>
+                  ))}
                 </ul>
               </section>
 
               <section className="rounded-lg border border-cyber-border/30 bg-cyber-bg/40 px-2.5 py-2">
-                <p className="mb-1 text-[10px] font-semibold text-cyan-300/90">테스트 방법</p>
+                <p className="mb-1 text-[10px] font-semibold text-cyan-300/90">
+                  {content.stepsTitle ?? "테스트 방법"}
+                </p>
                 <ol className="list-inside list-decimal space-y-1 text-white/75">
-                  <li>
-                    <span className="text-white/90">Target URL</span>에 취약점이 의심되는 API 주소를 입력합니다.
-                  </li>
-                  <li>
-                    <span className="text-white/90">Method</span>를 선택하고 필요한 경우 헤더/본문을 구성합니다.
-                  </li>
-                  <li>Diagnosis에서 이 항목(4-5)을 펼치고 「진단 시작」</li>
-                  <li>완료 후 결과에서 발견된 취약점과 인젝션 파라미터를 확인합니다.</li>
+                  {content.steps.map((step, index) => (
+                    <li key={index}>{step}</li>
+                  ))}
                 </ol>
               </section>
 
               <section>
-                <p className="mb-1 text-[10px] font-semibold text-cyan-300/90">결과 읽는 법</p>
+                <p className="mb-1 text-[10px] font-semibold text-cyan-300/90">
+                  {content.resultTitle ?? "결과 읽는 법"}
+                </p>
                 <ul className="space-y-2">
-                  <li className="flex items-start gap-2">
-                    <span className="inline-flex h-4 shrink-0 items-center rounded border border-rose-400/35 bg-rose-500/10 px-1.5 text-[9px] leading-none text-rose-200">
-                      높음
-                    </span>
-                    <span>타 사용자의 계정 정보 탈취 또는 관리자 기능 접근 성공 — 즉각적인 조치(권한 검증 로직 추가) 필요</span>
-                  </li>
+                  {content.results.map((item) => (
+                    <li key={`${item.label}-${item.tone}`} className="flex items-start gap-2">
+                      <span
+                        className={`inline-flex h-4 shrink-0 items-center rounded border px-1.5 text-[9px] leading-none ${BADGE_CLASS[item.tone]}`}
+                      >
+                        {item.label}
+                      </span>
+                      <span>{item.text}</span>
+                    </li>
+                  ))}
                 </ul>
               </section>
             </div>
@@ -124,7 +154,7 @@ export function G45SectionInfoPopover() {
         ref={anchorRef}
         type="button"
         tabIndex={0}
-        aria-label="4-5 진단 안내"
+        aria-label={content.ariaLabel}
         aria-expanded={open}
         onMouseEnter={showCard}
         onMouseLeave={scheduleHide}

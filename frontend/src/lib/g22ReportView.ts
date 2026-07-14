@@ -19,6 +19,8 @@ export type G22Row = {
   param: string | null;
   paramIn: string | null;
   payload: string | null;
+  trigger: string;
+  findingId: string | null;
   issueLabel: string;
   headline: string;
   scaleSummary: string;
@@ -28,6 +30,12 @@ export type G22Row = {
   severityLabel: string;
   engines: string[];
   detailFields: G22DetailField[];
+};
+
+export type G22EvidenceShot = {
+  kind: string;
+  path: string;
+  label: string;
 };
 
 export type G22SummaryRow = G22Row & {
@@ -206,6 +214,7 @@ export function parseG22Row(f: G22Finding): G22Row | null {
   const paramIn = ev.param_in != null ? String(ev.param_in) : null;
   const payload = ev.payload != null ? String(ev.payload) : null;
   const trigger = ev.trigger != null ? String(ev.trigger) : "";
+  const findingId = ev.finding_id != null && String(ev.finding_id).trim() ? String(ev.finding_id) : null;
   const classification =
     ev.classification === "A" || ev.classification === "B"
       ? ev.classification
@@ -263,6 +272,8 @@ export function parseG22Row(f: G22Finding): G22Row | null {
     param,
     paramIn,
     payload,
+    trigger,
+    findingId,
     issueLabel,
     headline: buildHeadline({ ruleId, method, path, param, payload, trigger, classification }),
     scaleSummary: scaleParts.join(" · ") || "—",
@@ -273,6 +284,123 @@ export function parseG22Row(f: G22Finding): G22Row | null {
     engines: [engine],
     detailFields,
   };
+}
+
+const G22_SHOT_LABELS: Record<string, string> = {
+  main_site: "메인 화면",
+  logged_in_main: "로그인 후 메인",
+  feature_page: "기능 페이지",
+  baseline_evidence: "Baseline 요청/응답",
+  attack_evidence: "Attack 요청/응답",
+  auth_evidence: "인증 세션 증거",
+  anon_evidence: "비로그인 증거",
+  ui_result: "UI 결과",
+  file_compare: "파일 내용 비교",
+};
+
+export function g22ShotLabel(kind: string): string {
+  return G22_SHOT_LABELS[kind] ?? kind;
+}
+
+export function g22EvidenceUrl(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const marker = "/evidence/";
+  const idx = normalized.indexOf(marker);
+  const relative = idx >= 0 ? normalized.slice(idx + marker.length) : normalized;
+  return `/api/diagnosis/modules/2-2/evidence?path=${encodeURIComponent(relative)}`;
+}
+
+export function g22ArtifactFindingId(path: string): string | null {
+  const match = path.replace(/\\/g, "/").match(/\/(2-2-[a-f0-9]{10})\//i);
+  return match?.[1] ?? null;
+}
+
+/** Same key shape as backend screenshot/modules/2-2/selector.stable_finding_id */
+export function g22DedupeKey(row: {
+  ruleId: string;
+  method: string;
+  path: string;
+  param: string | null;
+  payload: string | null;
+  trigger: string;
+}): string {
+  return [
+    row.ruleId,
+    row.method.toUpperCase(),
+    row.path,
+    (row.param ?? "").toLowerCase(),
+    row.payload || row.trigger || "",
+  ].join("|");
+}
+
+export async function g22StableFindingId(row: {
+  ruleId: string;
+  method: string;
+  path: string;
+  param: string | null;
+  payload: string | null;
+  trigger: string;
+}): Promise<string | null> {
+  if (!globalThis.crypto?.subtle) return null;
+  const data = new TextEncoder().encode(g22DedupeKey(row));
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `2-2-${hex.slice(0, 10)}`;
+}
+
+export function indexG22CaptureShots(
+  summary: {
+    results?: {
+      finding_id?: string;
+      ok?: boolean;
+      artifacts?: { kind?: string; path?: string }[];
+    }[];
+  } | null,
+): Map<string, G22EvidenceShot[]> {
+  const byId = new Map<string, G22EvidenceShot[]>();
+  if (!summary?.results) return byId;
+
+  for (const result of summary.results) {
+    if (result.ok === false) continue;
+    const shots = (result.artifacts ?? [])
+      .filter((item): item is { kind: string; path: string } => Boolean(item.path) && /\.(png|jpe?g|webp)$/i.test(String(item.path)))
+      .map((item) => ({
+        kind: String(item.kind ?? "evidence"),
+        path: String(item.path),
+        label: g22ShotLabel(String(item.kind ?? "evidence")),
+      }));
+    if (shots.length === 0) continue;
+
+    const ids = new Set<string>();
+    if (result.finding_id) ids.add(String(result.finding_id));
+    for (const shot of shots) {
+      const fromPath = g22ArtifactFindingId(shot.path);
+      if (fromPath) ids.add(fromPath);
+    }
+    for (const id of ids) byId.set(id, shots);
+  }
+  return byId;
+}
+
+export async function resolveG22ShotsForRow(
+  row: G22SummaryRow,
+  byId: Map<string, G22EvidenceShot[]>,
+): Promise<G22EvidenceShot[]> {
+  const candidates = new Set<string>();
+  if (row.findingId) candidates.add(row.findingId);
+  for (const member of row.members) {
+    if (member.findingId) candidates.add(member.findingId);
+    const stable = await g22StableFindingId(member);
+    if (stable) candidates.add(stable);
+  }
+  const selfStable = await g22StableFindingId(row);
+  if (selfStable) candidates.add(selfStable);
+
+  for (const id of candidates) {
+    const shots = byId.get(id);
+    if (shots?.length) return shots;
+  }
+  return [];
 }
 
 export function parseG22Findings(findings: G22Finding[]): {
@@ -294,7 +422,13 @@ export function parseG22Findings(findings: G22Finding[]): {
       continue;
     }
     const engines = [...new Set([...prev.engines, ...row.engines])];
-    merged.set(row.rowKey, { ...prev, engines });
+    merged.set(row.rowKey, {
+      ...prev,
+      engines,
+      findingId: prev.findingId ?? row.findingId,
+      trigger: prev.trigger || row.trigger,
+      payload: prev.payload ?? row.payload,
+    });
   }
 
   const rows = [...merged.values()];
@@ -324,8 +458,10 @@ export function buildG22SummaryRows(rows: G22Row[]): G22SummaryRow[] {
     members.sort((a, b) => a.endpointLabel.localeCompare(b.endpointLabel));
     const primary = members[0]!;
     const groupedCount = members.length;
+    const findingId = members.map((m) => m.findingId).find((id) => Boolean(id)) ?? primary.findingId;
     out.push({
       ...primary,
+      findingId,
       groupedCount,
       endpointHint: groupedCount > 1 ? endpointHintFromRows(members) : primary.endpointLabel,
       members,

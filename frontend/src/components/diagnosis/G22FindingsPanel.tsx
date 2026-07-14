@@ -1,10 +1,14 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { CollapsibleReportSection } from "./CollapsibleReportSection";
 import {
   buildG22SummaryRows,
+  g22EvidenceUrl,
+  indexG22CaptureShots,
   isG22IssueRow,
   parseG22Findings,
+  resolveG22ShotsForRow,
+  type G22EvidenceShot,
   type G22Finding,
   type G22SummaryRow,
 } from "../../lib/g22ReportView";
@@ -41,9 +45,44 @@ function G22EllipsisCell({
   );
 }
 
-function G22DetailCard({ row }: { row: G22SummaryRow }) {
+function G22ShotStack({ shots }: { shots: G22EvidenceShot[] }) {
+  if (shots.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      <p className="text-cyber-muted">증거 스크린샷 ({shots.length})</p>
+      <div className="grid grid-cols-1 gap-2">
+        {shots.map((shot) => (
+          <figure
+            key={`${shot.kind}-${shot.path}`}
+            className="overflow-hidden rounded border border-cyber-border/30 bg-black/20"
+          >
+            <img
+              src={g22EvidenceUrl(shot.path)}
+              alt={shot.label}
+              className="w-full object-contain"
+              loading="lazy"
+            />
+            <figcaption className="border-t border-cyber-border/25 px-2 py-1 text-[10px] text-cyber-muted">
+              {shot.label}
+            </figcaption>
+          </figure>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function G22DetailCard({
+  row,
+  shots,
+}: {
+  row: G22SummaryRow;
+  shots: G22EvidenceShot[];
+}) {
   const [open, setOpen] = useState(false);
   const badge = SEVERITY_BADGE[row.severity] ?? SEVERITY_BADGE.low;
+  const detailHint =
+    shots.length > 0 ? "상세 (URL · payload · 증거 스크린샷)" : "상세 (URL · payload · 추출 텍스트)";
 
   return (
     <li className="rounded-lg border border-cyber-border/30 bg-cyber-panel/20 px-3 py-2.5">
@@ -67,7 +106,7 @@ function G22DetailCard({ row }: { row: G22SummaryRow }) {
         className="mt-2 flex items-center gap-1 text-[10px] text-cyber-muted transition hover:text-white/90"
       >
         <ChevronDown className={`h-3 w-3 transition ${open ? "rotate-180" : ""}`} />
-        {open ? "상세 접기" : "상세 (URL · payload · 추출 텍스트)"}
+        {open ? "상세 접기" : detailHint}
       </button>
 
       {open ? (
@@ -91,6 +130,7 @@ function G22DetailCard({ row }: { row: G22SummaryRow }) {
               </li>
             ))}
           </ul>
+          <G22ShotStack shots={shots} />
         </div>
       ) : null}
     </li>
@@ -157,9 +197,48 @@ function G22IssueSummaryTable({ rows }: { rows: G22SummaryRow[] }) {
   );
 }
 
+function useG22ShotMap(rows: G22SummaryRow[]) {
+  const [shotMap, setShotMap] = useState<Record<string, G22EvidenceShot[]>>({});
+  const rowSignature = useMemo(
+    () => rows.map((r) => `${r.rowKey}|${r.findingId ?? ""}|${r.members.map((m) => m.findingId ?? "").join(",")}`).join(";"),
+    [rows],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/diagnosis/modules/2-2/evidence?path=capture-summary.json");
+        if (!res.ok) {
+          if (!cancelled) setShotMap({});
+          return;
+        }
+        const summary = (await res.json()) as Parameters<typeof indexG22CaptureShots>[0];
+        const byId = indexG22CaptureShots(summary);
+        const next: Record<string, G22EvidenceShot[]> = {};
+        await Promise.all(
+          rows.map(async (row) => {
+            const shots = await resolveG22ShotsForRow(row, byId);
+            if (shots.length > 0) next[`${row.rowKey}|${row.endpointHint}`] = shots;
+          }),
+        );
+        if (!cancelled) setShotMap(next);
+      } catch {
+        if (!cancelled) setShotMap({});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rowSignature, rows]);
+
+  return shotMap;
+}
+
 export function G22FindingsPanel({ findings }: { findings: G22Finding[] }) {
   const { rows, other } = parseG22Findings(findings);
   const summaryRows = buildG22SummaryRows(rows).filter(isG22IssueRow);
+  const shotMap = useG22ShotMap(summaryRows);
 
   return (
     <>
@@ -167,9 +246,10 @@ export function G22FindingsPanel({ findings }: { findings: G22Finding[] }) {
       {summaryRows.length > 0 ? (
         <CollapsibleReportSection title="상세" defaultOpen={false}>
           <ul className="space-y-2">
-            {summaryRows.map((row) => (
-              <G22DetailCard key={`${row.rowKey}|${row.endpointHint}`} row={row} />
-            ))}
+            {summaryRows.map((row) => {
+              const key = `${row.rowKey}|${row.endpointHint}`;
+              return <G22DetailCard key={key} row={row} shots={shotMap[key] ?? []} />;
+            })}
           </ul>
         </CollapsibleReportSection>
       ) : null}
