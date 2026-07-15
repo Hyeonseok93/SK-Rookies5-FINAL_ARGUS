@@ -19,7 +19,7 @@ if str(_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(_MODULE_DIR))
 
 from g45_models import ScanResult
-from g45_utils import _read_api_tree, normalize_response_text, get_json_schema, json_field_matches
+from g45_utils import _read_api_tree, json_field_matches
 from g45_auth import auth_headers_for_session, get_dynamic_user_id
 from g45_payloads import safe_body
 from g45_discovery import build_resource_inventory, active_discovery_inventory
@@ -50,6 +50,15 @@ def _select_endpoints(endpoints: list[dict], *, probe_mode: str, sample_size: in
     if max_endpoints:
         endpoints = endpoints[:max_endpoints]
     return endpoints
+
+
+def _first_inventory_value(inventory: dict, preferred_keys: list[str]) -> str | None:
+    normalized = {str(k).lower(): v for k, v in inventory.items()}
+    for key in preferred_keys:
+        values = normalized.get(key.lower())
+        if values:
+            return str(values[0])
+    return None
 
 
 def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
@@ -264,6 +273,15 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     # 로그 폭탄 방지: 각 키별로 최대 5개까지만 출력하고 개수 표시
     b_inventory_summary = {k: f"[{len(v)} items] {v[:5]}..." if len(v) > 5 else v for k, v in b_inventory.items()}
     _log(f"    B Inventory built (filtered): {b_inventory_summary}")
+    hidden_query_user_b_id = _first_inventory_value(
+        b_inventory,
+        ["memberId", "member_id", "userId", "user_id", "accountId", "account_id", "id"],
+    ) or user_b_dynamic_id
+    if hidden_query_user_b_id and hidden_query_user_b_id != user_b_dynamic_id:
+        _log(
+            "    [Dynamic ID] Using B inventory identifier for hidden query "
+            f"tests -> {hidden_query_user_b_id} (fallback was {user_b_dynamic_id})"
+        )
     
     # [Phase 2] Exploitation (2 Cases)
     _log(f"Phase 2: IDOR Testing (2 Cases)")
@@ -332,13 +350,13 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             try:
                 res_a_base = requests.get(probe_url(url_template), headers=user_a_headers, timeout=timeout, verify=False)
                 
-                if res_a_base.status_code == 200 and user_b_dynamic_id:
+                if res_a_base.status_code == 200 and hidden_query_user_b_id:
                     # 2단계: 쿼리 강제 주입 (Hidden Query Injection)
                     # 스킵 로직 제거: 빈 배열이라도 강제로 파라미터를 찔러서 데이터가 딸려오는지 확인
                     hidden_params = ["userId", "user_id", "memberId", "member_id", "accountId", "id"]
                     
                     for param in hidden_params:
-                            test_url = f"{url_template}?{param}={user_b_dynamic_id}"
+                            test_url = f"{url_template}?{param}={hidden_query_user_b_id}"
                             
                             _log(f"    [Phase 2 Case 2] Testing {method} {test_url} ...")
                             # User A 토큰으로 User B의 ID를 쿼리에 섞어서 요청
@@ -350,7 +368,9 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                                 # 3단계: 해킹 성공 여부 판단 (의미론적 추적 - Semantic Diffing)
                                 # A의 원래 응답에는 B의 정보가 없었는데, 주입 후 응답에 B의 고유 정보(이메일, ID 등)가 나타났는지 검사
                                 b_identifiers = []
-                                if user_b_dynamic_id: b_identifiers.append(str(user_b_dynamic_id))
+                                if hidden_query_user_b_id: b_identifiers.append(str(hidden_query_user_b_id))
+                                if user_b_dynamic_id and user_b_dynamic_id != hidden_query_user_b_id:
+                                    b_identifiers.append(str(user_b_dynamic_id))
                                 if user_b.get("email"): b_identifiers.append(str(user_b.get("email")))
                                 if user_b.get("nickname"): b_identifiers.append(str(user_b.get("nickname")))
                                 
@@ -376,7 +396,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                                                 "method": method,
                                                 "description": (
                                                     "**[수동 검증 필수]**\n\n"
-                                                    f"개인화된 API(`{url_template}`)에 숨겨진 식별자 파라미터(`{param}={user_b_dynamic_id}`)를 쿼리에 강제 주입한 결과, "
+                                                    f"개인화된 API(`{url_template}`)에 숨겨진 식별자 파라미터(`{param}={hidden_query_user_b_id}`)를 쿼리에 강제 주입한 결과, "
                                                     f"정상 토큰(User A) 소유자에게 허용되지 않은 타겟 유저(User B)의 민감 정보({leaked_identifiers})가 노출되어 권한 우회(BOLA)에 성공한 것으로 강하게 의심됩니다."
                                                 ),
                                                 "attack_payload": (

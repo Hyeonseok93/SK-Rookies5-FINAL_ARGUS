@@ -4,4 +4,4 @@ chapter: 4
 implemented: true
 diagnosable: true
 review_later: false
-engine: httpx
+engine: requests

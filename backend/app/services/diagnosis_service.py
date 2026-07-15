@@ -709,7 +709,7 @@ def _run_module(mod: Any, ctx: DiagnosisContext, section_id: str) -> SectionRepo
             # finishes (whether it succeeded or not) — only sections with
             # auto-capture get an auto-built report; everything else still
             # renders on-demand at download time.
-            _build_report_pdf_best_effort(section_id, ctx)
+    _build_report_pdf_best_effort(section_id, ctx)
 
     _finish_progress(section_id, report)
     return report

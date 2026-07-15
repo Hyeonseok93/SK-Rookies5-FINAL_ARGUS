@@ -45,31 +45,3 @@ def json_field_matches(data: Any, key: str, expected: str) -> bool:
                 return True
     return False
 
-def normalize_for_personal_api(data: Any) -> Any:
-    if isinstance(data, dict):
-        return {
-            k: normalize_for_personal_api(v)
-            for k, v in data.items()
-            if k not in NOISE_KEYS
-        }
-    if isinstance(data, list):
-        return [normalize_for_personal_api(v) for v in data]
-    return data
-
-def get_json_schema(data: Any) -> Any:
-    if isinstance(data, dict):
-        return {k: get_json_schema(v) for k, v in data.items() if k not in NOISE_KEYS}
-    elif isinstance(data, list):
-        if data:
-            return [get_json_schema(data[0])]
-        return []
-    else:
-        return type(data).__name__
-
-def normalize_response_text(text: str) -> str:
-    try:
-        parsed = json.loads(text)
-        normalized = normalize_for_personal_api(parsed)
-        return json.dumps(normalized, sort_keys=True, ensure_ascii=False)
-    except Exception:
-        return text

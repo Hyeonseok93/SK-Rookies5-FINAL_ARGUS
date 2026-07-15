@@ -31,7 +31,7 @@ class G45Module(DiagnosisModule):
     title = "일반계정 권한 상승 가능성"
     chapter = 4
     implemented = True
-    engine = "httpx"
+    engine = "requests"
 
     def __init__(self, module_dir: Path) -> None:
         self.module_dir = module_dir
