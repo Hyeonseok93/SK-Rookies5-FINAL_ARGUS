@@ -662,7 +662,7 @@ def _run_module(mod: Any, ctx: DiagnosisContext, section_id: str) -> SectionRepo
         raise RuntimeError(str(exc) or "Diagnosis cancelled") from exc
     # 1-2 / 2-1 / 2-2 / 7-4: 증거 스크린샷 캡처
     if section_id in {"1-2", "2-1", "2-2", "7-4"} and report.status != "cancelled":
-        from app.services.evidence_capture_service import capture_after_diagnosis
+        from app.services.evidence_capture_service import capture_after_diagnosis, supports
 
         if supports(section_id):
             dp.update(
