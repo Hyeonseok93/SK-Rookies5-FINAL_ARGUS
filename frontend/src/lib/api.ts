@@ -289,6 +289,33 @@ export function diagnosisEvidenceReportUrl(sectionId: string): string {
   return `${BASE}/diagnosis/modules/${encodeURIComponent(sectionId)}/report/document`;
 }
 
+/** 증거 스크린샷 포함 결과서(PDF) 다운로드 — 현재 2-1 전용 (report/document 엔드포인트). */
+export async function downloadDiagnosisEvidenceReport(sectionId: string): Promise<void> {
+  const res = await fetch(diagnosisEvidenceReportUrl(sectionId));
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(detail || `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(disposition);
+  const filename = match
+    ? decodeURIComponent(match[1].replace(/["']/g, ""))
+    : `argus-${sectionId}-report.pdf`;
+  const href = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = filename;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(href);
+  }
+}
+
 export function fetchDiagnosisReport(sectionId: string): Promise<DiagnosisSectionReport> {
   if (sectionId === "6-1") {
     return request("/diagnosis/modules/6-1/report/summary");
