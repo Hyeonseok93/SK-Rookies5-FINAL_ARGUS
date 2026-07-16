@@ -1,11 +1,11 @@
 app_name: ''
 targets:
 - name: target-1
-  base_url: http://192.168.0.61
+  base_url: http://host.docker.internal
 - name: api-2
-  base_url: http://192.168.0.61:8080
+  base_url: http://host.docker.internal:8080
 - name: admin-api
-  base_url: http://192.168.0.61:8081
+  base_url: http://host.docker.internal:8081
 inventory:
   markdown:
     enabled: false
@@ -15,14 +15,14 @@ inventory:
   openapi:
     enabled: false
     path: ''
-    base_url: http://192.168.0.61
+    base_url: http://host.docker.internal
   url_list:
     enabled: false
     path: data/inventory-urls.json
   base_urls:
-  - http://192.168.0.61
-  - http://192.168.0.61:8080
-  - http://192.168.0.61:8081
+  - http://host.docker.internal
+  - http://host.docker.internal:8080
+  - http://host.docker.internal:8081
 zap:
   proxy: http://zap:8090
   api_key: ''
