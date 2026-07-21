@@ -1,0 +1,91 @@
+# ────────────────────────────────────────────────────────────────────────────
+# docker-compose.prod.yml — 배포용 (CD/SSM 초안)
+#
+# docker-compose.yml(로컬 개발용, 소스에서 build)과 분리된 파일이다.
+# 여기 있는 backend/frontend는 build 대신 CI가 ECR에 push한 이미지를 그대로 pull해서 쓴다.
+#
+# 실행 전 준비 (CD 배포 스크립트가 해야 하는 것):
+#   1. EC2에서 ECR 로그인
+#      aws ecr get-login-password --region ap-northeast-2 \
+#        | docker login --username AWS --password-stdin $ECR_REGISTRY
+#   2. 아래 환경변수 export (또는 .env 파일로 대체)
+#      ECR_REGISTRY=<계정ID>.dkr.ecr.ap-northeast-2.amazonaws.com
+#      IMAGE_TAG=<배포할 태그 — latest 또는 특정 커밋 sha>
+#   3. Secrets Manager 값은 backend가 별도로 /opt/argus/.env로 주입받는다
+#      (terraform/scripts/inject-secrets.sh 참고, ec2_backend.tf 부트스트랩이 배치해둠)
+#   4. docker compose -f docker-compose.prod.yml pull
+#      docker compose -f docker-compose.prod.yml up -d
+#
+# TODO(CD/김현석 확인 필요):
+#   - backend_data 호스트 경로(/opt/argus/data)가 실제 EBS 마운트 지점과 맞는지 확인
+#     (ec2_backend.tf 주석: t3 인스턴스는 /dev/xvdf가 실제로는 /dev/nvme1n1 등으로 보임 —
+#      마운트는 lsblk로 확인한 실제 디바이스를 대상으로 해야 함)
+#   - worker/selenium 컨테이너는 아직 없음 — 추가되면 이미지 빌드 대상에 포함할지 CI와 협의
+# ────────────────────────────────────────────────────────────────────────────
+
+services:
+  zap:
+    image: zaproxy/zap-stable
+    container_name: argus-zap
+    user: zap
+    command:
+      - zap.sh
+      - -daemon
+      - -port
+      - "8090"
+      - -host
+      - "0.0.0.0"
+      - -config
+      - api.addrs.addr.name=.*
+      - -config
+      - api.addrs.addr.regex=true
+      - -config
+      - api.disablekey=true
+    ports:
+      - "8090:8090"
+    volumes:
+      - /opt/argus/data:/app/data:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://127.0.0.1:8090/JSON/core/view/version/ || exit 1" ]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 40s
+    restart: unless-stopped
+
+  backend:
+    image: ${ECR_REGISTRY}/argus-dev-backend:${IMAGE_TAG:-latest}
+    container_name: argus-backend
+    # ALB backend 타겟그룹(:8001) → 이 호스트 포트로 전달됨 (terraform alb.tf/variables.tf backend_port 참고)
+    ports:
+      - "8001:8000"
+    env_file:
+      - /opt/argus/.env
+    environment:
+      CONFIG_PATH: /app/config.docker.yaml
+      ZAP_PROXY: http://zap:8090
+    volumes:
+      - /opt/argus/data:/app/data
+      - /opt/argus/config.yaml:/app/config.yaml
+      - /opt/argus/config.docker.yaml:/app/config.docker.yaml
+    depends_on:
+      zap:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)" ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  frontend:
+    image: ${ECR_REGISTRY}/argus-dev-frontend:${IMAGE_TAG:-latest}
+    container_name: argus-frontend
+    # ALB frontend 타겟그룹(:80 기본 경로) → 이 호스트 포트로 전달됨
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
