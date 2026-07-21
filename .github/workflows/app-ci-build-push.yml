@@ -2,7 +2,7 @@ name: App Build & Push to ECR
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "dev" ]
     paths:
       - 'frontend/**'
       - 'backend/**'

@@ -2,7 +2,7 @@ name: App CI (PR Lint & Test)
 
 on:
   pull_request:
-    branches: [ "main" ]
+    branches: [ "dev" ]
     paths:
       - 'frontend/**'
       - 'backend/**'
