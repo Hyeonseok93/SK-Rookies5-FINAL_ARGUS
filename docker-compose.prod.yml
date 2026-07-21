@@ -5,21 +5,29 @@
 # 여기 있는 backend/frontend는 build 대신 CI가 ECR에 push한 이미지를 그대로 pull해서 쓴다.
 #
 # 실행 전 준비 (CD 배포 스크립트가 해야 하는 것):
-#   1. EC2에서 ECR 로그인
+#   1. EC2에서 ECR 로그인 (backend/frontend EC2 IAM role에 이미 ecr pull 권한 있음 — ecr.tf 참고)
 #      aws ecr get-login-password --region ap-northeast-2 \
 #        | docker login --username AWS --password-stdin $ECR_REGISTRY
 #   2. 아래 환경변수 export (또는 .env 파일로 대체)
 #      ECR_REGISTRY=<계정ID>.dkr.ecr.ap-northeast-2.amazonaws.com
-#      IMAGE_TAG=<배포할 태그 — latest 또는 특정 커밋 sha>
+#      IMAGE_TAG=latest   # dev 브랜치 push마다 갱신되는 최신 이미지. 롤백 필요해지면
+#                         # 특정 커밋 sha 태그로 바꿔서 지정 가능 (build-push 워크플로가 이미 push해둠)
 #   3. Secrets Manager 값은 backend가 별도로 /opt/argus/.env로 주입받는다
 #      (terraform/scripts/inject-secrets.sh 참고, ec2_backend.tf 부트스트랩이 배치해둠)
 #   4. docker compose -f docker-compose.prod.yml pull
 #      docker compose -f docker-compose.prod.yml up -d
 #
+# 잠정 결정 사항 (CI 담당이 결정 — CD 확인 후 이견 있으면 변경 가능):
+#   - config.yaml/config.docker.yaml은 대시보드에서 사용자가 base_url/login 설정을
+#     저장하면 재배포 후에도 유지돼야 하므로, 이미지에 구워진 버전 대신 EBS 데이터
+#     볼륨(/opt/argus/data, ec2_backend.tf에서 실제 마운트 확인됨) 하위에 저장하고
+#     bind-mount 한다.
+#     주의: bind-mount 대상 파일이 호스트에 없으면 Docker가 빈 디렉터리로 만들어버림.
+#     최초 배포 시 CD 스크립트가 backend 레포의 config.yaml/config.docker.yaml을
+#     /opt/argus/data/ 밑으로 한 번 복사해둔 뒤 compose up 해야 함 (이후엔 유지됨).
+#   - 이미지 태그는 latest 고정 (dev 브랜치 지속 배포 구조이므로 단순화).
+#
 # TODO(CD/김현석 확인 필요):
-#   - backend_data 호스트 경로(/opt/argus/data)가 실제 EBS 마운트 지점과 맞는지 확인
-#     (ec2_backend.tf 주석: t3 인스턴스는 /dev/xvdf가 실제로는 /dev/nvme1n1 등으로 보임 —
-#      마운트는 lsblk로 확인한 실제 디바이스를 대상으로 해야 함)
 #   - worker/selenium 컨테이너는 아직 없음 — 추가되면 이미지 빌드 대상에 포함할지 CI와 협의
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -66,8 +74,8 @@ services:
       ZAP_PROXY: http://zap:8090
     volumes:
       - /opt/argus/data:/app/data
-      - /opt/argus/config.yaml:/app/config.yaml
-      - /opt/argus/config.docker.yaml:/app/config.docker.yaml
+      - /opt/argus/data/config.yaml:/app/config.yaml
+      - /opt/argus/data/config.docker.yaml:/app/config.docker.yaml
     depends_on:
       zap:
         condition: service_healthy
