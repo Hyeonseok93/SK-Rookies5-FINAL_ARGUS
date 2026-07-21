@@ -1,11 +1,15 @@
 # ────────────────────────────────────────────────────────────────────────────
-# docker-compose.prod.yml — 배포용 (CD/SSM 초안)
+# docker-compose.backend.prod.yml — Backend EC2 배포용 (CD/SSM 초안)
+#
+# ec2_backend.tf 주석대로 zap+backend(+추후 worker/selenium)는 이 인스턴스
+# "한 대"에서 같이 뜬다 (인스턴스를 분리하지 않기로 결정함, 2026-07-21).
+# frontend는 별도 EC2에서 도니 이 파일에 넣지 않는다 — docker-compose.frontend.prod.yml 참고.
 #
 # docker-compose.yml(로컬 개발용, 소스에서 build)과 분리된 파일이다.
-# 여기 있는 backend/frontend는 build 대신 CI가 ECR에 push한 이미지를 그대로 pull해서 쓴다.
+# 여기 있는 backend는 build 대신 CI가 ECR에 push한 이미지를 그대로 pull해서 쓴다.
 #
 # 실행 전 준비 (CD 배포 스크립트가 해야 하는 것):
-#   1. EC2에서 ECR 로그인 (backend/frontend EC2 IAM role에 이미 ecr pull 권한 있음 — ecr.tf 참고)
+#   1. EC2에서 ECR 로그인 (backend EC2 IAM role에 이미 ecr pull 권한 있음 — ecr.tf 참고)
 #      aws ecr get-login-password --region ap-northeast-2 \
 #        | docker login --username AWS --password-stdin $ECR_REGISTRY
 #   2. 아래 환경변수 export (또는 .env 파일로 대체)
@@ -14,8 +18,8 @@
 #                         # 특정 커밋 sha 태그로 바꿔서 지정 가능 (build-push 워크플로가 이미 push해둠)
 #   3. Secrets Manager 값은 backend가 별도로 /opt/argus/.env로 주입받는다
 #      (terraform/scripts/inject-secrets.sh 참고, ec2_backend.tf 부트스트랩이 배치해둠)
-#   4. docker compose -f docker-compose.prod.yml pull
-#      docker compose -f docker-compose.prod.yml up -d
+#   4. docker compose -f docker-compose.backend.prod.yml pull
+#      docker compose -f docker-compose.backend.prod.yml up -d
 #
 # 잠정 결정 사항 (CI 담당이 결정 — CD 확인 후 이견 있으면 변경 가능):
 #   - config.yaml/config.docker.yaml은 대시보드에서 사용자가 base_url/login 설정을
@@ -85,15 +89,4 @@ services:
       timeout: 5s
       retries: 12
       start_period: 15s
-    restart: unless-stopped
-
-  frontend:
-    image: ${ECR_REGISTRY}/argus-dev-frontend:${IMAGE_TAG:-latest}
-    container_name: argus-frontend
-    # ALB frontend 타겟그룹(:80 기본 경로) → 이 호스트 포트로 전달됨
-    ports:
-      - "80:80"
-    depends_on:
-      backend:
-        condition: service_healthy
     restart: unless-stopped

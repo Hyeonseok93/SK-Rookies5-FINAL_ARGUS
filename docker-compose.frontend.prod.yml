@@ -1,0 +1,27 @@
+# ────────────────────────────────────────────────────────────────────────────
+# docker-compose.frontend.prod.yml — Frontend EC2 배포용 (CD/SSM 초안)
+#
+# frontend(Nginx)는 backend/zap과 완전히 별도의 EC2(Public Subnet)에서 돈다
+# (ec2_frontend.tf 참고). backend는 여기 없다 — docker-compose.backend.prod.yml 참고.
+# /api/* 요청은 이 인스턴스를 거치지 않고 ALB가 backend 타겟그룹으로 직접 라우팅한다
+# (terraform/alb.tf의 aws_lb_listener_rule.api).
+#
+# 실행 전 준비 (CD 배포 스크립트가 해야 하는 것):
+#   1. EC2에서 ECR 로그인 (frontend EC2 IAM role에 이미 ecr pull 권한 있음 — ecr.tf 참고)
+#      aws ecr get-login-password --region ap-northeast-2 \
+#        | docker login --username AWS --password-stdin $ECR_REGISTRY
+#   2. 아래 환경변수 export
+#      ECR_REGISTRY=<계정ID>.dkr.ecr.ap-northeast-2.amazonaws.com
+#      IMAGE_TAG=latest
+#   3. docker compose -f docker-compose.frontend.prod.yml pull
+#      docker compose -f docker-compose.frontend.prod.yml up -d
+# ────────────────────────────────────────────────────────────────────────────
+
+services:
+  frontend:
+    image: ${ECR_REGISTRY}/argus-dev-frontend:${IMAGE_TAG:-latest}
+    container_name: argus-frontend
+    # ALB frontend 타겟그룹(:80 기본 경로) → 이 호스트 포트로 전달됨
+    ports:
+      - "80:80"
+    restart: unless-stopped
