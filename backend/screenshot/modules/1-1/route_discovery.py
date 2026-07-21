@@ -851,9 +851,6 @@ def _discover_via_click(context, page_url: str, case: EvidenceCase, resource_ids
         # Try, in order: the URL resource id, then the parent record's own text
         # (bridges an un-id'd feed card to the post the payload lives in), then
         # the payload/marker text.
-        # Try, in order: the URL resource id, then the parent record's own text
-        # (bridges an un-id'd feed card to the post the payload lives in), then
-        # the payload/marker text.
         candidates = (
             [("id", rid) for rid in resource_ids]
             + [("text", needle) for needle in _list_text_needles(api_bodies, case)]

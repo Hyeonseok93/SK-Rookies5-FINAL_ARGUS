@@ -46,7 +46,6 @@ class G45Module(DiagnosisModule):
     def run(self, ctx: DiagnosisContext) -> SectionReport:
         scanner = _load_scanner()
         
-        # Load test accounts into ctx if empty
         if not ctx.raw_config:
             ctx.raw_config = {}
         if not ctx.raw_config.get("auth"):
@@ -86,7 +85,6 @@ class G45Module(DiagnosisModule):
             message=result.message,
             checked_at=utc_now_iso(),
         )
-        # Save the report to the JSON file
         # The frontend will only display the actual vulnerabilities (result.findings)
         self.save_report(ctx, report)
         return report

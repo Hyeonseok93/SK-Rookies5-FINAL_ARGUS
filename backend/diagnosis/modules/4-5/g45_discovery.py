@@ -43,7 +43,6 @@ def build_resource_inventory(
         except Exception as e:
             print(f"    [Error] Exception hitting {url}: {e}")
             
-    # Deduplicate globally
     for k in inventory:
         inventory[k] = list(set(inventory[k]))
     return inventory
@@ -85,7 +84,6 @@ def active_discovery_inventory(
         except Exception as e:
             print(f"    [Error] Exception hitting {url}: {e}")
             
-    # Deduplicate globally
     for k in inventory:
         inventory[k] = list(set(inventory[k]))
     return inventory

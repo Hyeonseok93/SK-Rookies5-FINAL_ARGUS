@@ -313,10 +313,6 @@ def classify_xss_response(payload, response_body, content_type, method="GET", is
     # POST/PUT 등 쓰기 메서드라도 응답에 페이로드가 에코백 되면 Reflected XSS.
     # 진짜 Stored XSS는 POST 저장 후 GET 재조회 응답에서만 판정 가능하며,
     # 해당 로직은 run_zap_scan() 내부의 2단계 저장-재조회 루프에서 별도 처리한다.
-    # ── Reflected XSS ──────────────────────────────────────────────────────────────────
-    # POST/PUT 등 쓰기 메서드라도 응답에 페이로드가 에코백 되면 Reflected XSS.
-    # 진짜 Stored XSS는 POST 저장 후 GET 재조회 응답에서만 판정 가능하며,
-    # 해당 로직은 run_zap_scan() 내부의 2단계 저장-재조회 루프에서 별도 처리한다.
     if (is_html_context or is_json_context) and has_executable_marker:
         if is_html_context:
             risk = "Medium"
@@ -371,7 +367,6 @@ def extract_injectable_keypaths(schema: dict, prefix: str = "", components: dict
     if not isinstance(schema, dict):
         return paths
 
-    # properties 탐색
     properties = schema.get("properties", {})
     for k, v in properties.items():
         full_key = f"{prefix}.{k}" if prefix else k
@@ -1405,13 +1400,11 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                     if method.upper() in ["POST", "PUT", "PATCH"]:
                         # find path schema in endpoints metadata
                         matched_path_spec = None
-                        # search for path_only (with curly braces) in t_endpoints
                         for ep_path, ep_methods in t_endpoints.items():
                             if ep_path.rstrip("/") == path_only.rstrip("/"):
                                 matched_path_spec = ep_methods.get(method.lower())
                                 break
                         if matched_path_spec:
-                            # 2-1. Extract query parameters specified in parameters list
                             spec_params = matched_path_spec.get("parameters", [])
                             for p_spec in spec_params:
                                 if isinstance(p_spec, dict) and p_spec.get("in") == "query":
@@ -2120,10 +2113,8 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                         except Exception:
                             parsed_body = raw_body  # JSON 파싱 실패 시 raw 문자열 유지
 
-                # 쿼리 파라미터
                 parsed_query = query_params or {}
 
-                # Content-Type 및 인증 정보 추출
                 content_type = parsed_headers.get("Content-Type", parsed_headers.get("content-type", ""))
                 auth_header = parsed_headers.get("Authorization", parsed_headers.get("authorization", ""))
                 cookie_header = parsed_headers.get("Cookie", parsed_headers.get("cookie", ""))
@@ -2439,7 +2430,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                     # 이 엔드포인트에 대해 최적 토큰 + 실제 서비스 base_url + role 선택
                     best_token, best_base, best_role, selected_api_url = select_token(api_url, method.upper(), scan_account)
     
-                    # 실제 스캔에 사용할 URL (계정별 base_url 기준)
                     api_url = selected_api_url
     
                     # 이 엔드포인트 스캔 시작 전 alert 개수 스냅샷 (끝에서 account_role 일괄 태깅용)
@@ -2791,6 +2781,19 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                     post_headers.pop("Content-Type", None)
 
                                 # [Stored XSS 오탐 방지] POST 저장 전에 미리 모든 GET 엔드포인트의 Baseline 상태를 백업
+                                #
+                                # 경로에 {id}가 있는 개별 조회 엔드포인트는 수정(PUT/PATCH)과 신규 등록(POST)을
+                                # 구분해서 처리한다:
+                                #   - 수정: api_url 자체에 이미 대상 리소스의 진짜 ID가 있으므로, 그 ID로
+                                #     baseline을 잡으면 "같은 자원의 진짜 전/후" 비교가 된다.
+                                #   - 신규 등록: 새로 생길 ID를 아직 모르므로, 존재하는 다른 자원(예: 1번)을
+                                #     대신 baseline으로 쓰면 "같은 자원의 전/후"가 아니라 "무관한 두 자원의
+                                #     비교"가 되어 버린다. payload가 고유 문자열이라 탐지 자체는 되지만, 반대로
+                                #     그 무관한 자원에 우연히 겹치는 내용이 있으면 진짜 반사를 diff가 지워버려
+                                #     미탐이 날 수도 있다. 그래서 이 경우 baseline을 아예 안 만들고, 이후
+                                #     get_payload_reflection이 baseline 없이 응답 전체에서 직접 검색하도록
+                                #     둔다(diff 단계만 건너뛸 뿐, POST -> 재조회 -> 판정 흐름 자체는 그대로다).
+                                edit_target_id = extract_id_from_url(api_url) if method.upper() in ("PUT", "PATCH") else None
                                 get_baselines = {}
                                 get_endpoint_items = [
                                     (get_path, get_methods)
@@ -2799,7 +2802,8 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                 ]
                                 print(
                                     f"[STORED XSS DEBUG] preparing GET baselines for {method.upper()} {api_url} "
-                                    f"payload_param={target_param} get_endpoints={len(get_endpoint_items)}"
+                                    f"payload_param={target_param} get_endpoints={len(get_endpoint_items)} "
+                                    f"edit_target_id={edit_target_id}"
                                 )
                                 update_status(
                                     progress=55,
@@ -2816,9 +2820,16 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                         )
                                     if "get" not in get_methods:
                                         continue
-                                    # 임시 1번 ID로 치환하여 Baseline 백업 시도
                                     import re as _re
-                                    tmp_path = _re.sub(r"\{[^}]+\}", "1", get_path)
+                                    if "{" in get_path:
+                                        if edit_target_id is None:
+                                            # 신규 등록: 이 경로의 진짜 "이전 상태"를 구할 방법이 없으므로
+                                            # baseline을 만들지 않고 스킵한다(무관한 자원 대체 금지).
+                                            continue
+                                        # 수정: 실제 대상 ID로 치환해 같은 자원의 baseline을 확보한다.
+                                        tmp_path = _re.sub(r"\{[^}]+\}", str(edit_target_id), get_path)
+                                    else:
+                                        tmp_path = get_path
                                     tmp_url = f"{best_base.rstrip('/')}/{tmp_path.lstrip('/')}"
                                     tmp_params = build_query_defaults_from_details(get_methods.get("get") or {}, account_swagger_components)
                                     try:
@@ -2886,7 +2897,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                         if "get" not in get_methods:
                                             continue
                                         
-                                        # 경로 변수가 존재하는 경우 resource_id로 대입 치환
                                         if resource_id and "{" in get_path:
                                             resolved_path = _re.sub(r"\{[^}]+\}", str(resource_id), get_path)
                                         elif "{" in get_path:
@@ -2911,10 +2921,8 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                                 params=get_params or None,
                                                 timeout=4,
                                             )
-                                            # 해당 GET 엔드포인트 전용으로 백업해둔 Baseline 본문 가져오기
                                             specific_baseline = get_baselines.get(get_path)
                                             
-                                            # 전용 Baseline 대비 신규 반사 여부 검증
                                             if is_payload_reflected(stored_payload, get_res.text, specific_baseline):
                                                 # [Strict Stored XSS Verification]
                                                 # 1) 개별 조회 주소(GET /api/v1/posts/4)인 경우 -> 신뢰 가능
@@ -2926,7 +2934,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                                                     if str_res_id in resolved_path:  # 개별 리소스 조회 경로 매칭 완료
                                                         is_legit_stored_xss = True
                                                     elif str_res_id in get_res.text: # 목록형 응답
-                                                        # resource_id 주변 400자 텍스트 파싱하여 검사
                                                         idx = get_res.text.find(str_res_id)
                                                         start_clip = max(0, idx - 100)
                                                         end_clip = min(len(get_res.text), idx + 350)
@@ -2992,7 +2999,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
 
         update_status(progress=90, message="결과 수집 및 리포트 생성 중...")
         
-        # ZAP API 원본 Alert 수집
         raw_alerts = zap.core.alerts(baseurl=target_url, start=0, count=9999)
         
         # ZAP 원본 Alert 중 XSS 및 CSRF 관련 항목만 필터링 (기타 패시브 스캔 노이즈 제거)
@@ -3028,7 +3034,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
         # - 일반 취약점: URL + Method + 취약점 종류(PluginId/CustomType)가 같으면 하나로 병합
         # - 보안 헤더 누락: 헤더 종류별로 1건만 대표 리포팅, 중복 URL 목록은 affected_urls에 누적
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # ?? ?? ? ???: 1-1(XSS/CSRF) ??? URL + Method + ?? + ???? ???? ??
         grouped_alerts = {}
         cors_reflection_types = {"CORS_ORIGIN_REFLECTION"}
 
@@ -3040,7 +3045,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             account_role = a.get("account_role", "")
             key_id = custom_type if custom_type else plugin_id
             
-            # 취약점 ID가 없으면 건너뜀
             if not key_id:
                 continue
 
@@ -3064,12 +3068,9 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 grouped_alerts[unique_key]["account_roles"] = [account_role] if account_role else []
                 if account_role:
                     grouped_alerts[unique_key]["account_role"] = account_role
-                # affected_urls 필드 초기화 및 추가
                 grouped_alerts[unique_key]["affected_urls"] = [f"{method} {url}"]
-                # 커스텀 패킷 증거 바인딩
                 grouped_alerts[unique_key]["evidence_request"] = a.get("evidence_request", "")
                 grouped_alerts[unique_key]["evidence_response"] = a.get("evidence_response", "")
-                # 성공 페이로드 초기화
                 init_payloads = a.get("successful_attack_payloads", [])
                 if not init_payloads and a.get("attack"):
                     init_payloads = [a.get("attack")]
@@ -3104,7 +3105,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 except Exception:
                     grouped_alerts[unique_key]["successful_attack_payloads"] = combined
 
-        # 병합된 Alert 리스트 추출
         print(f"[DEBUG] custom_alerts: {len(custom_alerts)}건")
         print(f"[DEBUG] filtered_raw_alerts: {len(filtered_raw_alerts)}건")
         print(f"[DEBUG] all_raw_alerts: {len(all_raw_alerts)}건")
@@ -3113,7 +3113,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             print(f"  - {k}: {v.get('alert','')[:50]}")
         final_alerts = list(grouped_alerts.values())
 
-        # 취약점 분류 매핑 후 구조화
         re_mapped_alerts = []
         for alert in final_alerts:
             alert_name = alert.get("alert", "")
@@ -3172,7 +3171,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 except Exception as me:
                     print(f"Failed to fetch HTTP message detail for alert (msg_id: {msg_id}): {me}")
             
-            # 헤더 정보가 이미 있는 경우 파싱
             if not status_code and evidence_res:
                 try:
                     first_line = evidence_res.split("\n")[0].strip()
@@ -3182,7 +3180,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                 except Exception:
                     pass
                     
-            # 한글 대응 조치 가이드 바인딩
             ko_info = KOREAN_REMEDIATIONS.get(key_id, {})
             
             vuln_id, vuln_type, severity, vuln_desc = classify_alert(
@@ -3282,7 +3279,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
 
         update_status(total_alerts=len(re_mapped_alerts))
         
-        # 결과 파일 저장
         role = "web_ui"
         result_dir = result_dir_override or "results"
         os.makedirs(result_dir, exist_ok=True)
@@ -3297,7 +3293,6 @@ def run_zap_scan(target_url: str, auth_tokens: list):
             # 유효한 경고 전체 수집 (False Positive 제외하고 Informational 등급도 정상 포함)
             meaningful_alerts = [a for a in re_mapped_alerts if a.get("severity") != "-" and a.get("risk") != "False Positive"]
             
-            # 상태별 건수 통계 계산
             tp_count = sum(1 for a in meaningful_alerts if a.get("validation_status") == "True Positive")
             pot_count = sum(1 for a in meaningful_alerts if a.get("validation_status") == "Potential")
             susp_count = sum(1 for a in meaningful_alerts if a.get("validation_status") == "Suspected")
@@ -3331,9 +3326,7 @@ def run_zap_scan(target_url: str, auth_tokens: list):
                             
                     jf.write("    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
                     
-                    # JSON 객체 직렬화 후 들여쓰기 조절
                     item_json = json.dumps(a, ensure_ascii=False, indent=12)
-                    # 괄호 시작과 끝 정렬을 깔끔하게 맞춤
                     item_json_formatted = "    " + item_json.strip()
                     
                     jf.write(item_json_formatted)

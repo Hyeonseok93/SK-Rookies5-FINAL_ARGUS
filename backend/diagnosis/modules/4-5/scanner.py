@@ -290,8 +290,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         method = ep.get("method", "GET").upper()
         path = ep.get("path", "")
         url_template = ep.get("base_url", base_url_global) + path
-        
-        # IDOR Cases
+
         if "{" in path and "}" in path:
             if not b_inventory:
                 _log(f"    [Phase 2 Case 1] Skipping {method} {url_template} (No Resource IDs found to test)")
@@ -312,46 +311,60 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                 if len(re.findall(r"\{[^}]+\}", path)) == 1:
                     for b_id in set(b_ids_to_test[:3]):  # Test up to 3 IDs
                         test_url = re.sub(r'\{[^}]+\}', str(b_id), url_template, count=1)
-                        
-                        if method == "GET":
+
+                        if method in ("GET", "POST", "PUT", "PATCH"):
                             _log(f"    [Phase 2 Case 1] Testing {method} {test_url} ...")
                             try:
-                                res = requests.get(probe_url(test_url), headers=user_a_headers, timeout=timeout, verify=False)
-                                if res.status_code == 200:
-                                    _log(f"    [Case 1 IDOR] {test_url} -> VULNERABLE")
+                                if method == "GET":
+                                    res = requests.get(probe_url(test_url), headers=user_a_headers, timeout=timeout, verify=False)
+                                    is_vulnerable = res.status_code == 200
+                                    action_label = "조회(Read)"
+                                    manual_hint = (
+                                        "1. **Public/공용 API 오탐**: 블로그 글, 공지사항처럼 원래 누구나 볼 수 있는 리소스(Public Data)인 경우 취약점이 아닙니다. 스캐너는 비즈니스 맥락(이게 비밀글인지 공지글인지)을 완벽히 이해하지 못합니다.\n"
+                                        "2. **수동 확인법**: 노출된 데이터가 실제로 '타인에게 보여선 안 되는 민감한 개인정보'가 맞는지 직접 판단해야 합니다."
+                                    )
+                                else:
+                                    body = safe_body(ep)
+                                    res = requests.request(method, probe_url(test_url), headers=user_a_headers, json=body, timeout=timeout, verify=False)
+                                    is_vulnerable = res.status_code in {200, 201, 204}
+                                    action_label = "변경(Write)"
+                                    manual_hint = (
+                                        "1. **응답 성공 ≠ 실제 반영**: 서버가 요청을 승인(2xx)했어도 실제로 데이터가 바뀌지 않았을 수 있습니다. User B 계정으로 다시 조회해 값이 실제로 변경·생성됐는지 확인하세요.\n"
+                                        "2. **수동 확인법**: 재현 시 더미 값이 아니라 실제로 의미 있는 필드를 조작해, 진짜로 소유권 검증이 빠졌는지 다시 검증해야 합니다."
+                                    )
+
+                                if is_vulnerable:
+                                    _log(f"    [Case 1 IDOR] {method} {test_url} -> VULNERABLE ({action_label})")
                                     findings.append(DiagnosisFinding(
                                         severity="high",
-                                        message="Horizontal Privilege Escalation (Case 1: Path/Query IDOR)",
+                                        message=f"Horizontal Privilege Escalation (Case 1: Path/Query IDOR - {action_label})",
                                         evidence={
                                             "rule_id": "idor_horizontal_case1",
                                             "url": test_url,
                                             "method": method,
-                                            "description": "[수동 검증 필수] 정상 토큰(User A)으로 제3자(User B)의 명시적 리소스 ID에 접근하여 200 OK를 받았습니다. 퍼블릭 API인지 점검이 필요합니다.",
-                                            "attack_payload": f"User A token accessing Resource ID: {b_id}",
+                                            "description": f"[수동 검증 필수] 정상 토큰(User A)으로 제3자(User B)의 명시적 리소스 ID에 {method} 요청을 보내 {res.status_code}을 받았습니다.",
+                                            "attack_payload": f"User A token {method} Resource ID: {b_id}",
                                             "target_role": "Resource Owner",
                                             "bypassed_role": "Other User (Attacker)",
                                             "remediation": (
                                                 "**[조치 방안]**\n"
-                                                "해당 리소스가 작성자 본인만 열람 가능한 경우, 조회 대상 객체의 소유자 ID와 현재 로그인한 유저의 ID가 일치하는지 검증하는 인가(ACL) 로직을 추가하세요.\n\n"
+                                                "해당 리소스가 작성자 본인만 열람·수정 가능한 경우, 대상 객체의 소유자 ID와 현재 로그인한 유저의 ID가 일치하는지 검증하는 인가(ACL) 로직을 추가하세요.\n\n"
                                                 "---\n"
                                                 "⚠️ **[스캐너 한계 및 수동 진단 가이드]**\n"
-                                                "1. **Public/공용 API 오탐**: 블로그 글, 공지사항처럼 원래 누구나 볼 수 있는 리소스(Public Data)인 경우 취약점이 아닙니다. 스캐너는 비즈니스 맥락(이게 비밀글인지 공지글인지)을 완벽히 이해하지 못합니다.\n"
-                                                "2. **수동 확인법**: 노출된 데이터가 실제로 '타인에게 보여선 안 되는 민감한 개인정보'가 맞는지 직접 판단해야 합니다."
+                                                f"{manual_hint}"
                                             ),
-                                            "status_code": 200
+                                            "status_code": res.status_code
                                         }
                                     ))
                             except Exception as e:
                                 _log(f"    [Error] Phase 2 Case 1 IDOR request failed: {e}")
                     
         # Case 2: Hidden Query IDOR (Generic Personal API Test)
-        # 1. 대상: 파라미터가 명시되지 않거나 Query 파라미터만 있는 GET API (경로 파라미터 제외)
         if method == "GET" and "{" not in path:
             try:
                 res_a_base = requests.get(probe_url(url_template), headers=user_a_headers, timeout=timeout, verify=False)
                 
                 if res_a_base.status_code == 200 and hidden_query_user_b_id:
-                    # 2단계: 쿼리 강제 주입 (Hidden Query Injection)
                     # 스킵 로직 제거: 빈 배열이라도 강제로 파라미터를 찔러서 데이터가 딸려오는지 확인
                     hidden_params = ["userId", "user_id", "memberId", "member_id", "accountId", "id"]
                     
@@ -359,14 +372,12 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                             test_url = f"{url_template}?{param}={hidden_query_user_b_id}"
                             
                             _log(f"    [Phase 2 Case 2] Testing {method} {test_url} ...")
-                            # User A 토큰으로 User B의 ID를 쿼리에 섞어서 요청
                             res_injected = requests.get(probe_url(test_url), headers=user_a_headers, timeout=timeout, verify=False)
                             
                             if res_injected.status_code == 200:
                                 injected_len = len(res_injected.content)
                                 
                                 # 3단계: 해킹 성공 여부 판단 (의미론적 추적 - Semantic Diffing)
-                                # A의 원래 응답에는 B의 정보가 없었는데, 주입 후 응답에 B의 고유 정보(이메일, ID 등)가 나타났는지 검사
                                 b_identifiers = []
                                 if hidden_query_user_b_id: b_identifiers.append(str(hidden_query_user_b_id))
                                 if user_b_dynamic_id and user_b_dynamic_id != hidden_query_user_b_id:
@@ -382,7 +393,6 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
                                 already_visible = any(b_id in res_a_base.text for b_id in b_identifiers if b_id)
                                 
                                 if not already_visible:
-                                    # 주입 후 응답에 B의 식별자가 새롭게 노출되었는지 확인
                                     leaked_identifiers = [b_id for b_id in b_identifiers if b_id and b_id in res_injected.text]
                                     
                                     if leaked_identifiers:
@@ -424,9 +434,7 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
 
     # [Phase 4] Targeted Mass Assignment (명시적 권한 파라미터 조작)
     _log("Phase 4: Targeted Mass Assignment Testing")
-    # 권한 상승을 시도할 파라미터 이름 키워드
     target_param_keywords = ["role", "admin", "authority", "group", "usertype", "level"]
-    # 주입할 악성 관리자 페이로드 조합
     admin_payloads = ["ADMIN", "admin", "ROLE_ADMIN", "role_admin", "SUPER_ADMIN", "true", "1"]
     
     for ep in endpoints:
@@ -437,7 +445,6 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
         path = ep.get("path", "")
         url_template = ep.get("base_url", base_url_global) + path
         
-        # Swagger 문서에 명시된 요청 파라미터(Query, Body 등) 순회
         req_params = ep.get("request_params", [])
         vuln_params = [p for p in req_params if any(k in p.get("name", "").lower() for k in target_param_keywords)]
         
@@ -450,10 +457,8 @@ def run_g45_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
             param_name = p.get("name")
             for payload in admin_payloads:
                 test_url = url_template
-                # 임의의 더미 데이터 생성 (안전한 기본 바디)
                 body = safe_body(ep)
                 
-                # Query vs Body 주입
                 if p.get("in") == "query":
                     test_url = f"{url_template}?{param_name}={payload}"
                 else:

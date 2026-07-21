@@ -185,6 +185,29 @@ def capture_latest(
             if stale_dir.is_dir() and stale_dir.name not in selected_ids:
                 shutil.rmtree(stale_dir)
 
+    output_root.mkdir(parents=True, exist_ok=True)
+    summary_path = output_root / "capture-summary.json"
+
+    def _write_summary(results: list[dict[str, Any]]) -> None:
+        # Written after every finding, not just once at the end, so a run that
+        # gets killed partway (parent process timeout, crash) still leaves a
+        # valid summary covering whatever finished — the report/frontend read
+        # this file, not the individual finding folders, so without an
+        # incremental write a partial run's already-captured evidence would
+        # never be shown anywhere even though the screenshots exist on disk.
+        summary = {
+            "section_id": "1-1",
+            "report": str(report_path),
+            "selected": len(capture_jobs),
+            "succeeded": sum(1 for row in results if row["ok"]),
+            "failed": sum(1 for row in results if not row["ok"]),
+            "results": results,
+        }
+        summary_path.write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
     results: list[dict[str, Any]] = []
     for finding, parent_id, occurrence_index in capture_jobs:
         finding_id = stable_finding_id(finding)
@@ -208,20 +231,8 @@ def capture_latest(
             if parent_id:
                 row.update({"parent_finding_id": parent_id, "occurrence_index": occurrence_index})
             results.append(row)
+        _write_summary(results)
 
-    summary = {
-        "section_id": "1-1",
-        "report": str(report_path),
-        "selected": len(capture_jobs),
-        "succeeded": sum(1 for row in results if row["ok"]),
-        "failed": sum(1 for row in results if not row["ok"]),
-        "results": results,
-    }
-    output_root.mkdir(parents=True, exist_ok=True)
-    (output_root / "capture-summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
     return results
 
 
