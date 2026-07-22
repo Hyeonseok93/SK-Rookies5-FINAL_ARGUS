@@ -1,0 +1,65 @@
+name: Backend Build & Push to ECR
+
+on:
+  push:
+    branches: ["dev"]
+    paths:
+      - "backend/**"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-push-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: ap-northeast-2
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, tag, and push image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: argus-dev-backend
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest ./backend
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+  trigger-cd:
+    name: Trigger Infra CD (backend)
+    needs: [build-and-push-backend]
+    runs-on: ubuntu-latest
+    steps:
+      # Org GitHub App (team-owned). Secrets on ARGUS_Merge:
+      #   ARGUS_DISPATCH_APP_ID, ARGUS_DISPATCH_APP_PRIVATE_KEY
+      - name: Create GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.ARGUS_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.ARGUS_DISPATCH_APP_PRIVATE_KEY }}
+          owner: UR-ARGUS
+          repositories: ARGUS_Infra
+
+      - name: repository_dispatch → ARGUS_Infra deploy-backend
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh api --method POST repos/UR-ARGUS/ARGUS_Infra/dispatches --input - <<EOF
+          {
+            "event_type": "deploy-backend",
+            "client_payload": { "image_tag": "${{ github.sha }}" }
+          }
+          EOF

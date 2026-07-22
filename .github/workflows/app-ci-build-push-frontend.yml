@@ -1,11 +1,10 @@
-name: App Build & Push to ECR
+name: Frontend Build & Push to ECR
 
 on:
   push:
-    branches: [ "dev" ]
+    branches: ["dev"]
     paths:
-      - 'frontend/**'
-      - 'backend/**'
+      - "frontend/**"
 
 permissions:
   id-token: write
@@ -37,27 +36,30 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
-  build-and-push-backend:
+  trigger-cd:
+    name: Trigger Infra CD (frontend)
+    needs: [build-and-push-frontend]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+      # Org GitHub App (team-owned). Secrets on ARGUS_Merge:
+      #   ARGUS_DISPATCH_APP_ID, ARGUS_DISPATCH_APP_PRIVATE_KEY
+      - name: Create GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
         with:
-          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
-          aws-region: ap-northeast-2
+          app-id: ${{ secrets.ARGUS_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.ARGUS_DISPATCH_APP_PRIVATE_KEY }}
+          owner: UR-ARGUS
+          repositories: ARGUS_Infra
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
-
-      - name: Build, tag, and push image to Amazon ECR
+      - name: repository_dispatch → ARGUS_Infra deploy-frontend
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: argus-dev-backend
-          IMAGE_TAG: ${{ github.sha }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest ./backend
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          set -euo pipefail
+          gh api --method POST repos/UR-ARGUS/ARGUS_Infra/dispatches --input - <<EOF
+          {
+            "event_type": "deploy-frontend",
+            "client_payload": { "image_tag": "${{ github.sha }}" }
+          }
+          EOF
