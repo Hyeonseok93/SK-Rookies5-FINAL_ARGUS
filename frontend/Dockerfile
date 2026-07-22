@@ -1,3 +1,4 @@
+# CD pipeline smoke: touch to trigger frontend build & deploy
 FROM node:22-alpine AS build
 
 WORKDIR /app
