@@ -1,4 +1,4 @@
-# CD pipeline smoke: touch to trigger frontend build & deploy
+# CD pipeline smoke: re-trigger frontend CI+CD (2026-07-22)
 FROM node:22-alpine AS build
 
 WORKDIR /app
