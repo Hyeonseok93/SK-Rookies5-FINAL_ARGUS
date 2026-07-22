@@ -1,4 +1,4 @@
-# CD pipeline smoke: touch to trigger backend build & deploy
+# CD pipeline smoke: re-trigger backend CI+CD (2026-07-22)
 FROM python:3.12-slim
 
 WORKDIR /app
