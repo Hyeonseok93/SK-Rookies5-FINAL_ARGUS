@@ -1,0 +1,270 @@
+name: "Application Deployment"
+
+# Onde-style: deploy commands live in this YAML (SSM + docker pull/run).
+# No scripts/cd/*.sh. Auth via OIDC (not long-lived access keys).
+#
+# Triggers:
+#   - repository_dispatch from ARGUS_Merge CI (after ECR push)
+#       types: deploy-frontend | deploy-backend | deploy-all
+#       client_payload.image_tag required
+#   - workflow_dispatch (manual)
+#
+# Domain / smoke URL: secrets.SERVICE_URL (e.g. https://rookies-argus.click)
+
+on:
+  repository_dispatch:
+    types:
+      - deploy-frontend
+      - deploy-backend
+      - deploy-all
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: ECR image tag
+        required: true
+        default: latest
+        type: string
+      target:
+        description: What to deploy
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - frontend
+          - backend
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-2
+  PROJECT_NAME: argus
+
+jobs:
+  resolve:
+    name: Resolve tag / environment
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set.outputs.image_tag }}
+      environment: ${{ steps.set.outputs.environment }}
+      deploy_frontend: ${{ steps.set.outputs.deploy_frontend }}
+      deploy_backend: ${{ steps.set.outputs.deploy_backend }}
+      run_smoke: ${{ steps.set.outputs.run_smoke }}
+    steps:
+      - name: Set outputs
+        id: set
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_ACTION: ${{ github.event.action }}
+          PAYLOAD_TAG: ${{ github.event.client_payload.image_tag }}
+          INPUT_TAG: ${{ inputs.image_tag }}
+          INPUT_TARGET: ${{ inputs.target }}
+          VAR_ENV: ${{ vars.ENVIRONMENT }}
+        run: |
+          set -euo pipefail
+          TAG="${PAYLOAD_TAG:-}"
+          if [ -z "$TAG" ]; then TAG="${INPUT_TAG:-latest}"; fi
+          ENV_NAME="${VAR_ENV:-dev}"
+
+          FE=false
+          BE=false
+          SMOKE=false
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            case "$DISPATCH_ACTION" in
+              deploy-frontend) FE=true; SMOKE=true ;;
+              deploy-backend)  BE=true; SMOKE=true ;;
+              deploy-all)      FE=true; BE=true; SMOKE=true ;;
+            esac
+          else
+            case "${INPUT_TARGET:-all}" in
+              frontend) FE=true; SMOKE=true ;;
+              backend)  BE=true; SMOKE=true ;;
+              all)      FE=true; BE=true; SMOKE=true ;;
+            esac
+          fi
+
+          echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "environment=$ENV_NAME" >> "$GITHUB_OUTPUT"
+          echo "deploy_frontend=$FE" >> "$GITHUB_OUTPUT"
+          echo "deploy_backend=$BE" >> "$GITHUB_OUTPUT"
+          echo "run_smoke=$SMOKE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG env=$ENV_NAME fe=$FE be=$BE smoke=$SMOKE"
+
+  deploy-frontend:
+    name: Deploy Frontend to EC2
+    needs: resolve
+    if: needs.resolve.outputs.deploy_frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate config
+        env:
+          ROLE_ARN: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          FRONTEND_INSTANCE_ID: ${{ secrets.FRONTEND_INSTANCE_ID }}
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+        run: |
+          set -euo pipefail
+          for name in ROLE_ARN FRONTEND_INSTANCE_ID ECR_REGISTRY; do
+            if [ -z "${!name:-}" ]; then echo "::error::Missing $name"; exit 1; fi
+          done
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy via SSM (Linux)
+        env:
+          IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
+          ENVIRONMENT: ${{ needs.resolve.outputs.environment }}
+          INSTANCE_ID: ${{ secrets.FRONTEND_INSTANCE_ID }}
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+        run: |
+          set -euo pipefail
+          IMAGE="${ECR_REGISTRY}/${PROJECT_NAME}-${ENVIRONMENT}-frontend:${IMAGE_TAG}"
+          echo "Deploying $IMAGE -> $INSTANCE_ID"
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters commands="[
+              \"set -euo pipefail\",
+              \"aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}\",
+              \"docker pull ${IMAGE}\",
+              \"docker stop argus-frontend || true\",
+              \"docker rm argus-frontend || true\",
+              \"docker run -d --name argus-frontend --restart unless-stopped -p 80:80 ${IMAGE}\",
+              \"docker ps --filter name=argus-frontend\"
+            ]" \
+            --comment "Deploy frontend ${IMAGE_TAG}" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "COMMAND_ID=$COMMAND_ID"
+          aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID"
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}" \
+            --output json
+
+          STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --query Status --output text)
+          test "$STATUS" = "Success"
+
+  deploy-backend:
+    name: Deploy Backend to EC2
+    needs: resolve
+    if: needs.resolve.outputs.deploy_backend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate config
+        env:
+          ROLE_ARN: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          BACKEND_INSTANCE_ID: ${{ secrets.BACKEND_INSTANCE_ID }}
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+        run: |
+          set -euo pipefail
+          for name in ROLE_ARN BACKEND_INSTANCE_ID ECR_REGISTRY; do
+            if [ -z "${!name:-}" ]; then echo "::error::Missing $name"; exit 1; fi
+          done
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy via SSM (Linux)
+        env:
+          IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
+          ENVIRONMENT: ${{ needs.resolve.outputs.environment }}
+          INSTANCE_ID: ${{ secrets.BACKEND_INSTANCE_ID }}
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+        run: |
+          set -euo pipefail
+          IMAGE="${ECR_REGISTRY}/${PROJECT_NAME}-${ENVIRONMENT}-backend:${IMAGE_TAG}"
+          echo "Deploying $IMAGE (+ zap) -> $INSTANCE_ID"
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters commands="[
+              \"set -euo pipefail\",
+              \"bash /opt/argus/scripts/inject-secrets.sh\",
+              \"aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}\",
+              \"docker network create argus 2>/dev/null || true\",
+              \"docker pull zaproxy/zap-stable\",
+              \"docker pull ${IMAGE}\",
+              \"docker stop argus-backend argus-zap || true\",
+              \"docker rm argus-backend argus-zap || true\",
+              \"docker run -d --name argus-zap --network argus --restart unless-stopped -p 8090:8090 zaproxy/zap-stable zap.sh -daemon -port 8090 -host 0.0.0.0 -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true -config api.disablekey=true\",
+              \"docker run -d --name argus-backend --network argus --restart unless-stopped -p 8001:8000 --env-file /opt/argus/.env -e CONFIG_PATH=/app/config.docker.yaml -e ZAP_PROXY=http://argus-zap:8090 -v /opt/argus/data:/app/data ${IMAGE}\",
+              \"docker ps --filter name=argus-\"
+            ]" \
+            --comment "Deploy backend ${IMAGE_TAG}" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "COMMAND_ID=$COMMAND_ID"
+          aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID"
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}" \
+            --output json
+
+          STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --query Status --output text)
+          test "$STATUS" = "Success"
+
+  smoke:
+    name: Smoke test
+    needs: [resolve, deploy-frontend, deploy-backend]
+    if: |
+      always() &&
+      needs.resolve.outputs.run_smoke == 'true' &&
+      (needs.deploy-frontend.result == 'success' || needs.deploy-frontend.result == 'skipped') &&
+      (needs.deploy-backend.result == 'success' || needs.deploy-backend.result == 'skipped') &&
+      (needs.deploy-frontend.result == 'success' || needs.deploy-backend.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: HTTPS smoke (/ and /api/health)
+        env:
+          SERVICE_URL: ${{ secrets.SERVICE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SERVICE_URL:-}" ]; then
+            echo "::error::Missing secrets.SERVICE_URL (e.g. https://rookies-argus.click)"
+            exit 1
+          fi
+          BASE="${SERVICE_URL%/}"
+          RETRIES=30
+          SLEEP=10
+
+          check() {
+            local path="$1"
+            local want_health="$2"
+            local url="${BASE}${path}"
+            echo "==> Smoke ${url}"
+            for i in $(seq 1 "$RETRIES"); do
+              code=$(curl -sk -o /tmp/argus-smoke.body -w "%{http_code}" "$url" || echo "000")
+              echo "    try=${i} status=${code}"
+              if [ "$want_health" = "1" ]; then
+                if [ "$code" = "200" ]; then
+                  head -c 200 /tmp/argus-smoke.body || true
+                  echo
+                  return 0
+                fi
+              else
+                case "$code" in 200|301|302) return 0 ;; esac
+              fi
+              sleep "$SLEEP"
+            done
+            echo "==> FAIL ${path}" >&2
+            return 1
+          }
+
+          check "/" 0
+          check "/api/health" 1
+          echo "==> Smoke passed"

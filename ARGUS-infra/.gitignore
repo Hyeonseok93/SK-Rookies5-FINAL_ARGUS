@@ -1,0 +1,32 @@
+# ─── Terraform ────────────────────────────────────────────────────────────
+# provider 플러그인/모듈 캐시 (init으로 자동 생성, 수백 MB — 절대 커밋 금지)
+**/.terraform/*
+
+# 상태 파일 (실제 인프라 상태 + 민감정보 포함 — 커밋 금지, S3 백엔드로 관리)
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# 변수 값 파일 (비밀번호/키가 들어갈 수 있음). 예시 파일만 예외 허용
+*.tfvars
+*.tfvars.json
+!example.tfvars
+
+# crash 로그
+crash.log
+crash.*.log
+
+# override 파일 (로컬 임시 오버라이드)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI 개인 설정
+.terraformrc
+terraform.rc
+
+# provider 버전 잠금 파일:
+#   → 커밋을 "권장"하므로 기본적으로 무시하지 않습니다(아래 주석 유지).
+#   → 팀이 lock 파일을 커밋하지 않기로 정했다면 아래 줄의 주석을 해제하세요.
+# .terraform.lock.hcl
