@@ -2,23 +2,32 @@
 
 Attack Surface Intelligence Platform — 공격 표면(api-tree) 수집·검증·가이드라인 진단 대시보드.
 
-모노레포: **backend** (FastAPI) + **frontend** (Vite + React + Tailwind).
+모노레포 (ONDE와 동일 레이아웃): **ARGUS-backend** · **ARGUS-frontend** · **ARGUS-infra**.
+
+| 출처 | 경로 | 히스토리 |
+|------|------|----------|
+| [UR-ARGUS/ARGUS_Merge](https://github.com/UR-ARGUS/ARGUS_Merge) `dev` | `ARGUS-backend/`, `ARGUS-frontend/` | 그대로 유지 |
+| [UR-ARGUS/ARGUS_Infra](https://github.com/UR-ARGUS/ARGUS_Infra) `main` | `ARGUS-infra/` | `git subtree`로 병합 |
+
+이 저장소: [Hyeonseok93/SK-Rookies5-FINAL_ARGUS](https://github.com/Hyeonseok93/SK-Rookies5-FINAL_ARGUS) (`original` / `main`).
 
 ---
 
 ## 최상위 구조
 
 ```
-ARGUS_1/
-├── backend/          FastAPI API, inventory 빌드, 진단 엔진
-├── frontend/         React 대시보드 UI
-├── examples/         샘플 MD·swagger·URL/API 리스트
-└── docker-compose.yml   backend + frontend + OWASP ZAP
+SK-Rookies5-FINAL_ARGUS/
+├── ARGUS-backend/       FastAPI API, inventory 빌드, 진단 엔진
+├── ARGUS-frontend/      React 대시보드 UI
+├── ARGUS-infra/         Terraform · SSM CD (Networking & Edge)
+├── examples/            샘플 MD·swagger·URL/API 리스트
+├── docker-compose.yml   backend + frontend + OWASP ZAP
+└── .github/workflows/   App CI (ECR) — infra CD는 ARGUS-infra 쪽
 ```
 
 ---
 
-## backend/
+## ARGUS-backend/
 
 ```
 backend/

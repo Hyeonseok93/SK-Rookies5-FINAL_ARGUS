@@ -19,8 +19,8 @@ services:
     ports:
       - "8090:8090"
     volumes:
-      # backend가 저장한 Swagger 업로드 파일을 같은 절대 경로에서 읽습니다.
-      - ./backend/data:/app/data:ro
+      # backend가 ?�?�한 Swagger ?�로???�일??같�? ?��? 경로?�서 ?�습?�다.
+      - ./ARGUS-backend/data:/app/data:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -33,7 +33,7 @@ services:
 
   backend:
     build:
-      context: ./backend
+      context: ./ARGUS-backend
     container_name: argus-backend
     ports:
       - "8001:8000"
@@ -43,21 +43,21 @@ services:
       ZAP_PROXY: http://zap:8090
       GITHUB_TOKEN: ${GITHUB_TOKEN}          
     volumes:
-      # Zap 워크스페이스 (MD, swagger.json) — 읽기 전용
+      # Zap ?�크?�페?�스 (MD, swagger.json) ???�기 ?�용
       - ..:/workspace:ro
-      # 빌드·진단 산출물 유지 (uploads, report, api-tree 등)
-      - ./backend/data:/app/data
-      # 대시보드에서 저장한 base/login 설정이 호스트 config 파일에 즉시 반영되도록 동기화
-      - ./backend/config.yaml:/app/config.yaml
-      - ./backend/config.docker.yaml:/app/config.docker.yaml
-      # FastAPI 앱 코드도 개발 중에는 호스트와 동기화
-      - ./backend/app:/app/app
-      # 진단 패키지 전체 → 호스트와 동기화 (modules 외 auth_session_pool 등 포함)
-      - ./backend/diagnosis:/app/diagnosis
-      # 증거 스크린샷 코드 → 호스트와 동기화
-      - ./backend/screenshot:/app/screenshot
-      # 결과서(PDF) 생성 코드 → 호스트와 동기화
-      - ./backend/report:/app/report
+      # 빌드·진단 ?�출�??��? (uploads, report, api-tree ??
+      - ./ARGUS-backend/data:/app/data
+      # ?�?�보?�에???�?�한 base/login ?�정???�스??config ?�일??즉시 반영?�도�??�기??
+      - ./ARGUS-backend/config.yaml:/app/config.yaml
+      - ./ARGUS-backend/config.docker.yaml:/app/config.docker.yaml
+      # FastAPI ??코드??개발 중에???�스?��? ?�기??
+      - ./ARGUS-backend/app:/app/app
+      # 진단 ?�키지 ?�체 ???�스?��? ?�기??(modules ??auth_session_pool ???�함)
+      - ./ARGUS-backend/diagnosis:/app/diagnosis
+      # 증거 ?�크린샷 코드 ???�스?��? ?�기??
+      - ./ARGUS-backend/screenshot:/app/screenshot
+      # 결과??PDF) ?�성 코드 ???�스?��? ?�기??
+      - ./ARGUS-backend/report:/app/report
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -73,7 +73,7 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: ./ARGUS-frontend
     container_name: argus-frontend
     ports:
       - "5174:80"

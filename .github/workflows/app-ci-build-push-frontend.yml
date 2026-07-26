@@ -4,7 +4,7 @@ on:
   push:
     branches: ["dev"]
     paths:
-      - "frontend/**"
+      - "ARGUS-frontend/**"
 
 permissions:
   id-token: write
@@ -32,7 +32,7 @@ jobs:
           ECR_REPOSITORY: argus-dev-frontend
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest ./frontend
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest ./ARGUS-frontend
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
@@ -52,7 +52,7 @@ jobs:
           owner: UR-ARGUS
           repositories: ARGUS_Infra
 
-      - name: repository_dispatch → ARGUS_Infra deploy-frontend
+      - name: repository_dispatch ??ARGUS_Infra deploy-frontend
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
