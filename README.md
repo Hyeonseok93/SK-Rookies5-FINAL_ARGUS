@@ -2,9 +2,13 @@
 
 ## 💻 Developers
 
-| [<img src="https://github.com/nirey-l.png" width="80" height="80" alt="이예린"/>](https://github.com/nirey-l) | [<img src="https://github.com/Eojinn.png" width="80" height="80" alt="김어진"/>](https://github.com/Eojinn) | [<img src="https://github.com/Hyeonseok93.png" width="80" height="80" alt="김현석"/>](https://github.com/Hyeonseok93) | [<img src="https://github.com/pjcosmos.png" width="80" height="80" alt="박진아"/>](https://github.com/pjcosmos) | [<img src="https://github.com/yoojisoo99.png" width="80" height="80" alt="유지수"/>](https://github.com/yoojisoo99) | [<img src="https://github.com/JangSeonguk1011.png" width="80" height="80" alt="장성욱"/>](https://github.com/JangSeonguk1011) | [<img src="https://github.com/hongjiho5148.png" width="80" height="80" alt="홍지호"/>](https://github.com/hongjiho5148) |
+<div align="center">
+
+| <a href="https://github.com/nirey-l" target="_blank"><img width="120" height="120" src="https://github.com/nirey-l.png" /></a> | <a href="https://github.com/Eojinn" target="_blank"><img width="120" height="120" src="https://github.com/Eojinn.png" /></a> | <a href="https://github.com/Hyeonseok93" target="_blank"><img width="120" height="120" src="https://github.com/Hyeonseok93.png" /></a> | <a href="https://github.com/pjcosmos" target="_blank"><img width="120" height="120" src="https://github.com/pjcosmos.png" /></a> | <a href="https://github.com/yoojisoo99" target="_blank"><img width="120" height="120" src="https://github.com/yoojisoo99.png" /></a> | <a href="https://github.com/JangSeonguk1011" target="_blank"><img width="120" height="120" src="https://github.com/JangSeonguk1011.png" /></a> | <a href="https://github.com/hongjiho5148" target="_blank"><img width="120" height="120" src="https://github.com/hongjiho5148.png" /></a> |
 | :----------------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------------------------: |
-| [이예린(팀장)](https://github.com/nirey-l) | [김어진](https://github.com/Eojinn) | [김현석](https://github.com/Hyeonseok93) | [박진아](https://github.com/pjcosmos) | [유지수](https://github.com/yoojisoo99) | [장성욱](https://github.com/JangSeonguk1011) | [홍지호](https://github.com/hongjiho5148) |
+|                                           [이예린(팀장)](https://github.com/nirey-l)                                           |                                             [김어진](https://github.com/Eojinn)                                              |                                                [김현석](https://github.com/Hyeonseok93)                                                |                                              [박진아](https://github.com/pjcosmos)                                               |                                               [유지수](https://github.com/yoojisoo99)                                                |                                                  [장성욱](https://github.com/JangSeonguk1011)                                                  |                                                  [홍지호](https://github.com/hongjiho5148)                                                  |
+
+</div>
 
 ---
 
@@ -354,12 +358,36 @@ ADMIN_PASSWORD=admin123
 docker compose up --build
 ```
 
-| 서비스 | URL |
-|--------|-----|
-| Frontend | http://localhost:5174 |
-| Backend API | http://localhost:8001 |
-| Health | http://localhost:8001/api/health |
-| ZAP | Compose 내부 `http://zap:8090` (호스트 미공개) |
+<div align="center">
+
+<table align="center">
+  <thead>
+    <tr>
+      <th align="left">서비스</th>
+      <th align="left">URL</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td align="left">Frontend</td>
+      <td align="left">http://localhost:5174</td>
+    </tr>
+    <tr>
+      <td align="left">Backend API</td>
+      <td align="left">http://localhost:8001</td>
+    </tr>
+    <tr>
+      <td align="left">Health</td>
+      <td align="left">http://localhost:8001/api/health</td>
+    </tr>
+    <tr>
+      <td align="left">ZAP</td>
+      <td align="left">Compose 내부 <code>http://zap:8090</code> (호스트 미공개)</td>
+    </tr>
+  </tbody>
+</table>
+
+</div>
 
 첫 화면에서 계정을 만들거나(`ARGUS_ALLOW_PUBLIC_REGISTER=true`), `ADMIN_USERNAME` / `ADMIN_PASSWORD`로 부트스트랩된 계정으로 로그인합니다.
 
