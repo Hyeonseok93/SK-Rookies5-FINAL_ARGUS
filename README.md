@@ -23,7 +23,7 @@ React 대시보드에서 인벤토리·진단·리포트를 다루고, FastAPI�
 
 ## 🛠 Built With
 
-<p align="center">
+<p>
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/readme/badges/dark/typescript.png">
   <source media="(prefers-color-scheme: light)" srcset=".github/readme/badges/light/typescript.png">
@@ -102,18 +102,71 @@ React 대시보드에서 인벤토리·진단·리포트를 다루고, FastAPI�
 
 <br>
 
-| 구분 | 기술 | 역할 |
-|------|------|------|
-| **Frontend Core** | TypeScript, React 19, Vite 8 | 진단 대시보드 SPA 렌더링·번들 |
-| **UI** | Tailwind CSS 4, Lucide | Attack Surface·Diagnosis·Report UI |
-| **Backend Core** | Python 3, FastAPI, Uvicorn, Pydantic | REST API, 진단 오케스트레이션 |
-| **Diagnosis** | 가이드라인 모듈(`diagnosis/`), httpx, ZAP API | KISA 항목별 스캔·판정·리플레이 |
-| **Evidence** | Playwright, Pillow, ReportLab / pypdf | 증적 스크린샷·결과서 PDF |
-| **Auth / Isolation** | JWT (PyJWT), bcrypt, Fernet | 멀티유저 로그인, 계정 암호 at-rest, 유저별 workspace |
-| **Inventory** | OpenAPI 업로드, api-tree, Discover/Verify | Attack Surface 수집·검증·ZAP 시드 |
-| **Build & Container** | Docker, Docker Compose, Nginx, ECR | FE/BE/ZAP 로컬·운영 기동 |
-| **Infrastructure** | Terraform, VPC, ALB, EC2, EBS, S3, Route53, ACM, Secrets Manager, SSM | IaC 기반 네트워크·컴퓨트·시크릿·관측 |
-| **CI/CD & Ops** | GitHub Actions (OIDC), ECR Push, SSM Deploy | FE/BE 이미지 빌드·배포 파이프라인 |
+<div align="center">
+
+<table align="center">
+  <thead>
+    <tr>
+      <th align="left">구분</th>
+      <th align="left">기술</th>
+      <th align="left">역할</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td align="left"><strong>Frontend Core</strong></td>
+      <td align="left">TypeScript, React 19, Vite 8</td>
+      <td align="left">진단 대시보드 SPA 렌더링·번들</td>
+    </tr>
+    <tr>
+      <td align="left"><strong>UI</strong></td>
+      <td align="left">Tailwind CSS 4, Lucide</td>
+      <td align="left">Attack Surface·Diagnosis·Report UI</td>
+    </tr>
+    <tr>
+      <td align="left"><strong>Backend Core</strong></td>
+      <td align="left">Python 3, FastAPI, Uvicorn, Pydantic</td>
+      <td align="left">REST API, 진단 오케스트레이션</td>
+    </tr>
+    <tr>
+      <td align="left"><strong>Diagnosis</strong></td>
+      <td align="left">가이드라인 모듈(<code>diagnosis/</code>), httpx, ZAP API</td>
+      <td align="left">KISA 항목별 스캔·판정·리플레이</td>
+    </tr>
+    <tr>
+      <td align="left"><strong>Evidence</strong></td>
+      <td align="left">Playwright, Pillow, ReportLab / pypdf</td>
+      <td align="left">증적 스크린샷·결과서 PDF</td>
+    </tr>
+    <tr>
+      <td align="left"><strong>Auth / Isolation</strong></td>
+      <td align="left">JWT (PyJWT), bcrypt, Fernet</td>
+      <td align="left">멀티유저 로그인, 계정 암호 at-rest, 유저별 workspace</td>
+    </tr>
+    <tr>
+      <td align="left"><strong>Inventory</strong></td>
+      <td align="left">OpenAPI 업로드, api-tree, Discover/Verify</td>
+      <td align="left">Attack Surface 수집·검증·ZAP 시드</td>
+    </tr>
+    <tr>
+      <td align="left"><strong>Build &amp; Container</strong></td>
+      <td align="left">Docker, Docker Compose, Nginx, ECR</td>
+      <td align="left">FE/BE/ZAP 로컬·운영 기동</td>
+    </tr>
+    <tr>
+      <td align="left"><strong>Infrastructure</strong></td>
+      <td align="left">Terraform, VPC, ALB, EC2, EBS, S3, Route53, ACM, Secrets Manager, SSM</td>
+      <td align="left">IaC 기반 네트워크·컴퓨트·시크릿·관측</td>
+    </tr>
+    <tr>
+      <td align="left"><strong>CI/CD &amp; Ops</strong></td>
+      <td align="left">GitHub Actions (OIDC), ECR Push, SSM Deploy</td>
+      <td align="left">FE/BE 이미지 빌드·배포 파이프라인</td>
+    </tr>
+  </tbody>
+</table>
+
+</div>
 
 </details>
 
@@ -121,22 +174,49 @@ React 대시보드에서 인벤토리·진단·리포트를 다루고, FastAPI�
 
 ## 🖥️ Preview · [자세히 보기](https://bulldog93.tistory.com/49)
 
-<p align="center">
-  <img src=".github/readme/preview.png" alt="ARGUS Attack Surface" width="860" />
-</p>
+<div align="center">
+  <img src=".github/readme/preview.png" alt="ARGUS Attack Surface" width="900" />
+  <p>Attack Surface — 엔드포인트 인벤토리와 Verify 결과</p>
+</div>
 
-<p align="center"><em>Attack Surface — 엔드포인트 인벤토리와 Verify 결과</em></p>
+<div align="center">
 
-<br>
+<table align="center">
+  <thead>
+    <tr>
+      <th align="left">화면</th>
+      <th align="left">설명</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td align="left">📡 Attack Surface</td>
+      <td align="left">Base URL·로그인·테스트 계정, OpenAPI/업로드 기반 API 트리, Verify/Discover</td>
+    </tr>
+    <tr>
+      <td align="left">🧪 Diagnosis</td>
+      <td align="left">KISA 가이드라인 섹션별 모듈 실행, 진행률·옵션·취소</td>
+    </tr>
+    <tr>
+      <td align="left">🔎 Findings</td>
+      <td align="left">항목별 판정·증거·리플레이, 심각도 요약</td>
+    </tr>
+    <tr>
+      <td align="left">🖼 Evidence</td>
+      <td align="left">Playwright 증적 스크린샷 캡처·열람</td>
+    </tr>
+    <tr>
+      <td align="left">📄 Report</td>
+      <td align="left">섹션/종합 결과서 PDF 생성·다운로드</td>
+    </tr>
+    <tr>
+      <td align="left">🔐 Auth</td>
+      <td align="left">JWT 로그인·(로컬) 회원가입, 유저별 <code>data/users/{id}</code> 워크스페이스</td>
+    </tr>
+  </tbody>
+</table>
 
-| 화면 | 설명 |
-|------|------|
-| 📡 Attack Surface | Base URL·로그인·테스트 계정, OpenAPI/업로드 기반 API 트리, Verify/Discover |
-| 🧪 Diagnosis | KISA 가이드라인 섹션별 모듈 실행, 진행률·옵션·취소 |
-| 🔎 Findings | 항목별 판정·증거·리플레이, 심각도 요약 |
-| 🖼 Evidence | Playwright 증적 스크린샷 캡처·열람 |
-| 📄 Report | 섹션/종합 결과서 PDF 생성·다운로드 |
-| 🔐 Auth | JWT 로그인·(로컬) 회원가입, 유저별 `data/users/{id}` 워크스페이스 |
+</div>
 
 ---
 
@@ -226,9 +306,9 @@ SK-Rookies5-FINAL_ARGUS/
 
 ## 🏗 Infrastructure Overview
 
-<p align="center">
-  <img src=".github/readme/ARGUS-infrastructure.drawio.png" alt="ARGUS Infrastructure" width="920" />
-</p>
+<div align="center">
+  <img src=".github/readme/ARGUS-infrastructure.drawio.png" alt="ARGUS Infrastructure" width="1000" />
+</div>
 
 **Route53 → ALB(ACM) → Frontend EC2(Nginx:80) · Backend EC2(FastAPI:8001 + ZAP:8090 + EBS)** 로 이어지는 AWS 기반 아키텍처입니다. Public에는 ALB·FE·NAT, Private에는 BE·ZAP·데이터가 있습니다. 배포는 **GitHub Actions → ECR → SSM(compose up)** 으로 자동화됩니다.
 
