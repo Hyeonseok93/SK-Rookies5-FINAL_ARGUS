@@ -10,6 +10,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
+from app.deps import UserDataDir
+
 from app.config import BACKEND_ROOT, load_config
 from app.schemas import (
     BuildInventoryResponse,
@@ -54,13 +56,10 @@ from inventory.upload_retention import prune_upload_batches
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-UPLOAD_DIR = DATA_DIR / "uploads"
-API_TREE_PATH = DATA_DIR / "api-tree.json"
-API_TREE_READY_PATH = DATA_DIR / "api-tree-ready.json"
-API_TREE_VERIFIED_PATH = DATA_DIR / "api-tree-verified.json"
-VERIFY_REPORT_PATH = DATA_DIR / "verify-report.json"
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", str(BACKEND_ROOT / "config.yaml")))
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_TOTAL_UPLOAD_BYTES = 40 * 1024 * 1024
 
 SOURCE_DEFS = [
     SourceOption(id="url_list", label="URL List"),
@@ -69,12 +68,13 @@ SOURCE_DEFS = [
 ]
 
 
-def _load_cached_tree(inventory: str = "ready") -> ApiTree | None:
-    return load_cached_tree(DATA_DIR, inventory=inventory)
+def _load_cached_tree(data_dir: Path, inventory: str = "ready") -> ApiTree | None:
+    return load_cached_tree(data_dir, inventory=inventory)
 
 
-def _find_endpoint_tree(endpoint_id: str) -> ApiTree | None:
-    for path in (API_TREE_VERIFIED_PATH, API_TREE_READY_PATH, API_TREE_PATH):
+def _find_endpoint_tree(data_dir: Path, endpoint_id: str) -> ApiTree | None:
+    for name in ("api-tree-verified.json", "api-tree-ready.json", "api-tree.json"):
+        path = data_dir / name
         if not path.is_file():
             continue
         tree = ApiTree.load(path)
@@ -83,9 +83,19 @@ def _find_endpoint_tree(endpoint_id: str) -> ApiTree | None:
     return None
 
 
+async def _read_upload_limited(upload: UploadFile, *, max_bytes: int = MAX_UPLOAD_BYTES) -> bytes:
+    data = await upload.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large (max {max_bytes} bytes): {upload.filename}",
+        )
+    return data
+
+
 async def _save_upload(upload: UploadFile, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(await upload.read())
+    dest.write_bytes(await _read_upload_limited(upload))
 
 
 def _ext_ok(filename: str, allowed: set[str]) -> bool:
@@ -93,12 +103,12 @@ def _ext_ok(filename: str, allowed: set[str]) -> bool:
     return suffix in allowed
 
 
-def _invalidate_previous_target_artifacts() -> None:
+def _invalidate_previous_target_artifacts(data_dir: Path) -> None:
     """Remove data derived from the previous inventory, keeping user inputs."""
     for name in ("api-tree-verified.json", "verify-report.json", "discover-progress.json"):
-        (DATA_DIR / name).unlink(missing_ok=True)
+        (data_dir / name).unlink(missing_ok=True)
 
-    report_root = DATA_DIR / "report"
+    report_root = data_dir / "report"
     if report_root.is_dir():
         for child in report_root.iterdir():
             if child.name == ".gitignore":
@@ -111,9 +121,10 @@ def _invalidate_previous_target_artifacts() -> None:
 
 @router.get("/stats", response_model=InventoryStats)
 def get_stats(
+    data_dir: UserDataDir,
     inventory: str = Query("ready", description="ready (built) or verified (after verify)"),
 ) -> InventoryStats:
-    tree = _load_cached_tree(inventory)
+    tree = _load_cached_tree(data_dir, inventory)
     if not tree:
         missing = ["no_build_yet"] if inventory == "ready" else ["not_verified_yet"]
         return InventoryStats(sources_missing=missing)
@@ -122,9 +133,10 @@ def get_stats(
 
 @router.get("/tree")
 def get_tree(
+    data_dir: UserDataDir,
     inventory: str = Query("ready", description="ready or verified"),
 ) -> dict:
-    tree = _load_cached_tree(inventory)
+    tree = _load_cached_tree(data_dir, inventory)
     if not tree:
         detail = "No api-tree built yet. POST /api/inventory/build first."
         if inventory == "verified":
@@ -135,13 +147,14 @@ def get_tree(
 
 @router.get("/endpoints", response_model=EndpointListResponse)
 def list_endpoints(
+    data_dir: UserDataDir,
     q: str | None = Query(None, description="Filter by path/method/base_url"),
     source: str | None = Query(None, description="Filter by source id (url_list, api_list, openapi)"),
     inventory: str = Query("ready", description="ready (built) or verified (after verify)"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> EndpointListResponse:
-    tree = _load_cached_tree(inventory)
+    tree = _load_cached_tree(data_dir, inventory)
     if not tree:
         return EndpointListResponse(total=0, items=[])
 
@@ -211,13 +224,14 @@ def _param_summaries(params) -> list[InputParamSummary]:
 
 @router.get("/endpoints/detail", response_model=EndpointDetailResponse)
 def get_endpoint_detail(
+    data_dir: UserDataDir,
     endpoint_id: str = Query(..., description="Endpoint id from list (base:METHOD:path)"),
     inventory: str | None = Query(None, description="ready or verified; searches all if omitted"),
 ) -> EndpointDetailResponse:
     if inventory in ("ready", "verified"):
-        tree = _load_cached_tree(inventory)
+        tree = _load_cached_tree(data_dir, inventory)
     else:
-        tree = _find_endpoint_tree(endpoint_id)
+        tree = _find_endpoint_tree(data_dir, endpoint_id)
     if not tree:
         return EndpointDetailResponse(found=False)
 
@@ -249,8 +263,8 @@ def get_endpoint_detail(
     ]
 
     account_access: list[AccountAccessSummary] = []
-    if VERIFY_REPORT_PATH.is_file():
-        report = json.loads(VERIFY_REPORT_PATH.read_text(encoding="utf-8"))
+    if (data_dir / "verify-report.json").is_file():
+        report = json.loads((data_dir / "verify-report.json").read_text(encoding="utf-8"))
         for row in account_access_for_endpoint(report.get("results") or [], ep.endpoint_id):
             account_access.append(AccountAccessSummary(**row))
 
@@ -273,11 +287,13 @@ def get_endpoint_detail(
 
 
 @router.get("/login-entry-report", response_model=LoginEntryReportResponse)
-def get_login_entry_report() -> LoginEntryReportResponse:
-    if not VERIFY_REPORT_PATH.is_file():
+def get_login_entry_report(
+    data_dir: UserDataDir,
+) -> LoginEntryReportResponse:
+    if not (data_dir / "verify-report.json").is_file():
         return LoginEntryReportResponse(available=False)
 
-    raw = json.loads(VERIFY_REPORT_PATH.read_text(encoding="utf-8"))
+    raw = json.loads((data_dir / "verify-report.json").read_text(encoding="utf-8"))
     report = raw.get("login_entry_report")
     if not report:
         return LoginEntryReportResponse(available=False, checked_at=raw.get("checked_at"))
@@ -293,12 +309,15 @@ def get_login_entry_report() -> LoginEntryReportResponse:
 
 
 @router.get("/source-options", response_model=SourceOptionsResponse)
-def get_source_options() -> SourceOptionsResponse:
+def get_source_options(
+    data_dir: UserDataDir,
+) -> SourceOptionsResponse:
     return SourceOptionsResponse(sources=SOURCE_DEFS)
 
 
 @router.get("/verify-report", response_model=VerifyReportResponse)
 def get_verify_report(
+    data_dir: UserDataDir,
     outcome: str | None = Query(
         None,
         description="Filter by outcome: final, discovered, or rejected",
@@ -307,10 +326,10 @@ def get_verify_report(
     limit: int = Query(500, ge=1, le=2000),
     offset: int = Query(0, ge=0),
 ) -> VerifyReportResponse:
-    if not VERIFY_REPORT_PATH.is_file():
+    if not (data_dir / "verify-report.json").is_file():
         return VerifyReportResponse(available=False)
 
-    raw = json.loads(VERIFY_REPORT_PATH.read_text(encoding="utf-8"))
+    raw = json.loads((data_dir / "verify-report.json").read_text(encoding="utf-8"))
     summary_raw = raw.get("summary") or {}
     all_results = raw.get("results") or []
     computed = summarize_probe_results(all_results) if all_results else {}
@@ -378,6 +397,7 @@ def get_verify_report(
 
 @router.post("/build", response_model=BuildInventoryResponse)
 async def build_attack_surface(
+    data_dir: UserDataDir,
     url_list_enabled: bool = Form(False),
     api_list_enabled: bool = Form(False),
     openapi_enabled: bool = Form(False),
@@ -395,7 +415,7 @@ async def build_attack_surface(
         )
 
     batch_id = uuid.uuid4().hex
-    batch_dir = ensure_batch_dir(UPLOAD_DIR, batch_id)
+    batch_dir = ensure_batch_dir((data_dir / "uploads"), batch_id)
     url_list_path: Path | None = None
     api_list_path: Path | None = None
     openapi_paths: list[Path] = []
@@ -438,6 +458,19 @@ async def build_attack_surface(
             suffix = Path(upload.filename).suffix.lower()
             stored_path = batch_dir / f"openapi_{index}{suffix}"
             await _save_upload(upload, stored_path)
+            try:
+                raw_text = stored_path.read_text(encoding="utf-8")
+                if suffix == ".json":
+                    json.loads(raw_text)
+                else:
+                    yaml.safe_load(raw_text)
+            except Exception:
+                stored_path.unlink(missing_ok=True)
+                return BuildInventoryResponse(
+                    ok=False,
+                    stats=InventoryStats(),
+                    message=f"Swagger file is not valid JSON/YAML: {upload.filename}",
+                )
             openapi_paths.append(stored_path)
             openapi_names.append(upload.filename)
         if not openapi_paths:
@@ -458,7 +491,7 @@ async def build_attack_surface(
                 )
             stored_name = f"deps_{index}.txt"
             stored_path = batch_dir / stored_name
-            raw_bytes = await upload.read()
+            raw_bytes = await _read_upload_limited(upload)
             stored_path.parent.mkdir(parents=True, exist_ok=True)
             stored_path.write_bytes(raw_bytes)
             gradle_dep_paths.append(stored_path)
@@ -487,12 +520,12 @@ async def build_attack_surface(
             return BuildInventoryResponse(ok=False, stats=InventoryStats(), message="Gradle dependency file required.")
         # 컨테이너 내부 절대경로 목록을 JSON에 저장 → diagnosis_service._context()가 읽음
         dep_abs_paths = [str(p.resolve()) for p in gradle_dep_paths]
-        gradle_dep_files_json = DATA_DIR / "gradle_dep_files.json"
+        gradle_dep_files_json = data_dir / "gradle_dep_files.json"
         gradle_dep_files_json.write_text(
             json.dumps({"paths": dep_abs_paths, "batch_id": batch_id}, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-    elif (DATA_DIR / "gradle_dep_files.json").is_file() and not gradle_deps_enabled:
+    elif (data_dir / "gradle_dep_files.json").is_file() and not gradle_deps_enabled:
         # 명시적으로 비활성화한 경우 기존 파일 유지 (다른 업로드만 수행 중)
         pass
 
@@ -509,8 +542,8 @@ async def build_attack_surface(
     # 엔드포인트 인벤토리(url_list/api_list/openapi)는 손대지 않고,
     # 기존에 빌드돼 있던 api-tree를 그대로 둔 채 성공 처리한다.
     if gradle_dep_names and not (url_list_enabled or api_list_enabled or openapi_enabled):
-        prune_upload_batches(UPLOAD_DIR)
-        existing_tree = _load_cached_tree("ready")
+        prune_upload_batches((data_dir / "uploads"))
+        existing_tree = _load_cached_tree(data_dir, "ready")
         existing_stats = (
             InventoryStats(**compute_stats(existing_tree))
             if existing_tree
@@ -524,7 +557,7 @@ async def build_attack_surface(
         )
 
     cfg = load_config()
-    saved_api_bases, saved_frontend_bases = resolved_base_urls_by_kind()
+    saved_api_bases, saved_frontend_bases = resolved_base_urls_by_kind(data_dir)
     if saved_api_bases or saved_frontend_bases:
         api_bases = saved_api_bases
         frontend_bases = saved_frontend_bases
@@ -561,14 +594,14 @@ async def build_attack_surface(
             message="No endpoints collected from uploaded files.",
         )
 
-    _invalidate_previous_target_artifacts()
-    artifacts = persist_inventory(tree, DATA_DIR, openapi_paths)
+    _invalidate_previous_target_artifacts(data_dir)
+    artifacts = persist_inventory(tree, data_dir, openapi_paths)
     artifacts["upload_batch"] = f"uploads/{batch_id}"
     if openapi_paths:
         artifacts["openapi_uploads"] = [
             f"uploads/{batch_id}/{path.name}" for path in openapi_paths
         ]
-    prune_upload_batches(UPLOAD_DIR)
+    prune_upload_batches((data_dir / "uploads"))
     stats = InventoryStats(**compute_stats(tree))
     return BuildInventoryResponse(
         ok=True,
@@ -645,20 +678,21 @@ def _build_verify_response(
 
 
 @router.get("/discover/progress", response_model=DiscoverProgressResponse)
-def get_discover_progress() -> DiscoverProgressResponse:
+def get_discover_progress(data_dir: UserDataDir) -> DiscoverProgressResponse:
     snap = discover_progress.snapshot()
     return DiscoverProgressResponse(**snap)
 
 
 @router.post("/verify", response_model=VerifyInventoryResponse)
 async def verify_attack_surface(
+    data_dir: UserDataDir,
     use_httpx: bool = Query(True, description="Run httpx probe (direct HTTP, no ZAP)"),
     use_spider: bool = Query(False, description="Run ZAP traditional spider"),
     use_ajax_spider: bool = Query(False, description="Run ZAP ajax spider"),
 ) -> VerifyInventoryResponse:
-    tree = _load_cached_tree("ready")
+    tree = _load_cached_tree(data_dir, "ready")
     if not tree or not tree.endpoints:
-        tree = _load_cached_tree("verified")
+        tree = _load_cached_tree(data_dir, "verified")
     if not tree or not tree.endpoints:
         return VerifyInventoryResponse(
             ok=False,
@@ -674,7 +708,7 @@ async def verify_attack_surface(
         )
 
     discover_progress.reset(total_steps=6)
-    discover_progress.persist(DATA_DIR)
+    discover_progress.persist(data_dir)
 
     raw_cfg = yaml.safe_load(_config_path().read_text(encoding="utf-8")) or {}
     auth_cfg = raw_cfg.get("auth") or {}
@@ -687,7 +721,7 @@ async def verify_attack_surface(
         try:
             payload = await discover_inventory_async(
                 tree,
-                data_dir=DATA_DIR,
+                data_dir=data_dir,
                 config_path=_config_path(),
                 spider_enabled=use_spider,
                 ajax_spider_enabled=use_ajax_spider,
@@ -710,7 +744,7 @@ async def verify_attack_surface(
             message="httpx probe (params + validation errors)…",
             step=1,
         )
-        discover_progress.persist(DATA_DIR)
+        discover_progress.persist(data_dir)
         httpx_payload = await verify_inventory_async(working_tree, auth_cfg=auth_cfg)
         if payload is None:
             payload = httpx_payload
@@ -718,18 +752,18 @@ async def verify_attack_surface(
         else:
             payload = merge_verification_payloads(payload, httpx_payload)
         discover_progress.finish("Verify complete.")
-        discover_progress.persist(DATA_DIR)
+        discover_progress.persist(data_dir)
     elif payload is None:
         discover_progress.update(
             phase="probe",
             message="ZAP not ready — httpx probe fallback…",
             step=1,
         )
-        discover_progress.persist(DATA_DIR)
+        discover_progress.persist(data_dir)
         payload = await verify_inventory_async(tree, auth_cfg=auth_cfg)
         payload["mode"] = "probe"
         discover_progress.finish("Probe complete.")
-        discover_progress.persist(DATA_DIR)
+        discover_progress.persist(data_dir)
 
-    artifacts = persist_verification(DATA_DIR, payload, original_tree=tree)
+    artifacts = persist_verification(data_dir, payload, original_tree=tree)
     return _build_verify_response(tree, payload, artifacts)

@@ -18,6 +18,7 @@ from diagnosis.context import DiagnosisContext
 from diagnosis.registry import get_module, get_modules, list_registered_ids
 from diagnosis.exceptions import DiagnosisCancelled
 from diagnosis.result import DiagnosisFinding, SectionReport
+from integrations.zap.client import zap_exclusive
 
 logger = logging.getLogger(__name__)
 
@@ -33,15 +34,11 @@ def _generate_g11_report_document(report_dir: Path) -> Path:
     return module.generate_report_document(report_dir)
 
 
-def _inject_gradle_dep_files(raw: dict) -> dict:
-    """data/gradle_dep_files.json에 저장된 경로를 diagnosis_7_4.gradle_dep_files에 주입한다.
-
-    - 이미 raw config에 gradle_dep_files 목록이 있으면 그것을 우선한다.
-    - JSON 파일이 없으면 raw를 그대로 반환(기존 동작 유지).
-    """
+def _inject_gradle_dep_files(raw: dict, data_dir: Path) -> dict:
+    """gradle_dep_files.json에 저장된 경로를 diagnosis_7_4.gradle_dep_files에 주입한다."""
     import json as _json
 
-    gradle_json = BACKEND_ROOT / "data" / "gradle_dep_files.json"
+    gradle_json = data_dir / "gradle_dep_files.json"
     if not gradle_json.is_file():
         return raw
 
@@ -49,13 +46,13 @@ def _inject_gradle_dep_files(raw: dict) -> dict:
         stored = _json.loads(gradle_json.read_text(encoding="utf-8"))
         paths: list[str] = [p for p in (stored.get("paths") or []) if p]
     except Exception:
+        logger.exception("failed reading gradle_dep_files.json")
         return raw
 
     if not paths:
         return raw
 
     base_g74: dict = dict(raw.get("diagnosis_7_4") or {})
-    # 이미 config.yaml에 gradle_dep_files가 명시된 경우 그것을 유지
     if base_g74.get("gradle_dep_files"):
         return raw
 
@@ -63,8 +60,17 @@ def _inject_gradle_dep_files(raw: dict) -> dict:
     return {**raw, "diagnosis_7_4": base_g74}
 
 
+def _context(
+    raw_overrides: dict | None = None,
+    *,
+    data_dir: Path | None = None,
+) -> DiagnosisContext:
+    from app.services.base_urls_service import apply_base_urls_to_raw_config, load_base_urls
+    from app.services.login_endpoints_service import apply_login_urls_to_raw_config, load_login_endpoints
+    from app.services.test_accounts_service import load_test_accounts
+    from app.workspace import require_data_dir
 
-def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
+    data_dir = require_data_dir(data_dir)
     cfg = load_config()
     import os
     import yaml
@@ -75,11 +81,11 @@ def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
     if config_path.is_file():
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
 
-    raw = _inject_gradle_dep_files(raw)
+    raw = apply_base_urls_to_raw_config(raw, load_base_urls(data_dir).get("urls") or [])
+    raw = apply_login_urls_to_raw_config(raw, load_login_endpoints(data_dir).get("endpoints") or [])
+    raw = _inject_gradle_dep_files(raw, data_dir)
 
-    # Load test-accounts.json if raw doesn't have auth accounts explicitly
-    from app.services.test_accounts_service import load_test_accounts
-    test_accs = load_test_accounts().get("accounts")
+    test_accs = load_test_accounts(data_dir).get("accounts")
     if test_accs:
         if "auth" not in raw:
             raw["auth"] = {}
@@ -171,7 +177,7 @@ def _context(raw_overrides: dict | None = None) -> DiagnosisContext:
             raw = {**raw, **raw_overrides}
 
     return DiagnosisContext(
-        data_dir=BACKEND_ROOT / "data",
+        data_dir=data_dir,
         config=config_to_inventory_dict(cfg),
         raw_config=raw,
     )
@@ -493,23 +499,23 @@ def _run_options_kwargs(
     }
 
 
-def is_section_run_in_progress() -> bool:
+def is_section_run_in_progress(*, user_id: str | None = None) -> bool:
     from app.services import diagnosis_progress as dp
 
-    return bool(dp.snapshot().get("running"))
+    return bool(dp.snapshot(user_id=user_id).get("running"))
 
 
-def request_cancel_run() -> str | None:
+def request_cancel_run(*, user_id: str | None = None) -> str | None:
     """Request cancellation of the in-flight diagnosis run. Returns section_id if accepted."""
     from app.services import diagnosis_progress as dp
 
-    snap = dp.snapshot()
+    snap = dp.snapshot(user_id=user_id)
     if not snap.get("running"):
         return None
     section_id = str(snap.get("section_id") or "").strip()
     if not section_id:
         return None
-    dp.request_cancel()
+    dp.request_cancel(user_id=user_id)
     return section_id
 
 
@@ -538,7 +544,7 @@ def _run_g11_screenshot_capture(mod: Any, ctx: DiagnosisContext, report: Section
     if str(os.getenv("ARGUS_SCREENSHOT_AUTO", "true")).strip().lower() in {"0", "false", "no", "off"}:
         return
 
-    screenshot_root = ctx.data_dir.parent / "screenshot"
+    screenshot_root = BACKEND_ROOT / "screenshot"
     capture_script = screenshot_root / "modules" / "1-1" / "capture.py"
     report_path = ctx.data_dir / "report" / "1-1" / "latest.yaml"
     output_dir = ctx.data_dir / "report" / "1-1" / "evidence"
@@ -577,6 +583,8 @@ def _run_g11_screenshot_capture(mod: Any, ctx: DiagnosisContext, report: Section
     ]
     timeout_sec = int(os.getenv("ARGUS_SCREENSHOT_TIMEOUT_SEC", "900") or "900")
     capture_log_path = output_dir / "capture.log"
+    child_env = os.environ.copy()
+    child_env["ARGUS_DATA_DIR"] = str(ctx.data_dir.resolve())
 
     result_payload: dict[str, Any] = {
         "command": cmd,
@@ -592,6 +600,7 @@ def _run_g11_screenshot_capture(mod: Any, ctx: DiagnosisContext, report: Section
                 return text_or_path.read_text(encoding="utf-8", errors="replace")[-limit:]
             return str(text_or_path or "")[-limit:]
         except Exception:
+            logger.exception("failed reading capture log tail")
             return ""
 
     # Stream capture output to a log FILE, not a pipe. capture.py prints
@@ -604,7 +613,8 @@ def _run_g11_screenshot_capture(mod: Any, ctx: DiagnosisContext, report: Section
         with capture_log_path.open("w", encoding="utf-8", errors="replace") as logf:
             proc = subprocess.run(
                 cmd,
-                cwd=str(ctx.data_dir.parent),
+                cwd=str(BACKEND_ROOT),
+                env=child_env,
                 text=True,
                 stdout=logf,
                 stderr=subprocess.STDOUT,
@@ -634,6 +644,7 @@ def _run_g11_screenshot_capture(mod: Any, ctx: DiagnosisContext, report: Section
         try:
             result_payload["capture_summary"] = json.loads(summary_path.read_text(encoding="utf-8"))
         except Exception:
+            logger.exception("unreadable capture summary: %s", summary_path)
             result_payload["capture_summary"] = {"unreadable": str(summary_path)}
 
     report.findings.append(
@@ -767,12 +778,14 @@ def _build_report_pdf_best_effort(section_id: str, ctx: DiagnosisContext) -> Non
         spec.loader.exec_module(renderer)
         renderer.render_pdf(ctx=ctx)
     except Exception:
-        pass
+        logger.exception("%s PDF renderer failed", section_id)
 
 
 def start_section_run_background(
     section_id: str,
     *,
+    data_dir: Path | None = None,
+    user_id: str | None = None,
     g22_options: dict | None = None,
     g71_options: dict | None = None,
     g73_options: dict | None = None,
@@ -796,9 +809,15 @@ def start_section_run_background(
 ) -> None:
     """Start a diagnosis run on a background thread (for long scans such as 6-1)."""
     from app.services import diagnosis_progress as dp
+    from app.workspace import bind_workspace, current_user_id, require_data_dir, reset_workspace
 
-    if dp.snapshot().get("running"):
-        current = dp.snapshot().get("section_id") or "unknown"
+    data_dir = require_data_dir(data_dir)
+    uid = user_id or current_user_id()
+    if not uid:
+        raise RuntimeError("user_id required for background diagnosis")
+
+    if dp.snapshot(user_id=uid).get("running"):
+        current = dp.snapshot(user_id=uid).get("section_id") or "unknown"
         raise RuntimeError(f"Diagnosis already running: {current}")
 
     mod = _resolve_module(section_id)
@@ -824,20 +843,25 @@ def start_section_run_background(
         g45_options=g45_options,
     )
     overrides = _build_overrides(section_id, **option_kwargs)
-    ctx = _context(overrides)
-    dp.reset(section_id=section_id, message=f"Running {section_id}...")
+    ctx = _context(overrides, data_dir=data_dir)
+    dp.reset(section_id=section_id, message=f"Running {section_id}...", user_id=uid)
 
     def _worker() -> None:
+        tokens = bind_workspace(user_id=uid, data_dir=data_dir)
         try:
-            _run_module(mod, ctx, section_id)
+            # Shared ZAP daemon: one diagnosis job at a time across users.
+            with zap_exclusive():
+                _run_module(mod, ctx, section_id)
         except DiagnosisCancelled:
             pass
         except Exception as exc:
-            dp.fail(str(exc)[:300])
+            dp.fail(str(exc)[:300], user_id=uid)
+        finally:
+            reset_workspace(tokens)
 
     thread = threading.Thread(
         target=_worker,
-        name=f"diagnosis-{section_id}",
+        name=f"diagnosis-{section_id}-{uid[:8]}",
         daemon=True,
     )
     thread.start()
@@ -846,6 +870,8 @@ def start_section_run_background(
 def run_section(
     section_id: str,
     *,
+    data_dir: Path | None = None,
+    user_id: str | None = None,
     g21_options: dict | None = None,
     g22_options: dict | None = None,
     g71_options: dict | None = None,
@@ -867,6 +893,11 @@ def run_section(
     g45_options: dict | None = None,
     **kwargs: Any,
 ) -> SectionReport:
+    from app.services import diagnosis_progress as dp
+    from app.workspace import current_user_id, require_data_dir
+
+    data_dir = require_data_dir(data_dir)
+    uid = user_id or current_user_id()
     mod = _resolve_module(section_id)
     option_kwargs = _run_options_kwargs(
         g22_options=g22_options,
@@ -890,40 +921,49 @@ def run_section(
         g45_options=g45_options,
     )
     overrides = _build_overrides(section_id, **option_kwargs)
-    ctx = _context(overrides)
-    from app.services import diagnosis_progress as dp
+    ctx = _context(overrides, data_dir=data_dir)
 
-    dp.reset(section_id=section_id, message=f"Running {section_id}...")
+    dp.reset(section_id=section_id, message=f"Running {section_id}...", user_id=uid)
     try:
-        return _run_module(mod, ctx, section_id)
+        with zap_exclusive():
+            return _run_module(mod, ctx, section_id)
     except DiagnosisCancelled as exc:
         raise RuntimeError(str(exc) or "Diagnosis cancelled") from exc
     except Exception as exc:
-        dp.fail(str(exc)[:300])
+        dp.fail(str(exc)[:300], user_id=uid)
         raise
 
 
-def run_all() -> list[SectionReport]:
-    ctx = _context()
+def run_all(*, data_dir: Path | None = None) -> list[SectionReport]:
+    ctx = _context(data_dir=data_dir)
     reports: list[SectionReport] = []
-    for section_id in sorted(get_modules().keys()):
-        mod = get_modules()[section_id]
-        if not getattr(mod, "diagnosable", True):
-            continue
-        reports.append(mod.run(ctx))
+    with zap_exclusive():
+        for section_id in sorted(get_modules().keys()):
+            mod = get_modules()[section_id]
+            if not getattr(mod, "diagnosable", True):
+                continue
+            reports.append(mod.run(ctx))
     return reports
 
 
-def list_replay_findings(section_id: str) -> list[dict]:
+def list_replay_findings(section_id: str, *, data_dir: Path | None = None) -> list[dict]:
     from diagnosis.replay.service import list_replayable_findings
+    from app.workspace import require_data_dir
 
     if section_id not in SECTION_BY_ID:
         raise KeyError(f"Unknown section: {section_id}")
-    return list_replayable_findings(section_id)
+    return list_replayable_findings(section_id, data_dir=require_data_dir(data_dir))
 
 
-def run_replay(section_id: str, *, finding_id: str | None = None, use_playwright: bool = True) -> list:
+def run_replay(
+    section_id: str,
+    *,
+    data_dir: Path | None = None,
+    finding_id: str | None = None,
+    use_playwright: bool = True,
+) -> list:
     from diagnosis.replay.service import run_section_replay
+    from app.workspace import require_data_dir
 
     if section_id not in SECTION_BY_ID:
         raise KeyError(f"Unknown section: {section_id}")
@@ -931,15 +971,21 @@ def run_replay(section_id: str, *, finding_id: str | None = None, use_playwright
     import os
     import yaml
     from app.config import BACKEND_ROOT
+    from app.services.base_urls_service import apply_base_urls_to_raw_config, load_base_urls
+    from app.services.login_endpoints_service import apply_login_urls_to_raw_config, load_login_endpoints
 
+    data_dir = require_data_dir(data_dir)
     env_path = os.environ.get("CONFIG_PATH")
     config_path = Path(env_path) if env_path else (BACKEND_ROOT / "config.yaml")
     raw: dict = {}
     if config_path.is_file():
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    raw = apply_base_urls_to_raw_config(raw, load_base_urls(data_dir).get("urls") or [])
+    raw = apply_login_urls_to_raw_config(raw, load_login_endpoints(data_dir).get("endpoints") or [])
 
     return run_section_replay(
         section_id,
+        data_dir=data_dir,
         finding_id=finding_id,
         raw_config=raw,
         use_playwright=use_playwright,

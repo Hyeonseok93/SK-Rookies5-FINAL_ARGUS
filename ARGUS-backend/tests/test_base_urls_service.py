@@ -2,36 +2,18 @@ from __future__ import annotations
 
 import json
 
-import yaml
-
 from app.services import base_urls_service as svc
+from app.services.base_urls_service import apply_base_urls_to_raw_config
 
 
-def test_save_base_urls_syncs_config_files(tmp_path, monkeypatch):
+def test_save_base_urls_persists_workspace_json(tmp_path):
     data_dir = tmp_path / "data"
-    config = tmp_path / "config.yaml"
-    docker_config = tmp_path / "config.docker.yaml"
-    initial = {
-        "app_name": "onde-pilot",
-        "targets": [{"name": "old", "base_url": "http://localhost:9999"}],
-        "inventory": {
-            "markdown": {"enabled": True, "frontend_base_url": "http://localhost:9998"},
-            "openapi": {"enabled": False, "base_url": "http://localhost:9999"},
-        },
-        "diagnosis_1_5": {"probe_mode": "full"},
-    }
-    config.write_text(yaml.safe_dump(initial, sort_keys=False), encoding="utf-8")
-    docker_config.write_text(yaml.safe_dump(initial, sort_keys=False), encoding="utf-8")
-
-    monkeypatch.setattr(svc, "DATA_DIR", data_dir)
-    monkeypatch.setattr(svc, "BASE_URLS_PATH", data_dir / "base-urls.json")
-    monkeypatch.setattr(svc, "CONFIG_PATHS", (config, docker_config))
-
     saved = svc.save_base_urls(
+        data_dir,
         [
             {"id": "api", "url": "http://localhost:8080", "kind": "api"},
             {"id": "front", "url": "http://localhost:5173/", "kind": "frontend"},
-        ]
+        ],
     )
 
     assert saved["urls"] == [
@@ -40,38 +22,40 @@ def test_save_base_urls_syncs_config_files(tmp_path, monkeypatch):
     ]
     assert json.loads((data_dir / "base-urls.json").read_text(encoding="utf-8")) == saved
 
-    native = yaml.safe_load(config.read_text(encoding="utf-8"))
-    assert native["targets"] == [{"name": "api", "base_url": "http://localhost:8080"}]
-    assert native["inventory"]["markdown"]["frontend_base_url"] == "http://localhost:5173"
-    assert native["inventory"]["openapi"]["base_url"] == "http://localhost:8080"
-    assert native["diagnosis_1_5"] == {"probe_mode": "full"}
 
-    docker = yaml.safe_load(docker_config.read_text(encoding="utf-8"))
-    assert docker["targets"] == [
-        {"name": "api", "base_url": "http://host.docker.internal:8080"}
-    ]
-    assert docker["inventory"]["markdown"]["frontend_base_url"] == "http://localhost:5173"
-    assert docker["inventory"]["openapi"]["base_url"] == "http://host.docker.internal:8080"
-
-
-def test_base_url_roles_do_not_depend_on_port_numbers(tmp_path, monkeypatch):
-    data_dir = tmp_path / "data"
-    config = tmp_path / "config.yaml"
-    config.write_text(
-        yaml.safe_dump({"targets": [], "inventory": {"markdown": {}, "openapi": {}}}),
-        encoding="utf-8",
+def test_apply_base_urls_to_raw_config_in_memory():
+    raw = {
+        "app_name": "argus",
+        "targets": [{"name": "old", "base_url": "http://localhost:9999"}],
+        "inventory": {
+            "markdown": {"enabled": True, "frontend_base_url": "http://localhost:9998"},
+            "openapi": {"enabled": False, "base_url": "http://localhost:9999"},
+        },
+        "diagnosis_1_5": {"probe_mode": "full"},
+    }
+    patched = apply_base_urls_to_raw_config(
+        raw,
+        [
+            {"id": "api", "url": "http://localhost:8080", "kind": "api"},
+            {"id": "front", "url": "http://localhost:5173", "kind": "frontend"},
+        ],
     )
-    monkeypatch.setattr(svc, "DATA_DIR", data_dir)
-    monkeypatch.setattr(svc, "BASE_URLS_PATH", data_dir / "base-urls.json")
-    monkeypatch.setattr(svc, "CONFIG_PATHS", (config,))
+    assert patched["targets"] == [{"name": "api", "base_url": "http://localhost:8080"}]
+    assert patched["inventory"]["markdown"]["frontend_base_url"] == "http://localhost:5173"
+    assert patched["inventory"]["openapi"]["base_url"] == "http://localhost:8080"
+    assert patched["diagnosis_1_5"] == {"probe_mode": "full"}
 
+
+def test_base_url_roles_do_not_depend_on_port_numbers(tmp_path):
+    data_dir = tmp_path / "data"
     svc.save_base_urls(
+        data_dir,
         [
             {"id": "front", "url": "http://example.test:8080", "kind": "frontend"},
             {"id": "api", "url": "http://api.test:3000", "kind": "api"},
-        ]
+        ],
     )
 
-    api, frontend = svc.resolved_base_urls_by_kind()
+    api, frontend = svc.resolved_base_urls_by_kind(data_dir)
     assert api == ["http://api.test:3000"]
     assert frontend == ["http://example.test:8080"]

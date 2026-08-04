@@ -219,9 +219,11 @@ def capture_latest(
     resolved_config = config_path or Path(
         os.environ.get("CONFIG_PATH") or backend_root / "config.yaml"
     )
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+    data_dir = Path(env) if env else (backend_root / "data")
     capture_context = _load_capture_context(
         resolved_config,
-        backend_root / "data",
+        data_dir,
     )
     report = yaml.safe_load(report_path.read_text(encoding="utf-8")) or {}
     findings = list(report.get("findings") or [])
@@ -286,16 +288,18 @@ def main() -> int:
         )
 
     backend_root = _default_backend_root()
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+    data_dir = Path(env) if env else (backend_root / "data")
     parser = argparse.ArgumentParser(description="Capture 1-2 injection evidence screenshots")
     parser.add_argument(
         "--report",
         type=Path,
-        default=backend_root / "data" / "report" / "1-2" / "latest.yaml",
+        default=data_dir / "report" / "1-2" / "latest.yaml",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=backend_root / "data" / "report" / "1-2" / "evidence",
+        default=data_dir / "report" / "1-2" / "evidence",
     )
     parser.add_argument("--limit", type=int, default=3)
     parser.add_argument(

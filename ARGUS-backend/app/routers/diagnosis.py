@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.config import BACKEND_ROOT
+from app.deps import CurrentUser, UserDataDir
 from app.schemas import (
     DiagnosisCatalogModule,
     DiagnosisCatalogResponse,
@@ -42,7 +43,7 @@ def _generate_g11_report_document(report_dir: Path) -> Path:
 
 
 @router.get("/catalog", response_model=DiagnosisCatalogResponse)
-def get_catalog() -> DiagnosisCatalogResponse:
+def get_catalog(_user: CurrentUser) -> DiagnosisCatalogResponse:
     items = [
         DiagnosisCatalogModule.model_validate(row)
         for row in diagnosis_service.catalog()
@@ -71,22 +72,24 @@ def _report_to_response(report) -> DiagnosisSectionReportResponse:
 
 
 @router.post("/cancel")
-def cancel_diagnosis_run() -> dict[str, object]:
-    section_id = diagnosis_service.request_cancel_run()
+def cancel_diagnosis_run(user: CurrentUser) -> dict[str, object]:
+    section_id = diagnosis_service.request_cancel_run(user_id=user["id"])
     if not section_id:
         raise HTTPException(status_code=409, detail="No diagnosis run in progress")
     return {"ok": True, "section_id": section_id}
 
 
 @router.get("/progress", response_model=DiagnosisProgressResponse)
-def get_diagnosis_progress() -> DiagnosisProgressResponse:
+def get_diagnosis_progress(user: CurrentUser) -> DiagnosisProgressResponse:
     from app.services import diagnosis_progress
 
-    return DiagnosisProgressResponse(**diagnosis_progress.snapshot())
+    return DiagnosisProgressResponse(**diagnosis_progress.snapshot(user_id=user["id"]))
 
 
 @router.get("/modules/6-1/report/summary", response_model=DiagnosisSectionReportResponse)
-def get_g61_module_report_summary() -> DiagnosisSectionReportResponse:
+def get_g61_module_report_summary(
+    data_dir: UserDataDir,
+) -> DiagnosisSectionReportResponse:
     payload = diagnosis_service.get_g61_report_summary()
     if payload is None:
         raise HTTPException(status_code=404, detail="No report for module 6-1")
@@ -94,14 +97,19 @@ def get_g61_module_report_summary() -> DiagnosisSectionReportResponse:
 
 
 @router.get("/modules/{section_id}/report", response_model=DiagnosisSectionReportResponse)
-def get_module_report(section_id: str) -> DiagnosisSectionReportResponse:
+def get_module_report(
+    data_dir: UserDataDir,
+    section_id: str,
+) -> DiagnosisSectionReportResponse:
     report = diagnosis_service.get_report(section_id)
     if report is None:
         raise HTTPException(status_code=404, detail=f"No report for module {section_id}")
     return _report_to_response(report)
 
 @router.get("/modules/1-6/report.pdf")
-def download_g16_pdf_report() -> FileResponse:
+def download_g16_pdf_report(
+    data_dir: UserDataDir,
+) -> FileResponse:
     generator_path = BACKEND_ROOT / "report" / "modules" / "1-6" / "report.py"
     spec = importlib.util.spec_from_file_location("argus_g16_pdf_report", generator_path)
     if spec is None or spec.loader is None:
@@ -109,7 +117,7 @@ def download_g16_pdf_report() -> FileResponse:
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
-        output = module.generate_report(BACKEND_ROOT / "data" / "report" / "1-6")
+        output = module.generate_report(data_dir / "report" / "1-6")
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -118,7 +126,10 @@ def download_g16_pdf_report() -> FileResponse:
 
 
 @router.get("/modules/{section_id}/report/pdf")
-def download_module_report_pdf(section_id: str) -> FileResponse:
+def download_module_report_pdf(
+    data_dir: UserDataDir,
+    section_id: str,
+) -> FileResponse:
     """Download section PDF. Prefer on-demand generators (e.g. 2-2); else cached report PDF."""
     if diagnosis_service.supports_pdf_export(section_id):
         try:
@@ -150,7 +161,10 @@ def download_module_report_pdf(section_id: str) -> FileResponse:
 
 
 @router.get("/modules/{section_id}/report/document")
-def get_module_report_document(section_id: str) -> Response:
+def get_module_report_document(
+    data_dir: UserDataDir,
+    section_id: str,
+) -> Response:
     """Per-finding downloadable evidence report PDF (확정 취약 + 잠재적 취약), with
     captured screenshots embedded and remediation text from the section's
     guideline.yaml. Currently only implemented for 2-1."""
@@ -162,7 +176,7 @@ def get_module_report_document(section_id: str) -> Response:
     if report is None:
         raise HTTPException(status_code=404, detail=f"No report for module {section_id}")
 
-    items = report_service.build_report_items(section_id, data_dir=BACKEND_ROOT / "data")
+    items = report_service.build_report_items(section_id, data_dir=data_dir)
     pdf_bytes = report_service.render_report_pdf(section_id, report.title, items)
     filename = f"argus-{section_id}-report.pdf"
     return Response(
@@ -173,8 +187,11 @@ def get_module_report_document(section_id: str) -> Response:
 
 
 @router.get("/modules/1-1/evidence/{relative_path:path}")
-def get_g11_evidence_file(relative_path: str) -> FileResponse:
-    evidence_root = (BACKEND_ROOT / "data" / "report" / "1-1" / "evidence").resolve()
+def get_g11_evidence_file(
+    data_dir: UserDataDir,
+    relative_path: str,
+) -> FileResponse:
+    evidence_root = (data_dir / "report" / "1-1" / "evidence").resolve()
     target = (evidence_root / Path(relative_path)).resolve()
     if not target.is_file() or evidence_root not in target.parents:
         raise HTTPException(status_code=404, detail="Evidence file not found")
@@ -182,8 +199,10 @@ def get_g11_evidence_file(relative_path: str) -> FileResponse:
 
 
 @router.get("/modules/1-1/report/download")
-def download_g11_report_document() -> FileResponse:
-    report_dir = BACKEND_ROOT / "data" / "report" / "1-1"
+def download_g11_report_document(
+    data_dir: UserDataDir,
+) -> FileResponse:
+    report_dir = data_dir / "report" / "1-1"
     try:
         target = _generate_g11_report_document(report_dir)
     except FileNotFoundError as exc:
@@ -198,7 +217,11 @@ def download_g11_report_document() -> FileResponse:
 
 
 @router.get("/modules/{section_id}/evidence")
-def get_evidence_file(section_id: str, path: str) -> FileResponse:
+def get_evidence_file(
+    data_dir: UserDataDir,
+    section_id: str,
+    path: str,
+) -> FileResponse:
     resolved = diagnosis_service.resolve_evidence_file(section_id, path)
     if resolved is None:
         raise HTTPException(status_code=404, detail="Evidence file not found")
@@ -206,16 +229,22 @@ def get_evidence_file(section_id: str, path: str) -> FileResponse:
 
 
 @router.get("/modules/{section_id}/final-report")
-def get_final_report(section_id: str) -> FileResponse:
-    resolved = resolve_report_file(section_id, "report.html")
+def get_final_report(
+    data_dir: UserDataDir,
+    section_id: str,
+) -> FileResponse:
+    resolved = resolve_report_file(section_id, "report.html", data_dir=data_dir)
     if resolved is None:
         raise HTTPException(status_code=404, detail=f"No final report for module {section_id}")
     return FileResponse(resolved, media_type="text/html; charset=utf-8")
 
 
 @router.get("/modules/{section_id}/final-report.pdf")
-def get_final_report_pdf(section_id: str) -> FileResponse:
-    resolved = resolve_report_file(section_id, "report.pdf")
+def get_final_report_pdf(
+    data_dir: UserDataDir,
+    section_id: str,
+) -> FileResponse:
+    resolved = resolve_report_file(section_id, "report.pdf", data_dir=data_dir)
     if resolved is None:
         raise HTTPException(status_code=404, detail=f"No final PDF report for module {section_id}")
     return FileResponse(
@@ -226,8 +255,11 @@ def get_final_report_pdf(section_id: str) -> FileResponse:
 
 
 @router.get("/modules/{section_id}/final-report/manifest")
-def get_final_report_manifest(section_id: str) -> FileResponse:
-    resolved = resolve_report_file(section_id, "report-manifest.json")
+def get_final_report_manifest(
+    data_dir: UserDataDir,
+    section_id: str,
+) -> FileResponse:
+    resolved = resolve_report_file(section_id, "report-manifest.json", data_dir=data_dir)
     if resolved is None:
         raise HTTPException(status_code=404, detail=f"No final report manifest for module {section_id}")
     return FileResponse(resolved, media_type="application/json")
@@ -275,7 +307,10 @@ def _dedicated_report_pdf_response(section_id: str) -> Response:
 
 
 @router.get("/modules/{section_id}/report.pdf")
-def download_module_report_pdf(section_id: str) -> Response:
+def download_module_report_pdf_alt(
+    data_dir: UserDataDir,
+    section_id: str,
+) -> Response:
     """Dispatches to report/modules/{id}/renderer.py if that module owns one
     (e.g. 6-1) — 404s otherwise. Each module owns its own renderer file; there
     is no shared/generic renderer here to avoid every module owner editing
@@ -285,6 +320,8 @@ def download_module_report_pdf(section_id: str) -> Response:
 
 @router.post("/modules/{section_id}/run", response_model=DiagnosisRunSectionResponse)
 def run_module(
+    data_dir: UserDataDir,
+    user: CurrentUser,
     section_id: str,
     body: DiagnosisRunSectionRequest | None = None,
 ) -> DiagnosisRunSectionResponse:
@@ -368,7 +405,7 @@ def run_module(
     )
     if section_id in ("6-1", "2-1", "7-4", "1-1", "1-2", "1-6", "2-2", "4-5", "6-2", "7-2"):
         try:
-            diagnosis_service.start_section_run_background(section_id, **run_kwargs)
+            diagnosis_service.start_section_run_background(section_id, data_dir=data_dir, user_id=user["id"], **run_kwargs)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuntimeError as exc:
@@ -386,7 +423,7 @@ def run_module(
             content=payload.model_dump(),
         )
     try:
-        report = diagnosis_service.run_section(section_id, **run_kwargs)
+        report = diagnosis_service.run_section(section_id, data_dir=data_dir, user_id=user["id"], **run_kwargs)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -397,8 +434,10 @@ def run_module(
 
 
 @router.post("/run-all", response_model=DiagnosisRunAllResponse)
-def run_all() -> DiagnosisRunAllResponse:
-    reports = diagnosis_service.run_all()
+def run_all(
+    data_dir: UserDataDir,
+) -> DiagnosisRunAllResponse:
+    reports = diagnosis_service.run_all(data_dir=data_dir)
     return DiagnosisRunAllResponse(
         ok=True,
         total=len(reports),
@@ -407,9 +446,12 @@ def run_all() -> DiagnosisRunAllResponse:
 
 
 @router.get("/modules/{section_id}/replay", response_model=ReplayListResponse)
-def list_replay(section_id: str) -> ReplayListResponse:
+def list_replay(
+    data_dir: UserDataDir,
+    section_id: str,
+) -> ReplayListResponse:
     try:
-        rows = diagnosis_service.list_replay_findings(section_id)
+        rows = diagnosis_service.list_replay_findings(section_id, data_dir=data_dir)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ReplayListResponse(
@@ -421,6 +463,7 @@ def list_replay(section_id: str) -> ReplayListResponse:
 
 @router.post("/modules/{section_id}/replay", response_model=ReplayRunSectionResponse)
 def run_replay(
+    data_dir: UserDataDir,
     section_id: str,
     body: ReplayRunRequest | None = None,
 ) -> ReplayRunSectionResponse:
@@ -428,6 +471,7 @@ def run_replay(
     try:
         results = diagnosis_service.run_replay(
             section_id,
+            data_dir=data_dir,
             finding_id=req.finding_id,
             use_playwright=req.use_playwright,
         )

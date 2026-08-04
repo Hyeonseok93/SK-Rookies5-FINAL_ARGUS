@@ -2,32 +2,41 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+
+from app.deps import CurrentUser
+from app.services import redirect_sink_service as sink
 
 router = APIRouter(tags=["redirect-sink"])
-
-_hits: list[dict[str, Any]] = []
-_MAX_HITS = 5000
 
 
 @router.get("/argus-redirect-sink/r/{run_id}/{probe_id}")
 def redirect_sink_hit(run_id: str, probe_id: str) -> dict[str, Any]:
-    payload = {
-        "ok": True,
-        "run_id": run_id,
-        "probe_id": probe_id,
-        "ts": time.time(),
-    }
-    _hits.append(payload)
-    if len(_hits) > _MAX_HITS:
-        del _hits[: len(_hits) - _MAX_HITS]
+    """Public hit endpoint — only records probes registered by an authenticated run."""
+    payload = sink.record_hit(run_id, probe_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Unknown probe")
     return payload
 
 
-@router.get("/argus-redirect-sink/hits")
-def redirect_sink_hits(limit: int = 50) -> dict[str, Any]:
-    lim = max(1, min(limit, 200))
-    return {"hits": _hits[-lim:], "total": len(_hits)}
+@router.get("/api/argus-redirect-sink/hits")
+def redirect_sink_hits(user: CurrentUser, limit: int = 50) -> dict[str, Any]:
+    return sink.list_hits(user_id=user["id"], limit=limit)
+
+
+@router.post("/api/argus-redirect-sink/register")
+def redirect_sink_register(body: dict[str, Any], user: CurrentUser) -> dict[str, Any]:
+    run_id = str(body.get("run_id") or "").strip()
+    probe_ids = body.get("probe_ids") or []
+    if not run_id:
+        raise HTTPException(status_code=400, detail="run_id required")
+    if not isinstance(probe_ids, list):
+        raise HTTPException(status_code=400, detail="probe_ids must be a list")
+    count = sink.register_probes(
+        user_id=user["id"],
+        run_id=run_id,
+        probe_ids=[str(p) for p in probe_ids],
+    )
+    return {"ok": True, "registered": count}

@@ -262,16 +262,18 @@ def main() -> int:
             pass  # xvfb-run not installed; continue and let Playwright surface a clearer error
 
     backend_root = _default_backend_root()
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+    data_dir = Path(env) if env else (backend_root / "data")
     parser = argparse.ArgumentParser(description="Capture 1-1 Stored XSS / CSRF evidence screenshots")
     parser.add_argument(
         "--report",
         type=Path,
-        default=backend_root / "data" / "report" / "1-1" / "latest.yaml",
+        default=data_dir / "report" / "1-1" / "latest.yaml",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=backend_root / "data" / "report" / "1-1" / "evidence",
+        default=data_dir / "report" / "1-1" / "evidence",
     )
     parser.add_argument(
         "--limit",

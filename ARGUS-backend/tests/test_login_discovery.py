@@ -198,9 +198,9 @@ def test_resolve_login_url_path(monkeypatch):
 
 
 def test_dashboard_login_entries_merge(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.services.login_endpoints_service.LOGIN_ENDPOINTS_PATH", tmp_path / "le.json")
+    from app.services.login_endpoints_service import apply_login_urls_to_raw_config
+
     monkeypatch.setattr("app.services.login_discovery_service.DATA_DIR", tmp_path)
-    config, docker_config = _patch_config_paths(monkeypatch, tmp_path)
     monkeypatch.setattr(
         "app.services.login_discovery_service.probe_url",
         lambda url: url,
@@ -220,30 +220,35 @@ def test_dashboard_login_entries_merge(tmp_path, monkeypatch):
             ],
         ),
     )
-    save_login_endpoints(
+    saved = save_login_endpoints(
+        tmp_path,
         [
             {
                 "id": "1",
                 "url": "http://localhost:8080/api/v1/auth/custom-modal-login",
                 "kind": "api",
             }
-        ]
+        ],
     )
-    assert "http://localhost:8080/api/v1/auth/custom-modal-login" in config.read_text(
-        encoding="utf-8"
+    patched = apply_login_urls_to_raw_config(
+        {
+            "auth": {"login_urls": ["http://localhost:9999/old-login"]},
+            "targets": [{"base_url": "http://localhost:8080"}],
+            "diagnosis_1_6": {},
+        },
+        saved["endpoints"],
     )
-    assert "http://host.docker.internal:8080/api/v1/auth/custom-modal-login" in docker_config.read_text(
-        encoding="utf-8"
-    )
-    assert "old-login" not in config.read_text(encoding="utf-8")
-    assert "admin: http://localhost:8080" in config.read_text(encoding="utf-8")
-    assert "admin: /api/v1/auth/custom-modal-login" in config.read_text(encoding="utf-8")
+    assert patched["auth"]["login_urls"] == [
+        "http://localhost:8080/api/v1/auth/custom-modal-login"
+    ]
+    assert patched["diagnosis_1_6"]["role_login_targets"]["admin"] == "http://localhost:8080"
+    assert patched["diagnosis_1_6"]["role_login_paths"]["admin"] == "/api/v1/auth/custom-modal-login"
     raw = {"targets": [{"base_url": "http://localhost:8080"}]}
     merged = resolve_login_entries({"id_field": "email", "pw_field": "password"}, raw, data_dir=tmp_path)
     urls = {e["url"] for e in merged}
     assert "http://localhost:8080/api/v1/auth/login" in urls
     assert "http://localhost:8080/api/v1/auth/custom-modal-login" in urls
-    manual = dashboard_login_entries(raw)
+    manual = dashboard_login_entries(raw, data_dir=tmp_path)
     assert manual[0]["source"] == "dashboard"
     assert manual[0]["kind"] == "api"
     assert manual[0]["label"] == "custom-modal-login"
@@ -251,7 +256,6 @@ def test_dashboard_login_entries_merge(tmp_path, monkeypatch):
 
 def test_resolve_login_entries_includes_explicit_config_urls(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.login_discovery_service.DATA_DIR", tmp_path)
-    monkeypatch.setattr("app.services.login_endpoints_service.LOGIN_ENDPOINTS_PATH", tmp_path / "le.json")
     monkeypatch.delenv("ARGUS_PROBE_HOST", raising=False)
     _patch_dashboard(monkeypatch, ["http://localhost:8080"])
     _write_tree(tmp_path)
@@ -268,7 +272,6 @@ def test_resolve_login_entries_includes_explicit_config_urls(tmp_path, monkeypat
 
 def test_resolve_login_entries_dedupes_localhost_and_docker_probe_host(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.login_discovery_service.DATA_DIR", tmp_path)
-    _patch_config_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("ARGUS_PROBE_HOST", "host.docker.internal")
     monkeypatch.setattr(
         "app.services.login_discovery_service.probe_url",
@@ -297,13 +300,14 @@ def test_resolve_login_entries_dedupes_localhost_and_docker_probe_host(tmp_path,
         ),
     )
     save_login_endpoints(
+        tmp_path,
         [
             {
                 "id": "1",
                 "url": "http://localhost:8080/api/v1/auth/login",
                 "kind": "api",
             }
-        ]
+        ],
     )
     raw = {"targets": [{"base_url": "http://host.docker.internal:8080"}]}
     entries = resolve_login_entries(

@@ -153,7 +153,7 @@ variable "app_secret_name" {
 # 아래 3개는 기본값을 두지 않는다 — gitignore된 *.tfvars 파일(예: secrets.auto.tfvars)로만
 # 주입해야 하며, 실수로 코드에 실제 값을 박아넣지 못하게 강제한다. (example.tfvars 참고)
 variable "db_password" {
-  description = "백엔드 DB 비밀번호 (secrets.auto.tfvars 등 gitignore된 파일로 주입)"
+  description = "RESERVED/UNUSED — ARGUS app is file-based; kept for Secrets Manager shape compatibility"
   type        = string
   sensitive   = true
 }
@@ -165,7 +165,31 @@ variable "jwt_secret" {
 }
 
 variable "redis_password" {
-  description = "Redis 비밀번호 (secrets.auto.tfvars 등 gitignore된 파일로 주입)"
+  description = "RESERVED/UNUSED — ARGUS app does not use Redis; kept for Secrets Manager shape compatibility"
+  type        = string
+  sensitive   = true
+}
+
+variable "credentials_key" {
+  description = "진단 대상 계정 비밀번호 at-rest 암호화 키 (Fernet 파생용)"
+  type        = string
+  sensitive   = true
+}
+
+variable "zap_api_key" {
+  description = "OWASP ZAP API key (api.disablekey 사용 금지)"
+  type        = string
+  sensitive   = true
+}
+
+variable "admin_username" {
+  description = "유저가 0명일 때 부트스트랩할 관리자 username"
+  type        = string
+  default     = "admin"
+}
+
+variable "admin_password" {
+  description = "유저가 0명일 때 부트스트랩할 관리자 password"
   type        = string
   sensitive   = true
 }

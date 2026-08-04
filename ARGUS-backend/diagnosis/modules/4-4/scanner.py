@@ -36,7 +36,9 @@ def _run_screenshot_capture(
     if cfg.get("screenshot_enabled") is False:
         return {"enabled": False, "reason": "disabled_by_config"}
 
-    module_path = ctx.data_dir.parent / "screenshot" / "modules" / "4-4" / "module.py"
+    from app.config import BACKEND_ROOT
+
+    module_path = BACKEND_ROOT / "screenshot" / "modules" / "4-4" / "module.py"
     if not module_path.is_file():
         return {"enabled": False, "reason": "module_missing", "module": str(module_path)}
 

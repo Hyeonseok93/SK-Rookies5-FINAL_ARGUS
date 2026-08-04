@@ -1,4 +1,4 @@
-"""In-memory progress for long-running diagnosis module runs."""
+"""In-memory progress for long-running diagnosis module runs (per-user)."""
 
 from __future__ import annotations
 
@@ -6,20 +6,42 @@ import threading
 from datetime import UTC, datetime
 from typing import Any
 
+from app.workspace import current_user_id
+
 _lock = threading.Lock()
-_cancel_event = threading.Event()
-_state: dict[str, Any] = {
-    "running": False,
-    "section_id": None,
-    "phase": "",
-    "message": "",
-    "endpoints_done": 0,
-    "endpoints_total": 0,
-    "requests_sent": 0,
-    "requests_cap": None,
-    "percent": 0,
-    "updated_at": None,
-}
+_states: dict[str, dict[str, Any]] = {}
+_cancel_events: dict[str, threading.Event] = {}
+
+
+def _uid(user_id: str | None = None) -> str:
+    uid = user_id or current_user_id()
+    if not uid:
+        raise RuntimeError("diagnosis progress user_id is not bound")
+    return uid
+
+
+def _default_state() -> dict[str, Any]:
+    return {
+        "running": False,
+        "section_id": None,
+        "phase": "",
+        "message": "",
+        "endpoints_done": 0,
+        "endpoints_total": 0,
+        "requests_sent": 0,
+        "requests_cap": None,
+        "percent": 0,
+        "updated_at": None,
+    }
+
+
+def _ensure(user_id: str) -> tuple[dict[str, Any], threading.Event]:
+    with _lock:
+        if user_id not in _states:
+            _states[user_id] = _default_state()
+        if user_id not in _cancel_events:
+            _cancel_events[user_id] = threading.Event()
+        return _states[user_id], _cancel_events[user_id]
 
 
 def _compute_percent(
@@ -51,19 +73,31 @@ def _compute_percent(
     return 0
 
 
-def is_cancel_requested() -> bool:
-    return _cancel_event.is_set()
+def is_cancel_requested(user_id: str | None = None) -> bool:
+    uid = _uid(user_id)
+    _, event = _ensure(uid)
+    return event.is_set()
 
 
-def request_cancel(*, message: str = "취소 요청됨…") -> None:
-    _cancel_event.set()
-    update(phase="cancelling", message=message)
+def request_cancel(*, message: str = "취소 요청됨…", user_id: str | None = None) -> None:
+    uid = _uid(user_id)
+    _, event = _ensure(uid)
+    event.set()
+    update(phase="cancelling", message=message, user_id=uid)
 
 
-def reset(*, section_id: str, endpoints_total: int = 0, message: str = "Starting…") -> None:
-    _cancel_event.clear()
+def reset(
+    *,
+    section_id: str,
+    endpoints_total: int = 0,
+    message: str = "Starting…",
+    user_id: str | None = None,
+) -> None:
+    uid = _uid(user_id)
+    state, event = _ensure(uid)
+    event.clear()
     with _lock:
-        _state.update(
+        state.update(
             {
                 "running": True,
                 "section_id": section_id,
@@ -93,61 +127,72 @@ def update(
     requests_cap: int | None = None,
     percent: int | None = None,
     running: bool | None = None,
+    user_id: str | None = None,
 ) -> None:
+    uid = _uid(user_id)
+    state, _ = _ensure(uid)
     with _lock:
         if running is not None:
-            _state["running"] = bool(running)
+            state["running"] = bool(running)
         if phase is not None:
-            _state["phase"] = phase
+            state["phase"] = phase
         if message is not None:
-            _state["message"] = message
+            state["message"] = message
         if endpoints_done is not None:
-            _state["endpoints_done"] = max(0, int(endpoints_done))
+            state["endpoints_done"] = max(0, int(endpoints_done))
         if endpoints_total is not None:
-            _state["endpoints_total"] = max(0, int(endpoints_total))
+            state["endpoints_total"] = max(0, int(endpoints_total))
         if requests_sent is not None:
-            _state["requests_sent"] = max(0, int(requests_sent))
+            state["requests_sent"] = max(0, int(requests_sent))
         if requests_cap is not None:
-            _state["requests_cap"] = requests_cap if requests_cap > 0 else None
+            state["requests_cap"] = requests_cap if requests_cap > 0 else None
         if percent is not None:
-            _state["percent"] = min(99, max(0, int(percent)))
+            state["percent"] = min(99, max(0, int(percent)))
         else:
-            _state["percent"] = _compute_percent(
-                phase=str(_state.get("phase") or ""),
-                endpoints_done=int(_state.get("endpoints_done") or 0),
-                endpoints_total=int(_state.get("endpoints_total") or 0),
+            state["percent"] = _compute_percent(
+                phase=str(state.get("phase") or ""),
+                endpoints_done=int(state.get("endpoints_done") or 0),
+                endpoints_total=int(state.get("endpoints_total") or 0),
             )
-        _state["updated_at"] = datetime.now(UTC).isoformat()
+        state["updated_at"] = datetime.now(UTC).isoformat()
 
 
-def finish(message: str = "Done") -> None:
-    _cancel_event.clear()
+def finish(message: str = "Done", user_id: str | None = None) -> None:
+    uid = _uid(user_id)
+    state, event = _ensure(uid)
+    event.clear()
     with _lock:
-        _state["running"] = False
-        _state["phase"] = "done"
-        _state["message"] = message
-        _state["percent"] = 100
-        _state["updated_at"] = datetime.now(UTC).isoformat()
+        state["running"] = False
+        state["phase"] = "done"
+        state["message"] = message
+        state["percent"] = 100
+        state["updated_at"] = datetime.now(UTC).isoformat()
 
 
-def cancel_finish(message: str = "Cancelled") -> None:
-    _cancel_event.clear()
+def cancel_finish(message: str = "Cancelled", user_id: str | None = None) -> None:
+    uid = _uid(user_id)
+    state, event = _ensure(uid)
+    event.clear()
     with _lock:
-        _state["running"] = False
-        _state["phase"] = "cancelled"
-        _state["message"] = message
-        _state["updated_at"] = datetime.now(UTC).isoformat()
+        state["running"] = False
+        state["phase"] = "cancelled"
+        state["message"] = message
+        state["updated_at"] = datetime.now(UTC).isoformat()
 
 
-def fail(message: str) -> None:
-    _cancel_event.clear()
+def fail(message: str, user_id: str | None = None) -> None:
+    uid = _uid(user_id)
+    state, event = _ensure(uid)
+    event.clear()
     with _lock:
-        _state["running"] = False
-        _state["phase"] = "error"
-        _state["message"] = message
-        _state["updated_at"] = datetime.now(UTC).isoformat()
+        state["running"] = False
+        state["phase"] = "error"
+        state["message"] = message
+        state["updated_at"] = datetime.now(UTC).isoformat()
 
 
-def snapshot() -> dict[str, Any]:
+def snapshot(user_id: str | None = None) -> dict[str, Any]:
+    uid = _uid(user_id)
+    state, _ = _ensure(uid)
     with _lock:
-        return dict(_state)
+        return dict(state)

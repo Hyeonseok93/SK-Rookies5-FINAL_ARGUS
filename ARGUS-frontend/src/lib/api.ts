@@ -27,16 +27,59 @@ import type {
   DiagnosisRunSectionResponse,
   DiagnosisRunSectionRequest,
 } from "../types";
+import { authHeaders, clearSession, setSession, type AuthUser } from "./auth";
 
 const BASE = "/api";
 
+export class AuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AuthError";
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init);
+  const headers = authHeaders(init?.headers);
+  const res = await fetch(`${BASE}${path}`, { ...init, headers });
+  if (res.status === 401 && !path.startsWith("/auth/")) {
+    clearSession();
+    throw new AuthError("Authentication required");
+  }
   if (!res.ok) {
     const detail = await res.text();
     throw new Error(detail || `HTTP ${res.status}`);
   }
   return res.json() as Promise<T>;
+}
+
+export type AuthTokenResponse = {
+  access_token: string;
+  token_type: string;
+  user: AuthUser;
+};
+
+export async function login(username: string, password: string): Promise<AuthTokenResponse> {
+  const res = await request<AuthTokenResponse>("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  setSession(res.access_token, res.user);
+  return res;
+}
+
+export async function register(username: string, password: string): Promise<AuthTokenResponse> {
+  const res = await request<AuthTokenResponse>("/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  setSession(res.access_token, res.user);
+  return res;
+}
+
+export function fetchMe(): Promise<AuthUser> {
+  return request<AuthUser>("/auth/me");
 }
 
 export function fetchHealth(): Promise<{ status: string; service: string }> {
@@ -111,7 +154,11 @@ export function diagnosisReportPdfUrl(sectionId: string): string {
 
 /** 결과서 PDF 를 내려받는다(blob 로 받아 파일 저장). */
 export async function downloadDiagnosisReportPdf(sectionId: string): Promise<void> {
-  const res = await fetch(diagnosisReportPdfUrl(sectionId));
+  const res = await fetch(diagnosisReportPdfUrl(sectionId), { headers: authHeaders() });
+  if (res.status === 401) {
+    clearSession();
+    throw new AuthError("Authentication required");
+  }
   if (!res.ok) {
     const detail = await res.text();
     throw new Error(detail || `HTTP ${res.status}`);
@@ -291,7 +338,11 @@ export function diagnosisEvidenceReportUrl(sectionId: string): string {
 
 /** 증거 스크린샷 포함 결과서(PDF) 다운로드 — 현재 2-1 전용 (report/document 엔드포인트). */
 export async function downloadDiagnosisEvidenceReport(sectionId: string): Promise<void> {
-  const res = await fetch(diagnosisEvidenceReportUrl(sectionId));
+  const res = await fetch(diagnosisEvidenceReportUrl(sectionId), { headers: authHeaders() });
+  if (res.status === 401) {
+    clearSession();
+    throw new AuthError("Authentication required");
+  }
   if (!res.ok) {
     const detail = await res.text();
     throw new Error(detail || `HTTP ${res.status}`);
@@ -324,7 +375,13 @@ export function fetchDiagnosisReport(sectionId: string): Promise<DiagnosisSectio
 }
 
 export async function downloadDiagnosisPdf(sectionId: string): Promise<void> {
-  const res = await fetch(`${BASE}/diagnosis/modules/${encodeURIComponent(sectionId)}/report.pdf`);
+  const res = await fetch(`${BASE}/diagnosis/modules/${encodeURIComponent(sectionId)}/report.pdf`, {
+    headers: authHeaders(),
+  });
+  if (res.status === 401) {
+    clearSession();
+    throw new AuthError("Authentication required");
+  }
   if (!res.ok) {
     const detail = await res.text();
     throw new Error(detail || `HTTP ${res.status}`);
@@ -341,7 +398,13 @@ export async function downloadDiagnosisPdf(sectionId: string): Promise<void> {
 }
 export async function downloadDiagnosisFinalReport(sectionId: string): Promise<void> {
   const encodedSectionId = encodeURIComponent(sectionId);
-  const res = await fetch(`${BASE}/diagnosis/modules/${encodedSectionId}/final-report.pdf`);
+  const res = await fetch(`${BASE}/diagnosis/modules/${encodedSectionId}/final-report.pdf`, {
+    headers: authHeaders(),
+  });
+  if (res.status === 401) {
+    clearSession();
+    throw new AuthError("Authentication required");
+  }
   if (!res.ok) {
     let detail = await res.text();
     try {

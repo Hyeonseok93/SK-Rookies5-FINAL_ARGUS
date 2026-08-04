@@ -295,7 +295,8 @@ def capture_latest(
     force_replay: bool = False,
 ) -> list[dict[str, Any]]:
     backend_root = _default_backend_root()
-    data_dir = backend_root / "data"
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+    data_dir = Path(env) if env else (backend_root / "data")
     resolved_config = config_path or Path(
         os.environ.get("CONFIG_PATH") or backend_root / "config.yaml"
     )
@@ -363,16 +364,18 @@ def main() -> int:
         )
 
     backend_root = _default_backend_root()
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+    data_dir = Path(env) if env else (backend_root / "data")
     parser = argparse.ArgumentParser(description="Capture 2-1 malicious upload evidence screenshots")
     parser.add_argument(
         "--report",
         type=Path,
-        default=backend_root / "data" / "report" / "2-1" / "latest.yaml",
+        default=data_dir / "report" / "2-1" / "latest.yaml",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=backend_root / "data" / "report" / "2-1" / "evidence",
+        default=data_dir / "report" / "2-1" / "evidence",
     )
     parser.add_argument("--limit", type=int, default=3)
     parser.add_argument(

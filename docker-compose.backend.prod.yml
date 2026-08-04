@@ -52,21 +52,24 @@ services:
       - -config
       - api.addrs.addr.regex=true
       - -config
-      - api.disablekey=true
-    ports:
-      - "8090:8090"
+      - api.key=${ZAP_API_KEY}
+    # Internal only — do not publish 8090 on the host
+    expose:
+      - "8090"
     volumes:
       - /opt/argus/data:/app/data:ro
     healthcheck:
-      test: [ "CMD-SHELL", "curl -sf http://127.0.0.1:8090/JSON/core/view/version/ || exit 1" ]
+      test: [ "CMD-SHELL", "curl -sf \"http://127.0.0.1:8090/JSON/core/view/version/?apikey=$$ZAP_API_KEY\" || exit 1" ]
       interval: 5s
       timeout: 5s
       retries: 18
       start_period: 40s
+    environment:
+      ZAP_API_KEY: ${ZAP_API_KEY}
     restart: unless-stopped
 
   backend:
-    image: ${ECR_REGISTRY}/argus-dev-backend:${IMAGE_TAG:-latest}
+    image: ${ECR_REGISTRY}/argus-${ENVIRONMENT:-dev}-backend:${IMAGE_TAG:-latest}
     container_name: argus-backend
     # ALB backend 타겟그룹(:8001) → 이 호스트 포트로 전달됨 (terraform alb.tf/variables.tf backend_port 참고)
     ports:
@@ -76,6 +79,11 @@ services:
     environment:
       CONFIG_PATH: /app/config.docker.yaml
       ZAP_PROXY: http://zap:8090
+      ZAP_API_KEY: ${ZAP_API_KEY}
+      ARGUS_ENV: production
+      ARGUS_FAIL_CLOSED_SECRETS: "true"
+      # Opt-in only — leave unset/false so public /register stays locked in prod
+      ARGUS_ALLOW_PUBLIC_REGISTER: ${ARGUS_ALLOW_PUBLIC_REGISTER:-false}
     volumes:
       - /opt/argus/data:/app/data
       - /opt/argus/data/config.yaml:/app/config.yaml

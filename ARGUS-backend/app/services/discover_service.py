@@ -33,6 +33,7 @@ from app.services.zap_util import (
     replay_inventory_probes,
     run_ajax_spider,
     run_spider,
+    zap_exclusive,
     ZapNotAvailableError,
 )
 from inventory.enrich_from_traffic import enrich_tree_from_built_probes, enrich_tree_from_observations
@@ -134,6 +135,26 @@ def discover_inventory_sync(
     ajax_spider_enabled: bool | None = None,
     seed_requestor: bool | None = None,
 ) -> dict[str, Any]:
+    with zap_exclusive():
+        return _discover_inventory_sync_locked(
+            tree,
+            data_dir=data_dir,
+            config_path=config_path,
+            spider_enabled=spider_enabled,
+            ajax_spider_enabled=ajax_spider_enabled,
+            seed_requestor=seed_requestor,
+        )
+
+
+def _discover_inventory_sync_locked(
+    tree: ApiTree,
+    *,
+    data_dir: Path,
+    config_path: Path,
+    spider_enabled: bool | None = None,
+    ajax_spider_enabled: bool | None = None,
+    seed_requestor: bool | None = None,
+) -> dict[str, Any]:
     started = time.monotonic()
     raw_cfg = _load_raw_config(config_path)
     discover_progress.reset(total_steps=6)
@@ -207,11 +228,21 @@ def discover_inventory_sync(
                 target = probe_url(base)
                 try:
                     zap.openapi.import_file(str(openapi_path), target)
-                except Exception:
+                except Exception as exc:
+                    logger.warning(
+                        "ZAP OpenAPI import_file failed path=%s target=%s: %s",
+                        openapi_path,
+                        target,
+                        exc,
+                    )
                     try:
                         zap.openapi.import_url(f"{target}/v3/api-docs", target)
-                    except Exception:
-                        pass
+                    except Exception as exc2:
+                        logger.warning(
+                            "ZAP OpenAPI import_url fallback failed target=%s: %s",
+                            target,
+                            exc2,
+                        )
 
     # Step 3 — replay every endpoint (GET/POST/PUT/PATCH/DELETE) through ZAP
     discover_progress.update(

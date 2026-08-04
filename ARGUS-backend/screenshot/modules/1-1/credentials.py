@@ -1,13 +1,13 @@
 """Saved test account loader for 1-1 CSRF evidence replay.
 
-The frontend stores diagnosis test accounts in ``backend/data/test-accounts.json``.
-This module reads that shared file instead of embedding project-specific
-credentials in screenshot code.
+Reads the current workspace ``test-accounts.json`` (prefer ``ARGUS_DATA_DIR``).
+Encrypted ``enc:`` passwords are decrypted when the crypto helper is available.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,8 +20,22 @@ class ReplayCredential:
 
 
 def _data_dir() -> Path:
-    # Docker: /app/screenshot/modules/1-1/credentials.py -> /app/data
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+    if env:
+        return Path(env)
+    # Docker: /app/screenshot/modules/1-1/credentials.py -> /app/data (legacy fallback)
     return Path(__file__).resolve().parents[3] / "data"
+
+
+def _decrypt_password(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        from app.credentials_crypto import decrypt_secret
+
+        return decrypt_secret(value)
+    except Exception:
+        return value
 
 
 def _normalize_role(value: str | None) -> str:
@@ -41,7 +55,7 @@ def saved_credentials_for_role(role: str | None) -> list[ReplayCredential]:
         if not isinstance(account, dict):
             continue
         email = str(account.get("email") or "").strip()
-        password = str(account.get("password") or "")
+        password = _decrypt_password(str(account.get("password") or ""))
         if not email or not password:
             continue
         account_role = _normalize_role(

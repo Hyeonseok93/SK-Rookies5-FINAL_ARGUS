@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.deps import UserDataDir
 from app.schemas import (
     SaveTransferEndpointsRequest,
     SaveTransferEndpointsResponse,
@@ -17,21 +18,26 @@ from app.services.transfer_endpoints_service import (
 router = APIRouter(prefix="/download-endpoints", tags=["download-endpoints"])
 
 
-def _resolved_payload() -> list[dict[str, str]]:
-    return dashboard_transfer_entries("download")
-
-
 @router.get("", response_model=TransferEndpointsResponse)
-def get_download_endpoints() -> TransferEndpointsResponse:
-    data = load_transfer_endpoints("download")
-    resolved = [TransferEndpointResolved(**row) for row in _resolved_payload()]
+def get_download_endpoints(data_dir: UserDataDir) -> TransferEndpointsResponse:
+    data = load_transfer_endpoints("download", data_dir)
+    resolved = [
+        TransferEndpointResolved(**row)
+        for row in dashboard_transfer_entries("download", data_dir=data_dir)
+    ]
     return TransferEndpointsResponse(endpoints=data["endpoints"], resolved=resolved)
 
 
 @router.put("", response_model=SaveTransferEndpointsResponse)
-def put_download_endpoints(body: SaveTransferEndpointsRequest) -> SaveTransferEndpointsResponse:
-    data = save_transfer_endpoints("download", [e.model_dump() for e in body.endpoints])
-    resolved = [TransferEndpointResolved(**row) for row in _resolved_payload()]
+def put_download_endpoints(
+    body: SaveTransferEndpointsRequest,
+    data_dir: UserDataDir,
+) -> SaveTransferEndpointsResponse:
+    data = save_transfer_endpoints("download", [e.model_dump() for e in body.endpoints], data_dir)
+    resolved = [
+        TransferEndpointResolved(**row)
+        for row in dashboard_transfer_entries("download", data_dir=data_dir)
+    ]
     count = len(data["endpoints"])
     return SaveTransferEndpointsResponse(
         ok=True,

@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from app.services.auth_probe_service import resolve_account_auths
-from app.services.test_accounts_service import DATA_DIR, load_test_accounts
+from app.services.test_accounts_service import load_test_accounts
+from app.workspace import require_data_dir
 from inventory.auth_util import auth_headers
 
 
@@ -18,14 +19,15 @@ def all_account_auths_with_meta(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     raw = raw_config or {}
     auth_cfg = raw.get("auth") or {}
-    accounts = load_test_accounts().get("accounts") or []
+    data_dir = require_data_dir(data_dir)
+    accounts = load_test_accounts(data_dir).get("accounts") or []
     if not accounts:
         return [], {"source": "none", "sessions": 0}
 
     return resolve_account_auths(
         auth_cfg,
         accounts,
-        data_dir=data_dir or DATA_DIR,
+        data_dir=data_dir,
         refresh=refresh,
     )
 

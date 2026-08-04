@@ -210,16 +210,18 @@ def main() -> int:
         )
 
     backend_root = _default_backend_root()
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+    data_dir = Path(env) if env else (backend_root / "data")
     parser = argparse.ArgumentParser(description="Capture 1-5 redirect/CORS/XSS evidence screenshots")
     parser.add_argument(
         "--report",
         type=Path,
-        default=backend_root / "data" / "report" / "1-5" / "latest.yaml",
+        default=data_dir / "report" / "1-5" / "latest.yaml",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=backend_root / "data" / "report" / "1-5" / "evidence",
+        default=data_dir / "report" / "1-5" / "evidence",
     )
     parser.add_argument("--limit", type=int, default=8)
     args = parser.parse_args()

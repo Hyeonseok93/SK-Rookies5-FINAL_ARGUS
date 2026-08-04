@@ -26,11 +26,16 @@ resource "aws_secretsmanager_secret" "app" {
 resource "aws_secretsmanager_secret_version" "app" {
   secret_id = aws_secretsmanager_secret.app.id
 
-  # 실제 키 목록은 백엔드(김어진) 파트와 협의해 확정.
+  # ARGUS app currently uses file-backed state (no DB/Redis runtime).
+  # DB_PASSWORD / REDIS_PASSWORD are reserved/unused placeholders kept for infra continuity.
   secret_string = jsonencode({
-    DB_PASSWORD    = var.db_password
-    JWT_SECRET     = var.jwt_secret
-    REDIS_PASSWORD = var.redis_password
+    DB_PASSWORD      = var.db_password      # reserved/unused by ARGUS FastAPI app
+    REDIS_PASSWORD   = var.redis_password   # reserved/unused by ARGUS FastAPI app
+    JWT_SECRET       = var.jwt_secret
+    CREDENTIALS_KEY  = var.credentials_key
+    ZAP_API_KEY      = var.zap_api_key
+    ADMIN_USERNAME   = var.admin_username
+    ADMIN_PASSWORD   = var.admin_password
   })
 }
 

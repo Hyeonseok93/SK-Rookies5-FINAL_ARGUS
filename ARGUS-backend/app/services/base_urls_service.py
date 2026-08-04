@@ -7,12 +7,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
-import yaml
-
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-BACKEND_ROOT = DATA_DIR.parent
-BASE_URLS_PATH = DATA_DIR / "base-urls.json"
-CONFIG_PATHS = (BACKEND_ROOT / "config.yaml", BACKEND_ROOT / "config.docker.yaml")
 BASE_URL_KINDS = frozenset({"api", "frontend", "api-and-frontend"})
 
 
@@ -54,9 +48,8 @@ def _target_name(url: str, index: int) -> str:
     return f"target-{index + 1}"
 
 
-def _patch_config_payload(
-    raw: dict[str, Any], entries: list[dict[str, Any]], *, docker: bool
-) -> dict[str, Any]:
+def apply_base_urls_to_raw_config(raw: dict[str, Any], entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge dashboard base URLs into an in-memory config dict (no shared yaml write)."""
     payload = dict(raw)
     inventory = dict(payload.get("inventory") or {})
     markdown = dict(inventory.get("markdown") or {})
@@ -72,9 +65,10 @@ def _patch_config_payload(
         for entry in entries
         if entry.get("kind") in {"api", "api-and-frontend"}
     ]
+    docker = os.path.exists("/.dockerenv")
+    target_urls = [_docker_host_url(url) if docker else url for url in backend_urls]
     frontend_url = frontend_urls[0] if frontend_urls else ""
 
-    target_urls = [_docker_host_url(url) if docker else url for url in backend_urls]
     payload["targets"] = [
         {"name": _target_name(url, index), "base_url": url}
         for index, url in enumerate(target_urls)
@@ -99,24 +93,11 @@ def _patch_config_payload(
     return payload
 
 
-def sync_config_files(urls: list[dict[str, Any]]) -> None:
-    entries = [item for item in urls if item.get("url")]
-
-    for path in CONFIG_PATHS:
-        if not path.is_file():
-            continue
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        patched = _patch_config_payload(raw, entries, docker=path.name == "config.docker.yaml")
-        path.write_text(
-            yaml.safe_dump(patched, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
-
-
-def load_base_urls() -> dict[str, Any]:
+def load_base_urls(data_dir: Path) -> dict[str, Any]:
     urls: list[dict[str, Any]] = []
-    if BASE_URLS_PATH.is_file():
-        raw = json.loads(BASE_URLS_PATH.read_text(encoding="utf-8"))
+    path = data_dir / "base-urls.json"
+    if path.is_file():
+        raw = json.loads(path.read_text(encoding="utf-8"))
         for entry in raw.get("urls", []):
             normalized = _normalize_entry(entry)
             if normalized:
@@ -124,28 +105,30 @@ def load_base_urls() -> dict[str, Any]:
     return {"urls": urls}
 
 
-def save_base_urls(urls: list[dict[str, Any]]) -> dict[str, Any]:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+def save_base_urls(data_dir: Path, urls: list[dict[str, Any]]) -> dict[str, Any]:
+    data_dir.mkdir(parents=True, exist_ok=True)
     normalized: list[dict[str, Any]] = []
     for entry in urls:
         item = _normalize_entry(entry)
         if item:
             normalized.append(item)
     payload = {"urls": normalized}
-    BASE_URLS_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    sync_config_files(normalized)
-    return load_base_urls()
+    (data_dir / "base-urls.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return load_base_urls(data_dir)
 
 
-def resolved_base_url_strings() -> list[str]:
-    return [u["url"] for u in load_base_urls()["urls"]]
+def resolved_base_url_strings(data_dir: Path) -> list[str]:
+    return [u["url"] for u in load_base_urls(data_dir)["urls"]]
 
 
-def resolved_base_urls_by_kind() -> tuple[list[str], list[str]]:
+def resolved_base_urls_by_kind(data_dir: Path) -> tuple[list[str], list[str]]:
     """Return (api bases, frontend bases) without guessing from ports or names."""
     api: list[str] = []
     frontend: list[str] = []
-    for entry in load_base_urls()["urls"]:
+    for entry in load_base_urls(data_dir)["urls"]:
         url = _runtime_url(str(entry["url"]))
         kind = entry.get("kind") or "api"
         if kind in {"api", "api-and-frontend"} and url not in api:

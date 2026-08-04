@@ -1,3 +1,9 @@
 {
-  "endpoints": []
+  "endpoints": [
+    {
+      "id": "a114c6ea-e1a9-4685-bf1b-30c0c06a2a19",
+      "url": "/api/v1/report/integrated",
+      "method": "POST"
+    }
+  ]
 }

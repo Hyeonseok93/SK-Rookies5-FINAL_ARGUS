@@ -39,15 +39,18 @@ import { LoginEntriesPanel } from "./components/LoginEntriesPanel";
 import { VerifyResultsPanel } from "./components/VerifyResultsPanel";
 import { VerifyStartDialog } from "./components/VerifyStartDialog";
 import { DiagnosisPage } from "./components/DiagnosisPage";
+import { LoginPage } from "./components/LoginPage";
 import { OutcomeTag } from "./components/OutcomeTag";
 import { EndpointTable } from "./components/EndpointTable";
 import { Panel, StatCard } from "./components/ui";
 import {
+  AuthError,
   buildInventory,
   fetchBaseUrls,
   fetchDiscoverProgress,
   fetchEndpoints,
   fetchHealth,
+  fetchMe,
   fetchSourceOptions,
   fetchStats,
   fetchTestAccounts,
@@ -63,6 +66,7 @@ import {
   saveTestAccounts,
   verifyInventory,
 } from "./lib/api";
+import { clearSession, getStoredUser, getToken, type AuthUser } from "./lib/auth";
 import { DEFAULT_VERIFY_OPTIONS, type VerifyOptions } from "./lib/verifyOptions";
 import type {
   BaseUrlEntry,
@@ -142,6 +146,53 @@ function targetLines(targets: Record<string, number>): string[] {
 type AppPage = "attack-surface" | "diagnosis";
 
 function App() {
+  const [user, setUser] = useState<AuthUser | null>(() => (getToken() ? getStoredUser() : null));
+  const [authChecked, setAuthChecked] = useState(() => !getToken());
+
+  useEffect(() => {
+    if (!getToken()) {
+      setAuthChecked(true);
+      return;
+    }
+    let cancelled = false;
+    fetchMe()
+      .then((me) => {
+        if (!cancelled) setUser(me);
+      })
+      .catch(() => {
+        clearSession();
+        if (!cancelled) setUser(null);
+      })
+      .finally(() => {
+        if (!cancelled) setAuthChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!authChecked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#0b1220] text-slate-300">
+        Checking session…
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginPage onAuthed={setUser} />;
+  }
+
+  return <AuthenticatedApp user={user} onLogout={() => { clearSession(); setUser(null); }} />;
+}
+
+function AuthenticatedApp({
+  user,
+  onLogout,
+}: {
+  user: AuthUser;
+  onLogout: () => void;
+}) {
   const [page, setPage] = useState<AppPage>("attack-surface");
   const [stats, setStats] = useState<InventoryStats>(EMPTY_STATS);
   const [endpoints, setEndpoints] = useState<EndpointSummary[]>([]);
@@ -627,7 +678,8 @@ function App() {
             onClick={() => setPage("diagnosis")}
           />
         </nav>
-        <div className="border-t border-cyber-border p-4 text-xs text-cyber-muted">
+        <div className="space-y-3 border-t border-cyber-border p-4 text-xs text-cyber-muted">
+          <div className="truncate text-white/80">{user.username}</div>
           <div className="flex items-center gap-2">
             <span
               className={`h-2 w-2 rounded-full ${
@@ -636,6 +688,13 @@ function App() {
             />
             {online === null ? "연결 확인 중…" : online ? "Backend online" : "Backend offline"}
           </div>
+          <button
+            type="button"
+            onClick={onLogout}
+            className="w-full rounded-lg border border-cyber-border px-3 py-1.5 text-left text-cyber-muted transition hover:border-cyber-danger/40 hover:text-cyber-danger"
+          >
+            Sign out
+          </button>
         </div>
       </aside>
 

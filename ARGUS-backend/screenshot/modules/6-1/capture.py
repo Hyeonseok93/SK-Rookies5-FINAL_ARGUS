@@ -310,7 +310,10 @@ def _load_report_summary_module():
 
 
 def default_data_dir() -> Path:
-    return _BACKEND_ROOT / "data"
+    import os
+
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+    return Path(env) if env else (_BACKEND_ROOT / "data")
 
 
 def default_report_path(data_dir: Path | None = None) -> Path:

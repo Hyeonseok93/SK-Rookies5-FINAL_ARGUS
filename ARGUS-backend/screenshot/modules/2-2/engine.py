@@ -119,7 +119,10 @@ def _authenticate_browser_context(context, case: EvidenceCase) -> None:
 
     account_id = str(login.get("account_id") or "")
     email = str(login.get("email") or "")
-    credentials = load_replay_credentials(Path(__file__).resolve().parents[3] / "data")
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+    credentials = load_replay_credentials(
+        Path(env) if env else Path(__file__).resolve().parents[3] / "data"
+    )
     credential = next(
         (
             item

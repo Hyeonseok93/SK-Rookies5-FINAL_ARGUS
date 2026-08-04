@@ -1,28 +1,22 @@
 app_name: ''
 targets:
 - name: target-1
-  base_url: http://host.docker.internal
-- name: api-2
-  base_url: http://host.docker.internal:8080
-- name: admin-api
-  base_url: http://host.docker.internal:8081
+  base_url: http://localhost:8000
 inventory:
   markdown:
     enabled: false
     path: ''
-    include_frontend_routes: true
-    frontend_base_url: http://localhost:5173
+    include_frontend_routes: false
+    frontend_base_url: ''
   openapi:
     enabled: false
     path: ''
-    base_url: http://host.docker.internal
+    base_url: http://localhost:8000
   url_list:
     enabled: false
     path: data/inventory-urls.json
   base_urls:
-  - http://host.docker.internal
-  - http://host.docker.internal:8080
-  - http://host.docker.internal:8081
+  - http://localhost:8000
 zap:
   proxy: http://127.0.0.1:8090
   api_key: ''

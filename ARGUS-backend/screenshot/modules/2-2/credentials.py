@@ -14,6 +14,17 @@ class ReplayCredential:
     password: str
 
 
+def _decrypt_password(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        from app.credentials_crypto import decrypt_secret
+
+        return decrypt_secret(value)
+    except Exception:
+        return value
+
+
 def load_replay_credentials(data_dir: Path) -> list[ReplayCredential]:
     path = data_dir / "test-accounts.json"
     try:
@@ -23,7 +34,7 @@ def load_replay_credentials(data_dir: Path) -> list[ReplayCredential]:
     credentials: list[ReplayCredential] = []
     for index, row in enumerate(payload.get("accounts") or []):
         identifier = str(row.get("email") or row.get("username") or row.get("id_value") or "")
-        password = str(row.get("password") or "")
+        password = _decrypt_password(str(row.get("password") or ""))
         if identifier and password:
             credentials.append(
                 ReplayCredential(

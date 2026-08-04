@@ -8,25 +8,25 @@ from typing import Any
 import yaml
 
 from app.services.test_accounts_service import load_test_accounts
+from app.workspace import require_data_dir
 from diagnosis.replay.runner import ReplayRunResult, run_replay_plan
 from diagnosis.replay.schema import ReplayPlan
 from diagnosis.context import DiagnosisContext
 from diagnosis.paths import resolve_report_path, section_evidence_dir
 from diagnosis.registry import get_module
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
-
-def _report_path(section_id: str, module_dir: Path) -> Path:
-    ctx = DiagnosisContext(data_dir=DATA_DIR)
+def _report_path(section_id: str, module_dir: Path, data_dir: Path) -> Path:
+    ctx = DiagnosisContext(data_dir=data_dir)
     return resolve_report_path(ctx=ctx, section_id=section_id, module_dir=module_dir)
 
 
-def list_replayable_findings(section_id: str) -> list[dict[str, Any]]:
+def list_replayable_findings(section_id: str, *, data_dir: Path | None = None) -> list[dict[str, Any]]:
+    data_dir = require_data_dir(data_dir)
     mod = get_module(section_id)
     if mod is None:
         return []
-    path = _report_path(section_id, mod.module_dir)
+    path = _report_path(section_id, mod.module_dir, data_dir)
     if not path.is_file():
         return []
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -53,22 +53,24 @@ def list_replayable_findings(section_id: str) -> list[dict[str, Any]]:
 def run_section_replay(
     section_id: str,
     *,
+    data_dir: Path | None = None,
     finding_id: str | None = None,
     raw_config: dict[str, Any] | None = None,
     use_playwright: bool = True,
 ) -> list[ReplayRunResult]:
+    data_dir = require_data_dir(data_dir)
     mod = get_module(section_id)
     if mod is None:
         raise KeyError(f"Unknown section: {section_id}")
 
-    artifacts_root = section_evidence_dir(DATA_DIR, section_id)
-    findings = list_replayable_findings(section_id)
+    artifacts_root = section_evidence_dir(data_dir, section_id)
+    findings = list_replayable_findings(section_id, data_dir=data_dir)
     if finding_id:
         findings = [f for f in findings if f.get("finding_id") == finding_id]
     if not findings:
         return []
 
-    accounts = load_test_accounts().get("accounts") or []
+    accounts = load_test_accounts(data_dir).get("accounts") or []
     results: list[ReplayRunResult] = []
     for row in findings:
         plan = ReplayPlan.from_dict(row["replay"])

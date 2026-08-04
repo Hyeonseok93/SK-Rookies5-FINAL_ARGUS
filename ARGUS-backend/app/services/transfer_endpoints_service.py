@@ -12,18 +12,19 @@ from urllib.parse import parse_qs, urlparse
 from diagnosis.replay.normalize import collect_probe_base_urls
 from inventory.probe_build import frontend_gateway_path
 from app.services.zap_util import probe_url
+from app.workspace import require_data_dir
 
 TransferKind = Literal["upload", "download"]
 
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_PATHS: dict[TransferKind, Path] = {
-    "upload": DATA_DIR / "upload-endpoints.json",
-    "download": DATA_DIR / "download-endpoints.json",
-}
 _DEFAULT_METHOD: dict[TransferKind, str] = {
     "upload": "POST",
     "download": "GET",
 }
+
+
+def _path_for(data_dir: Path, kind: TransferKind) -> Path:
+    name = "upload-endpoints.json" if kind == "upload" else "download-endpoints.json"
+    return data_dir / name
 
 
 def _default_bases(raw_config: dict[str, Any] | None) -> list[str]:
@@ -97,8 +98,12 @@ def _normalize_entry(raw: dict[str, Any], *, kind: TransferKind) -> dict[str, st
     }
 
 
-def load_transfer_endpoints(kind: TransferKind) -> dict[str, Any]:
-    path = _PATHS[kind]
+def load_transfer_endpoints(
+    kind: TransferKind,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    data_dir = require_data_dir(data_dir)
+    path = _path_for(data_dir, kind)
     endpoints: list[dict[str, str]] = []
     if path.is_file():
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -109,28 +114,34 @@ def load_transfer_endpoints(kind: TransferKind) -> dict[str, Any]:
     return {"endpoints": endpoints}
 
 
-def save_transfer_endpoints(kind: TransferKind, endpoints: list[dict[str, Any]]) -> dict[str, Any]:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+def save_transfer_endpoints(
+    kind: TransferKind,
+    endpoints: list[dict[str, Any]],
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    data_dir = require_data_dir(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
     normalized: list[dict[str, str]] = []
     for entry in endpoints:
         item = _normalize_entry(entry, kind=kind)
         if item:
             normalized.append(item)
     payload = {"endpoints": normalized}
-    _PATHS[kind].write_text(
+    _path_for(data_dir, kind).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    return load_transfer_endpoints(kind)
+    return load_transfer_endpoints(kind, data_dir)
 
 
 def dashboard_transfer_entries(
     kind: TransferKind,
     raw_config: dict[str, Any] | None = None,
+    data_dir: Path | None = None,
 ) -> list[dict[str, str]]:
     entries: list[dict[str, str]] = []
     seen: set[str] = set()
-    for row in load_transfer_endpoints(kind).get("endpoints", []):
+    for row in load_transfer_endpoints(kind, data_dir).get("endpoints", []):
         raw_url = str(row.get("url") or "").strip()
         if not raw_url:
             continue
@@ -213,13 +224,14 @@ def _download_request_params(row: dict[str, str]) -> list:
 def dashboard_endpoints_as_inventory(
     kind: TransferKind,
     raw_config: dict[str, Any] | None = None,
+    data_dir: Path | None = None,
 ):
     """Convert dashboard rows into inventory Endpoint objects for 2-2."""
     from inventory.schema import Endpoint, InputParam
 
     out: list[Endpoint] = []
     tag = "dashboard-upload" if kind == "upload" else "dashboard-download"
-    for row in dashboard_transfer_entries(kind, raw_config):
+    for row in dashboard_transfer_entries(kind, raw_config, data_dir=data_dir):
         if kind == "upload":
             request_params = [
                 InputParam(

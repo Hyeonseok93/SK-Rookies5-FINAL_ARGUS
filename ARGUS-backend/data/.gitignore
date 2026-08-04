@@ -13,4 +13,9 @@ test-accounts.json
 base-urls.json
 login-endpoints.json
 download-endpoints.json
+upload-endpoints.json
 gradle_dep_files.json
+
+# Multi-user auth + per-user workspaces
+users.json
+users/

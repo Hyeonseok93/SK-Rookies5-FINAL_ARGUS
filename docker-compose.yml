@@ -15,16 +15,17 @@ services:
       - -config
       - api.addrs.addr.regex=true
       - -config
-      - api.disablekey=true
-    ports:
-      - "8090:8090"
+      - api.key=${ZAP_API_KEY:-changeme-zap-key}
+    # No host port publish â€” backend reaches ZAP on the compose network only.
+    expose:
+      - "8090"
     volumes:
-      # backendê°€ ?€?¥í•œ Swagger ?…ë¡œ???Œì¼??ê°™ì? ?ˆë? ê²½ë¡œ?ì„œ ?½ìŠµ?ˆë‹¤.
+      # Shared swagger / inventory data for ZAP (read-only)
       - ./ARGUS-backend/data:/app/data:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: [ "CMD-SHELL", "curl -sf http://127.0.0.1:8090/JSON/core/view/version/ || exit 1" ]
+      test: [ "CMD-SHELL", "curl -sf \"http://127.0.0.1:8090/JSON/core/view/version/?apikey=${ZAP_API_KEY:-changeme-zap-key}\" || exit 1" ]
       interval: 5s
       timeout: 5s
       retries: 18
@@ -41,22 +42,28 @@ services:
       CONFIG_PATH: /app/config.docker.yaml
       ARGUS_PROBE_HOST: host.docker.internal
       ZAP_PROXY: http://zap:8090
-      GITHUB_TOKEN: ${GITHUB_TOKEN}          
+      ZAP_API_KEY: ${ZAP_API_KEY:-changeme-zap-key}
+      JWT_SECRET: ${JWT_SECRET:-argus-dev-jwt-secret-change-me}
+      CREDENTIALS_KEY: ${CREDENTIALS_KEY:-argus-dev-credentials-key-change-me}
+      ARGUS_ALLOW_PUBLIC_REGISTER: ${ARGUS_ALLOW_PUBLIC_REGISTER:-true}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
     volumes:
-      # Zap ?Œí¬?¤í˜?´ìŠ¤ (MD, swagger.json) ???½ê¸° ?„ìš©
+      # Workspace for ZAP workspace files (MD, swagger.json)
       - ..:/workspace:ro
-      # ë¹Œë“œÂ·ì§„ë‹¨ ?°ì¶œë¬?? ì? (uploads, report, api-tree ??
+      # Build / diagnosis outputs (uploads, report, api-tree)
       - ./ARGUS-backend/data:/app/data
-      # ?€?œë³´?œì—???€?¥í•œ base/login ?¤ì •???¸ìŠ¤??config ?Œì¼??ì¦‰ì‹œ ë°˜ì˜?˜ë„ë¡??™ê¸°??
+      # Live-sync base/login settings into host config files
       - ./ARGUS-backend/config.yaml:/app/config.yaml
       - ./ARGUS-backend/config.docker.yaml:/app/config.docker.yaml
-      # FastAPI ??ì½”ë“œ??ê°œë°œ ì¤‘ì—???¸ìŠ¤?¸ì? ?™ê¸°??
+      # Hot-reload FastAPI app code
       - ./ARGUS-backend/app:/app/app
-      # ì§„ë‹¨ ?¨í‚¤ì§€ ?„ì²´ ???¸ìŠ¤?¸ì? ?™ê¸°??(modules ??auth_session_pool ???¬í•¨)
+      # Hot-reload diagnosis package (modules, auth_session_pool, etc.)
       - ./ARGUS-backend/diagnosis:/app/diagnosis
-      # ì¦ê±° ?¤í¬ë¦°ìƒ· ì½”ë“œ ???¸ìŠ¤?¸ì? ?™ê¸°??
+      # Hot-reload screenshot code
       - ./ARGUS-backend/screenshot:/app/screenshot
-      # ê²°ê³¼??PDF) ?ì„± ì½”ë“œ ???¸ìŠ¤?¸ì? ?™ê¸°??
+      # Hot-reload report (PDF) code
       - ./ARGUS-backend/report:/app/report
     extra_hosts:
       - "host.docker.internal:host-gateway"

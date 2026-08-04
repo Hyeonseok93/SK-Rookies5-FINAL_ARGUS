@@ -44,7 +44,9 @@ def _resolve_canvas_url(backend_root: Path) -> str:
     )
     if not frontend_base_url:
         try:
-            tree = json.loads((backend_root / "data" / "api-tree.json").read_text(encoding="utf-8"))
+            env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+            data_dir = Path(env) if env else (backend_root / "data")
+            tree = json.loads((data_dir / "api-tree.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             tree = {}
         for row in tree.get("endpoints") or []:
@@ -116,7 +118,9 @@ def _probe_web(group: dict[str, Any]) -> WebConfigCase:
 def _dependency_lines(backend_root: Path, component: str, version: str) -> list[str]:
     needle = f"{component}:{version}"
     matches: list[str] = []
-    for path in sorted((backend_root / "data" / "uploads").glob("*/deps_*.txt"), reverse=True):
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+    data_dir = Path(env) if env else (backend_root / "data")
+    for path in sorted((data_dir / "uploads").glob("*/deps_*.txt"), reverse=True):
         try:
             for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
                 if needle in line:
@@ -364,9 +368,11 @@ def main() -> int:
             ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", sys.executable, *sys.argv],
         )
     backend_root = _MODULE_DIR.parents[2]
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+    data_dir = Path(env) if env else (backend_root / "data")
     parser = argparse.ArgumentParser(description="Capture 7-4 evidence screenshots")
-    parser.add_argument("--report", type=Path, default=backend_root / "data/report/7-4/latest.yaml")
-    parser.add_argument("--output", type=Path, default=backend_root / "data/report/7-4/evidence")
+    parser.add_argument("--report", type=Path, default=data_dir / "report" / "7-4" / "latest.yaml")
+    parser.add_argument("--output", type=Path, default=data_dir / "report" / "7-4" / "evidence")
     parser.add_argument("--web-limit", type=int, default=None,
                         help="Cap web cases (default: all distinct cases)")
     parser.add_argument("--sca-limit", type=int, default=None,

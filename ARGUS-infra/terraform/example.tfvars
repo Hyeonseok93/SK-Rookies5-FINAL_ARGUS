@@ -10,6 +10,10 @@
 #   3) *.auto.tfvars는 terraform plan/apply 시 자동 로드된다 (-var-file 불필요)
 # ────────────────────────────────────────────────────────────────────────────
 
-db_password    = "changeme-db-password"
-jwt_secret     = "changeme-jwt-secret"
-redis_password = "changeme-redis-password"
+db_password     = "changeme-db-password"      # reserved/unused by app
+jwt_secret      = "changeme-jwt-secret"
+redis_password  = "changeme-redis-password"   # reserved/unused by app
+credentials_key = "changeme-credentials-key"
+zap_api_key     = "changeme-zap-api-key"
+admin_username  = "admin"
+admin_password  = "changeme-admin-password"

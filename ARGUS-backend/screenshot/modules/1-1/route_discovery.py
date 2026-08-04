@@ -111,7 +111,8 @@ def _docker_reachable_url(raw: str) -> str:
 
 
 def _api_tree_paths() -> list[Path]:
-    data_dir = _backend_root() / "data"
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+    data_dir = Path(env) if env else (_backend_root() / "data")
     return [
         data_dir / "api-tree-verified.json",
         data_dir / "api-tree-ready.json",

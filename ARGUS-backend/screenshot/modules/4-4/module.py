@@ -370,8 +370,9 @@ def _build_standalone_context() -> DiagnosisContext:
         if not raw["auth"].get("accounts"):
             raw["auth"]["accounts"] = test_accs
 
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
     return DiagnosisContext(
-        data_dir=BACKEND_ROOT / "data",
+        data_dir=Path(env) if env else (BACKEND_ROOT / "data"),
         config=config_to_inventory_dict(cfg),
         raw_config=raw,
     )

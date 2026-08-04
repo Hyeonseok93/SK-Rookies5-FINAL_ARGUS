@@ -11,8 +11,7 @@ from diagnosis.replay.normalize import collect_probe_base_urls, probe_base_key, 
 from app.services.zap_util import probe_url
 from inventory.schema import ApiTree, Endpoint, build_full_url
 from inventory.load import load_api_tree
-
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+from app.workspace import require_data_dir
 
 
 def _load_raw_config() -> dict[str, Any]:
@@ -136,7 +135,7 @@ def discover_login_entries(
     if raw_config is None:
         raw_config = _load_raw_config()
 
-    tree = load_api_tree(data_dir or DATA_DIR)
+    tree = load_api_tree(require_data_dir(data_dir))
     if not tree or not tree.endpoints:
         return []
 
@@ -218,6 +217,6 @@ def resolve_login_entries(
             }
         )
     collected.extend(discover_login_entries(auth_cfg, raw_config, data_dir=data_dir))
-    collected.extend(dashboard_login_entries(raw_config))
+    collected.extend(dashboard_login_entries(raw_config, data_dir=data_dir))
     merged = dedupe_login_entries(collected)
     return filter_login_entries_by_probe_bases(merged, raw_config)

@@ -3,15 +3,31 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import threading
 import time
+import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import urlparse
 
 from inventory.net import _probe_host, probe_url as _probe_url_impl
+
+logger = logging.getLogger(__name__)
+
+# One shared ZAP daemon — serialize diagnosis/discover jobs across users.
+_ZAP_EXCLUSIVE_LOCK = threading.Lock()
+
+
+@contextmanager
+def zap_exclusive() -> Iterator[None]:
+    """Hold the global ZAP lock for the duration of a scan/discover job."""
+    with _ZAP_EXCLUSIVE_LOCK:
+        yield
 
 
 def probe_url(url: str) -> str:
@@ -29,8 +45,15 @@ class ZapNotAvailableError(Exception):
     pass
 
 
+def zap_api_key() -> str:
+    return (os.environ.get("ZAP_API_KEY") or "").strip()
+
+
 def is_zap_running(proxy: str, timeout: int = 3) -> bool:
     api = f"{proxy.rstrip('/')}/JSON/core/view/version/"
+    key = zap_api_key()
+    if key:
+        api = f"{api}?apikey={urllib.parse.quote(key)}"
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -40,8 +63,8 @@ def is_zap_running(proxy: str, timeout: int = 3) -> bool:
                 body = json.loads(resp.read().decode())
                 if isinstance(body, dict) and body.get("version"):
                     return True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("ZAP version probe failed for %s: %s", proxy, exc)
         time.sleep(0.5)
     return False
 
@@ -135,7 +158,8 @@ def ensure_zap_proxy(
 def connect_zap(proxy: str, api_key: str = "") -> Any:
     from zapv2 import ZAPv2
 
-    return ZAPv2(apikey=api_key, proxies={"http": proxy, "https": proxy})
+    key = api_key or zap_api_key()
+    return ZAPv2(apikey=key, proxies={"http": proxy, "https": proxy})
 
 
 def stop_zap_scans(zap: Any) -> None:
@@ -153,14 +177,14 @@ def stop_zap_scans(zap: Any) -> None:
                 continue
             try:
                 fn()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("stop_zap_scans %s.%s failed: %s", module_name, name, exc)
     ajax = getattr(zap, "ajaxSpider", None)
     if ajax is not None:
         try:
             ajax.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("stop_zap_scans ajaxSpider.stop failed: %s", exc)
 
 
 def reset_zap_workspace(zap: Any, *, session_name: str = "argus-scan") -> dict[str, Any]:

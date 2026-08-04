@@ -176,7 +176,10 @@ jobs:
           role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Deploy via SSM (Linux)
+      - name: Checkout (compose file)
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSM (compose)
         env:
           IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
           ENVIRONMENT: ${{ needs.resolve.outputs.environment }}
@@ -185,7 +188,9 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE="${ECR_REGISTRY}/${PROJECT_NAME}-${ENVIRONMENT}-backend:${IMAGE_TAG}"
-          echo "Deploying $IMAGE (+ zap) -> $INSTANCE_ID"
+          echo "Deploying $IMAGE via docker-compose.backend.prod.yml -> $INSTANCE_ID"
+
+          COMPOSE_B64=$(base64 -w0 deploy/docker-compose.backend.prod.yml)
 
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
@@ -193,14 +198,13 @@ jobs:
             --parameters commands="[
               \"set -euo pipefail\",
               \"bash /opt/argus/scripts/inject-secrets.sh\",
+              \"mkdir -p /opt/argus\",
+              \"echo ${COMPOSE_B64} | base64 -d > /opt/argus/docker-compose.backend.prod.yml\",
               \"aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}\",
-              \"docker network create argus 2>/dev/null || true\",
-              \"docker pull zaproxy/zap-stable\",
-              \"docker pull ${IMAGE}\",
-              \"docker stop argus-backend argus-zap || true\",
-              \"docker rm argus-backend argus-zap || true\",
-              \"docker run -d --name argus-zap --network argus --restart unless-stopped -p 8090:8090 zaproxy/zap-stable zap.sh -daemon -port 8090 -host 0.0.0.0 -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true -config api.disablekey=true\",
-              \"docker run -d --name argus-backend --network argus --restart unless-stopped -p 8001:8000 --env-file /opt/argus/.env -e CONFIG_PATH=/app/config.docker.yaml -e ZAP_PROXY=http://argus-zap:8090 -v /opt/argus/data:/app/data ${IMAGE}\",
+              \"set -a && . /opt/argus/.env && set +a\",
+              \"export ECR_REGISTRY=${ECR_REGISTRY} IMAGE_TAG=${IMAGE_TAG} ENVIRONMENT=${ENVIRONMENT}\",
+              \"cd /opt/argus && docker compose -f docker-compose.backend.prod.yml pull\",
+              \"cd /opt/argus && docker compose -f docker-compose.backend.prod.yml up -d --remove-orphans --force-recreate\",
               \"docker ps --filter name=argus-\"
             ]" \
             --comment "Deploy backend ${IMAGE_TAG}" \

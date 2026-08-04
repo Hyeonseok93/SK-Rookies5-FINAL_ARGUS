@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import socket
 import subprocess
@@ -27,7 +28,10 @@ def _authenticate_browser_context(context, case: EvidenceCase) -> None:
         case.metadata["browser_login"] = {"ok": False, "reason": "Replay login unavailable"}
         return
     account_id = str(login.get("account_id") or "")
-    credentials = load_replay_credentials(Path(__file__).resolve().parents[3] / "data")
+    env = (os.environ.get("ARGUS_DATA_DIR") or "").strip()
+    credentials = load_replay_credentials(
+        Path(env) if env else Path(__file__).resolve().parents[3] / "data"
+    )
     credential = next((item for item in credentials if item.account_id == account_id), None)
     if credential is None:
         case.metadata["browser_login"] = {"ok": False, "reason": "Replay account unavailable"}

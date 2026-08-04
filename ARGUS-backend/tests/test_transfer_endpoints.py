@@ -12,32 +12,28 @@ from app.services import transfer_endpoints_service as svc
 
 
 @pytest.fixture
-def data_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(svc, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(
-        svc,
-        "_PATHS",
-        {
-            "upload": tmp_path / "upload-endpoints.json",
-            "download": tmp_path / "download-endpoints.json",
-        },
-    )
-    return tmp_path
+def data_dir(tmp_path):
+    from app.workspace import bind_workspace, reset_workspace
+
+    tokens = bind_workspace(user_id="test-user", data_dir=tmp_path)
+    yield tmp_path
+    reset_workspace(tokens)
 
 
 def test_save_and_load_upload_endpoints(data_dir):
     saved = svc.save_transfer_endpoints(
         "upload",
         [{"id": "a", "url": "/api/v1/upload", "method": "POST"}],
+        data_dir,
     )
     assert len(saved["endpoints"]) == 1
     assert saved["endpoints"][0]["method"] == "POST"
-    loaded = svc.load_transfer_endpoints("upload")
+    loaded = svc.load_transfer_endpoints("upload", data_dir)
     assert loaded["endpoints"][0]["url"] == "/api/v1/upload"
 
 
 def test_download_defaults_to_get(data_dir):
-    saved = svc.save_transfer_endpoints("download", [{"id": "b", "url": "/api/export"}])
+    saved = svc.save_transfer_endpoints("download", [{"id": "b", "url": "/api/export"}], data_dir)
     assert saved["endpoints"][0]["method"] == "GET"
 
 

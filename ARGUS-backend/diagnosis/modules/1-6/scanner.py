@@ -107,7 +107,9 @@ def _run_screenshot_capture(ctx: DiagnosisContext, cfg: dict[str, Any], run_dir:
     if cfg.get("screenshot_enabled") is False:
         return {"enabled": False, "reason": "disabled_by_config"}
 
-    screenshot_dir = ctx.data_dir.parent / "screenshot" / "modules" / "1-6"
+    from app.config import BACKEND_ROOT
+
+    screenshot_dir = BACKEND_ROOT / "screenshot" / "modules" / "1-6"
     runner_path = screenshot_dir / "runner.py"
     if not runner_path.is_file():
         return {

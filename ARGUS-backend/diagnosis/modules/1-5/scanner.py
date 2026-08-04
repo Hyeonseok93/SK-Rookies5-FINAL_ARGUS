@@ -190,6 +190,20 @@ def run_g15_scan(ctx: DiagnosisContext, module_dir: Path) -> ScanResult:
     stats["phase_a_jobs"] = len(phase_a)
     stats["phase_b_jobs"] = len(phase_b)
 
+    try:
+        from app.services.redirect_sink_service import register_probes
+        from app.workspace import current_user_id
+
+        uid = current_user_id()
+        if uid:
+            register_probes(
+                user_id=uid,
+                run_id=run_id,
+                probe_ids=[str(j.get("probe_id") or "") for j in redirect_jobs],
+            )
+    except Exception:
+        pass
+
     from diagnosis.progress_reporter import phase, prepare, zap_phase
 
     cors_targets = targets.build_cors_targets(bases) if opts.cors_enabled and bases else []
