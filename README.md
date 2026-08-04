@@ -255,7 +255,7 @@ FastAPI가 **인벤토리 · 인증 프로브 · 가이드라인 진단 · 스�
 
 - **수집:** Base URL / 로그인 엔드포인트 / 테스트 계정 / OpenAPI·소스 업로드 → Attack Surface
 - **진단:** 섹션 ID(`1-1` … `8-1`)별 모듈 실행 → findings YAML + evidence
-- **산출:** 스크린샷 캡처 요약 · PDF 결과서 · (선택) S3 reports
+- **산출:** 스크린샷 캡처 요약 · PDF 결과서
 
 주요 API 표면은 `/api/auth`, `/api/inventory`, `/api/diagnosis`, `/api/base-urls`, `/api/login-endpoints`, `/api/test-accounts` 등이며, 프론트는 Bearer JWT로 호출합니다.
 
